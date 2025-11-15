@@ -22,15 +22,20 @@ Section:NewToggle("Auto Delete", "", function(t)
 end)
 
 Section:NewButton("Click To God", "", function()
-local lighting = game:GetService("Lighting")
-local attackOnClient = lighting:FindFirstChild("AttackOnClient")
+    local rs = game:GetService("ReplicatedStorage")
+    local events = rs:FindFirstChild("Events")
+    if not events then return end
 
-if attackOnClient then
-    attackOnClient:Destroy()
-end
+    local attackOnClient = events:FindFirstChild("AttackOnClient")
+
+    if attackOnClient then
+        attackOnClient:Destroy()
+    end
 end)
+
+
 Section:NewButton("Click Tp", "", function()
-game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(Vector3.new(-99466.328125, 3594.533447, 62.515003))
+game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(Vector3.new(-31461.613281, 3593.572510, 41.445580))
 end)
 local antiJumpScareEnabled = false
 
