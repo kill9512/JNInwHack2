@@ -58,7 +58,7 @@ end)
 -------------------------------------------------
 -- Slider ระยะวาร์ป
 -------------------------------------------------
-Section:NewSlider("ระยะการวาร์ป", "กำหนดระยะห่างจากศัตรู", 50, 1, function(value)
+Section:NewSlider("ระยะการวาร์ป", "กำหนดระยะห่างจากศัตรู", 600, 1, function(value)
     _G.distance = value
     print("ระยะปัจจุบัน:", _G.distance)
 end)
@@ -109,9 +109,8 @@ Section:NewButton("Refresh Dropdown", "อัปเดตรายชื่อ�
 end)
 -- Slider สำหรับตั้งระยะเวลาในการวาร์ป (วินาที)
 _G.teleportInterval = 5
-Section:NewSlider("เวลา Teleport (วินาที)", "ตั้งเวลาระหว่างการวาร์ปไปหาผู้เล่น", 60, 1, function(value)
+Section:NewSlider("เวลา Teleport (วินาที)", "ตั้งเวลาระหว่างการวาร์ปไปหาผู้เล่น", 180, 1, function(value)
     _G.teleportInterval = value
-    print("Teleport Interval:", _G.teleportInterval, "วินาที")
 end)
 
 -- Toggle วาร์ปไปหาผู้เล่นทุก X วินาที
@@ -120,15 +119,18 @@ Section:NewToggle("Teleport to Player", "วาร์ปไปหาผู้เ
     teleportToggle = state
     spawn(function()
         while teleportToggle do
-            wait(_G.teleportInterval)
             local player = game.Players.LocalPlayer
             local character = player.Character
             if character and character:FindFirstChild("HumanoidRootPart") and character:FindFirstChild("Humanoid") then
-                -- เช็ค HP
+                
+                -- ถ้า HP ต่ำให้ไป SafePosition ก่อน
                 if character.Humanoid.Health < 50000 then
                     character.HumanoidRootPart.CFrame = CFrame.new(SafePosition)
-                    wait(1)
+                    wait(_G.teleportInterval) -- รอเวลาที่กำหนดก่อนวาร์ป
                 end
+
+                -- รอเวลาตาม interval ก่อนวาร์ปปกติ
+                wait(_G.teleportInterval)
 
                 -- วาร์ปไปหาผู้เล่นที่เลือก
                 if SelectedPlayer then
@@ -138,6 +140,8 @@ Section:NewToggle("Teleport to Player", "วาร์ปไปหาผู้เ
                         character.HumanoidRootPart.CFrame = hrp.CFrame * CFrame.new(0, 0, 5)
                     end
                 end
+            else
+                wait(1)
             end
         end
     end)
@@ -445,5 +449,6 @@ Section:NewButton("Toggle Fly (Press X)", "กด X เพื่อเปิด/
         end
     end))
 end)
+
 
 
