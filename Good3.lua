@@ -1,50 +1,133 @@
 
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
 local Window = Library.CreateLib("KONG GUISUS", "DarkTheme")
+
 local Tab = Window:NewTab("Main")
 local Section = Tab:NewSection("Teleport")
 
+_G.distance = 30
+
+-------------------------------------------------
+-- Auto Delete (มีเช็ค ObjectValue = kill9512)
+-------------------------------------------------
 Section:NewToggle("Auto Delete", "", function(t)
     _G.toggle = t
     while _G.toggle do
         wait()
-        local enemyFolder = workspace:FindFirstChild("Stuff") and workspace.Stuff:FindFirstChild("Enemy")
+
+        local enemyFolder = workspace:FindFirstChild("Stuff")
+            and workspace.Stuff:FindFirstChild("Enemy")
+
         if enemyFolder then
-            for i, v in pairs(enemyFolder:GetDescendants()) do
-            if v:IsA("Humanoid") and v.Health > 100 then -- เพิ่มเงื่อนไขการตรวจสอบ humanoid และค่าเลือด
-                game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame = v.Parent.HumanoidRootPart.CFrame * CFrame.new(0,0,10)
+            
+            -- ตรวจสอบ Players/ObjectValue ชื่อ kill9512
+            local playersFolder = enemyFolder:FindFirstChild("Players")
+            local hasTarget = false
+
+            if playersFolder then
+                for _, obj in pairs(playersFolder:GetChildren()) do
+                    if obj:IsA("ObjectValue") and obj.Name == "kill9512" then
+                        hasTarget = true
+                        break
+                    end
                 end
             end
+
+            -- ถ้ามี kill9512 → วาร์ปหา monster
+            if hasTarget then
+                for _, v in pairs(enemyFolder:GetDescendants()) do
+                    if v:IsA("Humanoid") and v.Health > 100 then
+                        local hrp = v.Parent:FindFirstChild("HumanoidRootPart")
+                        if hrp then
+                            game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame =
+                                hrp.CFrame * CFrame.new(0, 0, _G.distance)
+                        end
+                    end
+                end
+
+            else
+                wait(1) -- ไม่มี kill9512 → รอ
+            end
+
         else
             wait(1)
         end
     end
 end)
 
+-------------------------------------------------
+-- Slider ระยะวาร์ป
+-------------------------------------------------
+Section:NewSlider("ระยะการวาร์ป", "กำหนดระยะห่างจากศัตรู", 50, 1, function(value)
+    _G.distance = value
+    print("ระยะปัจจุบัน:", _G.distance)
+end)
+
+-------------------------------------------------
+-- Teleport ปกติ
+-------------------------------------------------
+Section:NewButton("Click Tp", "", function()
+    game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame =
+        CFrame.new(Vector3.new(-31461.613281, 3593.572510, 41.445580))
+end)
+
+-------------------------------------------------
+-- Click To God
+-------------------------------------------------
 Section:NewButton("Click To God", "", function()
     local rs = game:GetService("ReplicatedStorage")
     local events = rs:FindFirstChild("Events")
     if not events then return end
 
     local attackOnClient = events:FindFirstChild("AttackOnClient")
+    if attackOnClient then attackOnClient:Destroy() end
+end)
+-----------------------------------------------------------
+-- ⭐ PLAYER SELECTOR + TELEPORT ⭐
+-----------------------------------------------------------
+local PlayerTable = {}
+for _, plr in pairs(game.Players:GetPlayers()) do
+    table.insert(PlayerTable, plr.Name)
+end
 
-    if attackOnClient then
-        attackOnClient:Destroy()
+local SelectedPlayer = nil
+
+Section:NewDropdown("เลือกผู้เล่น", "เลือกผู้เล่นเพื่อวาร์ป", PlayerTable, function(name)
+    SelectedPlayer = name
+end)
+
+Section:NewButton("Teleport to Player", "วาร์ปไปหาผู้เล่นที่เลือก", function()
+    if not SelectedPlayer then return end
+    
+    local target = game.Players:FindFirstChild(SelectedPlayer)
+    if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+        local hrp = target.Character.HumanoidRootPart
+        game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame =
+            hrp.CFrame * CFrame.new(0, 0, 2)
     end
 end)
 
-
-Section:NewButton("Click Tp", "", function()
-game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(Vector3.new(-31461.613281, 3593.572510, 41.445580))
+-----------------------------------------------------------
+-- เพิ่มปุ่มรีเฟรชรายชื่อผู้เล่น (ถ้ามีคนออก/เข้า)
+-----------------------------------------------------------
+Section:NewButton("Refresh Player List", "อัปเดตรายชื่อผู้เล่น", function()
+    local newList = {}
+    for _, plr in pairs(game.Players:GetPlayers()) do
+        table.insert(newList, plr.Name)
+    end
+    PlayerTable = newList
+    Library:Notify("อัปเดตชื่อผู้เล่นเรียบร้อย", 2)
 end)
+-------------------------------------------------
+-- Anti Jumpscare
+-------------------------------------------------
 local antiJumpScareEnabled = false
-
-Section:NewToggle("Anti Jumpscare", "ลบ ImageLabel ทั้งหมด ยกเว้นใน Inventory และ PlayerList", function(state)
+Section:NewToggle("Anti Jumpscare", "ลบ ImageLabel ทั้งหมด", function(state)
     antiJumpScareEnabled = state
+
     while antiJumpScareEnabled do
         wait(0.5)
         for _, gui in pairs(game.Players.LocalPlayer.PlayerGui:GetChildren()) do
-            -- ตรวจสอบว่าไม่ใช่ Inventory และ PlayerList
             if gui:IsA("ScreenGui") and gui.Name ~= "Inventory" and gui.Name ~= "PlayerList" then
                 for _, element in pairs(gui:GetDescendants()) do
                     if element:IsA("ImageLabel") then
@@ -56,9 +139,11 @@ Section:NewToggle("Anti Jumpscare", "ลบ ImageLabel ทั้งหมด ย
     end
 end)
 
+-------------------------------------------------
+-- Anti Knockback
+-------------------------------------------------
 local antiKnockbackEnabled = false
-
-Section:NewToggle("Anti Knockback", "ป้องกันตัวละครจากการถูกกระแทก", function(state)
+Section:NewToggle("Anti Knockback", "", function(state)
     antiKnockbackEnabled = state
     local player = game.Players.LocalPlayer
     local character = player.Character or player.CharacterAdded:Wait()
@@ -66,56 +151,83 @@ Section:NewToggle("Anti Knockback", "ป้องกันตัวละคร�
     while antiKnockbackEnabled do
         wait(0.1)
         if character and character:FindFirstChild("HumanoidRootPart") then
-            character.HumanoidRootPart.Velocity = Vector3.new(0,0,0) -- รีเซ็ตความเร็วเพื่อกัน Knockback
+            character.HumanoidRootPart.Velocity = Vector3.new(0,0,0)
         end
     end
 end)
 
+-------------------------------------------------
+-- Anti Freeze
+-------------------------------------------------
 local antiFreezeEnabled = false
-
-Section:NewToggle("Anti Freeze", "ป้องกันการถูกขังหรือลอยอยู่กับที่ (ไม่ทำให้ตาย)", function(state)
+Section:NewToggle("Anti Freeze", "", function(state)
     antiFreezeEnabled = state
     local player = game.Players.LocalPlayer
     local character = player.Character or player.CharacterAdded:Wait()
 
     while antiFreezeEnabled do
         wait(0.1)
+
         if character then
             for _, part in pairs(character:GetDescendants()) do
-                if part:IsA("BodyPosition") or part:IsA("BodyGyro") or part:IsA("BodyVelocity") or part:IsA("AlignPosition") then
-                    part:Destroy() -- ลบ Object ที่ล็อกตัวละคร
+                if part:IsA("BodyPosition") or part:IsA("BodyGyro")
+                    or part:IsA("BodyVelocity") or part:IsA("AlignPosition") then
+                    part:Destroy()
                 end
             end
 
-            -- ปลดล็อกฟิสิกส์ของ HumanoidRootPart
-            if character:FindFirstChild("HumanoidRootPart") then
-                local hrp = character.HumanoidRootPart
-                hrp.Velocity = Vector3.new(0, 0, 0) 
-                hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0) 
-                hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0) 
+            local hrp = character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                hrp.Velocity = Vector3.new(0, 0, 0)
+                hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
             end
         end
     end
 end)
 
+-------------------------------------------------
+-- Night Vision
+-------------------------------------------------
+local nightVision = false
+Section:NewToggle("Night Vision", "", function(state)
+    nightVision = state
+    local Lighting = game:GetService("Lighting")
 
-Section:NewButton("Force Interact", "กด ProximityPrompt ทันที", function()
-    local Prox = workspace.Ohio.SlopMachine5000.Keyboard.Intersection.ProximityPrompt
-    local character = game.Players.LocalPlayer.Character
-    local humanoidRootPart = character and character:WaitForChild("HumanoidRootPart")
-
-    if Prox and humanoidRootPart then
-        -- เพิ่มระยะการเห็นให้ ProximityPrompt
-        Prox.MaxActivationDistance = 20  -- ตั้งระยะการเห็นเป็น 20 studs
-
-        -- วาร์ปตัวละครไปยังตำแหน่งที่ระบุ
-        humanoidRootPart.CFrame = CFrame.new(-99462.9141, 3593.71729, 57.0312386, -0.998897135, -4.62774929e-09, 0.0469521955, -4.81399098e-09, 1, -3.8535517e-09, -0.0469521955, -4.07532896e-09, -0.998897135)
-        
-        -- กด ProximityPrompt ทันที
-        fireproximityprompt(Prox)
-        Prox.HoldDuration = 0  -- ปรับ HoldDuration ให้เป็น 0
+    if nightVision then
+        Lighting.Brightness = 5
+        Lighting.Ambient = Color3.new(1, 1, 1)
+        Lighting.OutdoorAmbient = Color3.new(1, 1, 1)
+        Lighting.FogEnd = 100000
+    else
+        Lighting.Brightness = 1
+        Lighting.Ambient = Color3.new(0.5, 0.5, 0.5)
+        Lighting.OutdoorAmbient = Color3.new(0.5, 0.5, 0.5)
+        Lighting.FogEnd = 1000
     end
 end)
+
+-------------------------------------------------
+-- Force Interact
+-------------------------------------------------
+Section:NewButton("Force Interact", "", function()
+    local Prox = workspace.Ohio.SlopMachine5000.Keyboard.Intersection.ProximityPrompt
+    local character = game.Players.LocalPlayer.Character
+    local hrp = character and character:WaitForChild("HumanoidRootPart")
+
+    if Prox and hrp then
+        Prox.MaxActivationDistance = 20
+
+        hrp.CFrame = CFrame.new(-99462.9141, 3593.71729, 57.0312386)
+
+        fireproximityprompt(Prox)
+        Prox.HoldDuration = 0
+    end
+end)
+
+-------------------------------------------------
+-- Toggle Fly (Press X)
+-------------------------------------------------
 
 Section:NewButton("Toggle Fly (Press X)", "กด X เพื่อเปิด/ปิดการบิน", function()
     local Players = game:GetService("Players")
@@ -309,3 +421,4 @@ Section:NewButton("Toggle Fly (Press X)", "กด X เพื่อเปิด/
         end
     end))
 end)
+
