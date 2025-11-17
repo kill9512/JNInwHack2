@@ -86,52 +86,48 @@ end)
 -- ⭐ PLAYER SELECTOR + TELEPORT ⭐
 -----------------------------------------------------------
 
-Section:NewToggle("Teleport to Player", "วาร์ปไปผู้เล่นที่เลือกทุกๆ 3 วินาที", function(state)
-    _G.teleportToPlayer = state
+-- สร้างตารางเก็บรายชื่อผู้เล่น
+local PlayerTable = {}
+local SelectedPlayer = nil
+local TeleportEnabled = false -- เปิด/ปิดการวาร์ปอัตโนมัติ
+
+-- ฟังก์ชันอัปเดตรายชื่อผู้เล่น
+local function UpdatePlayerList()
+    PlayerTable = {}
+    for _, plr in pairs(game.Players:GetPlayers()) do
+        table.insert(PlayerTable, plr.Name)
+    end
+end
+
+-- Dropdown เลือกผู้เล่น
+Section:NewDropdown("เลือกผู้เล่น", "เลือกผู้เล่นเพื่อวาร์ป", PlayerTable, function(name)
+    SelectedPlayer = name
+end)
+
+-- ปุ่มเปิด/ปิด Teleport
+Section:NewToggle("Teleport to Player (5s)", "วาร์ปไปหาผู้เล่นทุก 5 วินาที", function(state)
+    TeleportEnabled = state
     spawn(function()
-        while _G.teleportToPlayer do
-            wait(3)
-            if _G.targetPlayerName then
-                local success, err = pcall(function()
-                    local targetPlayer = game.Players:FindFirstChild(_G.targetPlayerName)
-                    local localPlayer = game.Players.LocalPlayer
-                    if targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
-                        local hrp = targetPlayer.Character.HumanoidRootPart
-                        if localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
-                            localPlayer.Character.HumanoidRootPart.CFrame = hrp.CFrame * CFrame.new(0,0,3)
-                        end
-                    end
-                end)
-                if not success then
-                    warn("Teleport error:", err)
+        while TeleportEnabled do
+            wait(5) -- วาร์ปทุก 5 วินาที
+            if SelectedPlayer then
+                local target = game.Players:FindFirstChild(SelectedPlayer)
+                local localChar = game.Players.LocalPlayer.Character
+                if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") and localChar and localChar:FindFirstChild("HumanoidRootPart") then
+                    local hrp = target.Character.HumanoidRootPart
+                    localChar.HumanoidRootPart.CFrame = hrp.CFrame * CFrame.new(0, 0, 2)
                 end
             end
         end
     end)
 end)
 
--- ฟังก์ชันคืนรายชื่อผู้เล่นปัจจุบัน
-local function getPlayerNames()
-    local names = {}
-    for _, plr in pairs(game.Players:GetPlayers()) do
-        table.insert(names, plr.Name)
-    end
-    return names
-end
-
--- สร้าง Dropdown เลือกผู้เล่น
-local playerDropdown = Section:NewDropdown("เลือกผู้เล่น", "เลือกผู้เล่นเพื่อวาร์ป", getPlayerNames(), function(selected)
-    _G.targetPlayerName = selected
-    print("ผู้เล่นที่เลือก:", _G.targetPlayerName)
+-- ปุ่มรีเฟรชรายชื่อผู้เล่น
+Section:NewButton("Refresh Player List", "อัปเดตรายชื่อผู้เล่น", function()
+    UpdatePlayerList()
+    Library:Notify("อัปเดตชื่อผู้เล่นเรียบร้อย", 2)
 end)
 
--- อัปเดตรายชื่อเมื่อผู้เล่นเข้าหรือออก
-game.Players.PlayerAdded:Connect(function()
-    playerDropdown:Refresh(getPlayerNames())
-end)
-game.Players.PlayerRemoving:Connect(function()
-    playerDropdown:Refresh(getPlayerNames())
-end)
 
 -------------------------------------------------
 -- Anti Jumpscare
@@ -436,6 +432,7 @@ Section:NewButton("Toggle Fly (Press X)", "กด X เพื่อเปิด/
         end
     end))
 end)
+
 
 
 
