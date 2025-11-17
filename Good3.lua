@@ -91,21 +91,55 @@ for _, plr in pairs(game.Players:GetPlayers()) do
 end
 
 local SelectedPlayer = nil
+local TpPlayerToggle = false
 
-Section:NewDropdown("เลือกผู้เล่น", "เลือกผู้เล่นเพื่อวาร์ป", PlayerTable, function(name)
-    SelectedPlayer = name
-end)
+-- Toggle วาร์ปไปผู้เล่น
+Section:NewToggle("Teleport to Player", "วาร์ปไปผู้เล่นที่เลือก (ใช้เงื่อนไข Auto Delete)", function(state)
+    TpPlayerToggle = state
+    while TpPlayerToggle do
+        
+        -- รอ 3 วินาที ต่อ 1 ครั้ง
+        wait(3)
+        
+        -- เงื่อนไขเดียวกับ Auto Delete
+        local enemyFolder = workspace:FindFirstChild("Stuff") and workspace.Stuff:FindFirstChild("Enemy")
+        local hasTarget = false
 
-Section:NewButton("Teleport to Player", "วาร์ปไปหาผู้เล่นที่เลือก", function()
-    if not SelectedPlayer then return end
-    
-    local target = game.Players:FindFirstChild(SelectedPlayer)
-    if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
-        local hrp = target.Character.HumanoidRootPart
-        game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame =
-            hrp.CFrame * CFrame.new(0, 0, 2)
+        if enemyFolder then
+            local playersFolder = enemyFolder:FindFirstChild("Players")
+            if playersFolder then
+                for _, obj in pairs(playersFolder:GetChildren()) do
+                    if obj:IsA("ObjectValue") and obj.Name == "kill9512" then
+                        hasTarget = true
+                        break
+                    end
+                end
+            end
+        end
+
+        -- ถ้ามี kill9512 และเลือกผู้เล่น → วาร์ปไปผู้เล่น
+        if hasTarget and SelectedPlayer then
+            local target = game.Players:FindFirstChild(SelectedPlayer)
+            if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+                local hrp = target.Character.HumanoidRootPart
+                game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame =
+                    hrp.CFrame * CFrame.new(0, 0, 2)
+            end
+        end
     end
 end)
+-- Dropdown เลือกผู้เล่น
+Section:NewDropdown("Select Player", "เลือกผู้เล่นเพื่อวาร์ป", PlayerTable, function(name)
+    SelectedPlayer = name
+end)
+-- ปุ่มอัปเดตรายชื่อผู้เล่น
+Section:NewButton("Update Player List", "อัปเดตรายชื่อผู้เล่นใน map", function()
+    PlayerTable = {}
+    for _, plr in pairs(game.Players:GetPlayers()) do
+        table.insert(PlayerTable, plr.Name)
+    end
+end)
+
 
 -----------------------------------------------------------
 -- เพิ่มปุ่มรีเฟรชรายชื่อผู้เล่น (ถ้ามีคนออก/เข้า)
@@ -421,4 +455,5 @@ Section:NewButton("Toggle Fly (Press X)", "กด X เพื่อเปิด/
         end
     end))
 end)
+
 
