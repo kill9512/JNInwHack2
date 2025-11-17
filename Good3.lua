@@ -146,6 +146,15 @@ Section:NewToggle("Teleport to Player", "วาร์ปไปหาผู้เ
         end
     end)
 end)
+Section:NewButton("วาร์ปไปหาผู้เล่น", "Teleport to Selected Player", function()
+    if not selectedPlayer then return end
+
+    local target = Players:FindFirstChild(selectedPlayer)
+    if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+        local hrp = target.Character.HumanoidRootPart
+        game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame = hrp.CFrame * CFrame.new(0, 0, 3)
+    end
+end)
 -------------------------------------------------
 -- Anti Jumpscare
 -------------------------------------------------
@@ -449,6 +458,7 @@ Section:NewButton("Toggle Fly (Press X)", "กด X เพื่อเปิด/
         end
     end))
 end)
+
 
 
 
