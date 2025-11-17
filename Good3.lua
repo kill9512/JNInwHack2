@@ -85,41 +85,56 @@ end)
 -----------------------------------------------------------
 -- ⭐ PLAYER SELECTOR + TELEPORT ⭐
 -----------------------------------------------------------
+
+-- SafePosition สำหรับ HP ต่ำ
+local SafePosition = Vector3.new(-26.996864, 3.928868, 391.019958)
+
+-- Dropdown ผู้เล่น
 local PlayerTable = {}
 for _, plr in pairs(game.Players:GetPlayers()) do
     table.insert(PlayerTable, plr.Name)
 end
 
 local SelectedPlayer = nil
-
-Section:NewDropdown("เลือกผู้เล่น", "เลือกผู้เล่นเพื่อวาร์ป", PlayerTable, function(name)
+local drop = Section:NewDropdown("เลือกผู้เล่น", "เลือกผู้เล่นเพื่อวาร์ป", PlayerTable, function(name)
     SelectedPlayer = name
 end)
-
-Section:NewButton("Teleport to Player", "วาร์ปไปหาผู้เล่นที่เลือก", function()
-    if not SelectedPlayer then return end
-    
-    local target = game.Players:FindFirstChild(SelectedPlayer)
-    if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
-        local hrp = target.Character.HumanoidRootPart
-        game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame =
-            hrp.CFrame * CFrame.new(0, 0, 2)
-    end
-end)
-
------------------------------------------------------------
--- เพิ่มปุ่มรีเฟรชรายชื่อผู้เล่น (ถ้ามีคนออก/เข้า)
------------------------------------------------------------
-Section:NewButton("Refresh Player List", "อัปเดตรายชื่อผู้เล่น", function()
+-- ปุ่ม Refresh Dropdown
+Section:NewButton("Refresh Dropdown", "อัปเดตรายชื่อผู้เล่น", function()
     local newList = {}
     for _, plr in pairs(game.Players:GetPlayers()) do
         table.insert(newList, plr.Name)
     end
-    PlayerTable = newList
-    Library:Notify("อัปเดตชื่อผู้เล่นเรียบร้อย", 2)
+    drop:Refresh(newList)
 end)
+-- Toggle วาร์ปไปหาผู้เล่นทุก 5 วินาที
+local teleportToggle = false
+Section:NewToggle("Teleport to Player (5s)", "วาร์ปไปหาผู้เล่นทุก 5 วินาที", function(state)
+    teleportToggle = state
+    spawn(function()
+        while teleportToggle do
+            wait(5)
+            local player = game.Players.LocalPlayer
+            local character = player.Character
+            if not character or not character:FindFirstChild("HumanoidRootPart") or not character:FindFirstChild("Humanoid") then continue end
 
+            -- เช็ค HP
+            if character.Humanoid.Health < 50000 then
+                character.HumanoidRootPart.CFrame = CFrame.new(SafePosition)
+                wait(1) -- รอให้ไป SafePosition ก่อน
+            end
 
+            -- วาร์ปไปหาผู้เล่นที่เลือก
+            if SelectedPlayer then
+                local target = game.Players:FindFirstChild(SelectedPlayer)
+                if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+                    local hrp = target.Character.HumanoidRootPart
+                    character.HumanoidRootPart.CFrame = hrp.CFrame * CFrame.new(0, 0, 5)
+                end
+            end
+        end
+    end)
+end)
 -------------------------------------------------
 -- Anti Jumpscare
 -------------------------------------------------
@@ -423,9 +438,4 @@ Section:NewButton("Toggle Fly (Press X)", "กด X เพื่อเปิด/
         end
     end))
 end)
-
-
-
-
-
 
