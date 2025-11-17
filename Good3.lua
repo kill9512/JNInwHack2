@@ -85,13 +85,13 @@ end)
 -----------------------------------------------------------
 -- ⭐ PLAYER SELECTOR + TELEPORT ⭐
 -----------------------------------------------------------
-
--- SafePosition สำหรับ HP ต่ำ
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
 local SafePosition = Vector3.new(-26.996864, 3.928868, 391.019958)
 
 -- Dropdown ผู้เล่น
 local PlayerTable = {}
-for _, plr in pairs(game.Players:GetPlayers()) do
+for _, plr in pairs(Players:GetPlayers()) do
     table.insert(PlayerTable, plr.Name)
 end
 
@@ -99,68 +99,64 @@ local SelectedPlayer = nil
 local drop = Section:NewDropdown("เลือกผู้เล่น", "เลือกผู้เล่นเพื่อวาร์ป", PlayerTable, function(name)
     SelectedPlayer = name
 end)
--- ปุ่ม Refresh Dropdown
+
+-- Refresh Dropdown
 Section:NewButton("Refresh Dropdown", "อัปเดตรายชื่อผู้เล่น", function()
     local newList = {}
-    for _, plr in pairs(game.Players:GetPlayers()) do
+    for _, plr in pairs(Players:GetPlayers()) do
         table.insert(newList, plr.Name)
     end
     drop:Refresh(newList)
 end)
--- Slider สำหรับตั้งระยะเวลาในการวาร์ป (วินาที)
+
+-- Slider สำหรับตั้ง interval
 _G.teleportInterval = 5
-Section:NewSlider("เวลา Teleport (วินาที)", "ตั้งเวลาระหว่างการวาร์ปไปหาผู้เล่น", 600, 1, function(value)
+Section:NewSlider("เวลา Teleport (วินาที)", "ตั้งเวลาระหว่างการวาร์ป", 600, 1, function(value)
     _G.teleportInterval = value
 end)
 
--- Toggle วาร์ปไปหาผู้เล่นทุก X วินาที
+-- Toggle วาร์ปอัตโนมัติ
 local teleportToggle = false
 Section:NewToggle("Teleport to Player", "วาร์ปไปหาผู้เล่นทุก X วินาที", function(state)
     teleportToggle = state
     spawn(function()
         while teleportToggle do
-            local player = game.Players.LocalPlayer
-            local character = player.Character
+            local character = LocalPlayer.Character
             if character and character:FindFirstChild("HumanoidRootPart") and character:FindFirstChild("Humanoid") then
                 
-                -- ถ้า HP ต่ำให้ไป SafePosition ก่อน
+                -- ถ้า HP ต่ำไป SafePosition ก่อน
                 if character.Humanoid.Health < 50000 then
                     character.HumanoidRootPart.CFrame = CFrame.new(SafePosition)
-                    wait(_G.teleportInterval) -- รอเวลาที่กำหนดก่อนวาร์ป
+                    wait(1) -- รอให้ไป SafePosition ก่อน
                 end
-
-                -- รอเวลาตาม interval ก่อนวาร์ปปกติ
-                wait(_G.teleportInterval)
 
                 -- วาร์ปไปหาผู้เล่นที่เลือก
                 if SelectedPlayer then
-                    local target = game.Players:FindFirstChild(SelectedPlayer)
+                    local target = Players:FindFirstChild(SelectedPlayer)
                     if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
                         local hrp = target.Character.HumanoidRootPart
                         character.HumanoidRootPart.CFrame = hrp.CFrame * CFrame.new(0, 0, 5)
                     end
                 end
-            else
-                wait(1)
             end
+            wait(_G.teleportInterval)
         end
     end)
 end)
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
--- ปุ่มวาร์ปไปหาผู้เล่นทันที
+
+-- ปุ่มวาร์ปทันที
 Section:NewButton("วาร์ปไปหาผู้เล่น", "Teleport to Selected Player", function()
-    if not selectedPlayer then return end
+    if not SelectedPlayer then return end
     local character = LocalPlayer.Character
     if not character or not character:FindFirstChild("HumanoidRootPart") then return end
 
-    -- วาร์ปไปหาผู้เล่นที่เลือก
-    local target = Players:FindFirstChild(selectedPlayer)
+    local target = Players:FindFirstChild(SelectedPlayer)
     if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
         local hrp = target.Character.HumanoidRootPart
         character.HumanoidRootPart.CFrame = hrp.CFrame * CFrame.new(0, 0, 3)
     end
 end)
+
 -------------------------------------------------
 -- Anti Jumpscare
 -------------------------------------------------
@@ -464,6 +460,7 @@ Section:NewButton("Toggle Fly (Press X)", "กด X เพื่อเปิด/
         end
     end))
 end)
+
 
 
 
