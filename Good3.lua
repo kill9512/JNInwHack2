@@ -85,46 +85,37 @@ end)
 -----------------------------------------------------------
 -- ⭐ PLAYER SELECTOR + TELEPORT ⭐
 -----------------------------------------------------------
-
--- สร้างตารางเก็บรายชื่อผู้เล่น
 local PlayerTable = {}
-local SelectedPlayer = nil
-local TeleportEnabled = false -- เปิด/ปิดการวาร์ปอัตโนมัติ
-
--- ฟังก์ชันอัปเดตรายชื่อผู้เล่น
-local function UpdatePlayerList()
-    PlayerTable = {}
-    for _, plr in pairs(game.Players:GetPlayers()) do
-        table.insert(PlayerTable, plr.Name)
-    end
+for _, plr in pairs(game.Players:GetPlayers()) do
+    table.insert(PlayerTable, plr.Name)
 end
-UpdatePlayerList() 
--- Dropdown เลือกผู้เล่น
+
+local SelectedPlayer = nil
+
 Section:NewDropdown("เลือกผู้เล่น", "เลือกผู้เล่นเพื่อวาร์ป", PlayerTable, function(name)
     SelectedPlayer = name
 end)
 
--- ปุ่มเปิด/ปิด Teleport
-Section:NewToggle("Teleport to Player (5s)", "วาร์ปไปหาผู้เล่นทุก 5 วินาที", function(state)
-    TeleportEnabled = state
-    spawn(function()
-        while TeleportEnabled do
-            wait(5) -- วาร์ปทุก 5 วินาที
-            if SelectedPlayer then
-                local target = game.Players:FindFirstChild(SelectedPlayer)
-                local localChar = game.Players.LocalPlayer.Character
-                if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") and localChar and localChar:FindFirstChild("HumanoidRootPart") then
-                    local hrp = target.Character.HumanoidRootPart
-                    localChar.HumanoidRootPart.CFrame = hrp.CFrame * CFrame.new(0, 0, 2)
-                end
-            end
-        end
-    end)
+Section:NewButton("Teleport to Player", "วาร์ปไปหาผู้เล่นที่เลือก", function()
+    if not SelectedPlayer then return end
+    
+    local target = game.Players:FindFirstChild(SelectedPlayer)
+    if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+        local hrp = target.Character.HumanoidRootPart
+        game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame =
+            hrp.CFrame * CFrame.new(0, 0, 2)
+    end
 end)
 
--- ปุ่มรีเฟรชรายชื่อผู้เล่น
+-----------------------------------------------------------
+-- เพิ่มปุ่มรีเฟรชรายชื่อผู้เล่น (ถ้ามีคนออก/เข้า)
+-----------------------------------------------------------
 Section:NewButton("Refresh Player List", "อัปเดตรายชื่อผู้เล่น", function()
-    UpdatePlayerList()
+    local newList = {}
+    for _, plr in pairs(game.Players:GetPlayers()) do
+        table.insert(newList, plr.Name)
+    end
+    PlayerTable = newList
     Library:Notify("อัปเดตชื่อผู้เล่นเรียบร้อย", 2)
 end)
 
@@ -432,6 +423,7 @@ Section:NewButton("Toggle Fly (Press X)", "กด X เพื่อเปิด/
         end
     end))
 end)
+
 
 
 
