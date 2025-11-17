@@ -98,7 +98,7 @@ local function UpdatePlayerList()
         table.insert(PlayerTable, plr.Name)
     end
 end
-
+UpdatePlayerList() 
 -- Dropdown เลือกผู้เล่น
 Section:NewDropdown("เลือกผู้เล่น", "เลือกผู้เล่นเพื่อวาร์ป", PlayerTable, function(name)
     SelectedPlayer = name
@@ -432,6 +432,7 @@ Section:NewButton("Toggle Fly (Press X)", "กด X เพื่อเปิด/
         end
     end))
 end)
+
 
 
 
