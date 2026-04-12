@@ -1,7 +1,7 @@
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
-local Window = Library.CreateLib("KONG GUISUS - EXPLORER", "DarkTheme")
+local Window = Library.CreateLib("KONG GUISUS - STRATEGIST", "DarkTheme")
 local Tab = Window:NewTab("Main")
-local Section = Tab:NewSection("Interior & Building Navigation")
+local Section = Tab:NewSection("Tactical Navigation (Plan in Plan)")
 
 -- --- Services ---
 local Players = game.Players
@@ -19,7 +19,6 @@ local currentWaypoints = {}
 local currentWaypointIndex = 1
 local lastComputeTime = 0
 local lastTargetPos = Vector3.new()
-local isProbing = false -- โหมดแหย่ทางเมื่อ Pathfinding ล้มเหลว
 
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -37,12 +36,6 @@ local function updateDebug(name, startPos, endPos, color)
     line.CFrame, line.Parent = CFrame.lookAt(startPos, endPos), workspace.Terrain
 end
 
-local function clearVisuals()
-    for _, v in pairs(workspace.Terrain:GetChildren()) do
-        if v.Name == "WP_Debug" or v.Name == "DirectTrace" or v.Name == "ProbeTrace" then v:Destroy() end
-    end
-end
-
 -- --- Helper Functions ---
 local function forceJump(hum)
     if hum.FloorMaterial ~= Enum.Material.Air then
@@ -51,26 +44,20 @@ local function forceJump(hum)
     end
 end
 
--- ฟังก์ชันหาทางเดิน "แหย่" เมื่อติดในตึก
-local function getProbingDirection(myRoot, targetPos)
-    local currentPos = myRoot.Position
-    local baseDir = (targetPos - currentPos).Unit
-    local scanAngles = {0, 30, -30, 60, -60, 90, -90, 135, -135} -- กวาดเกือบรอบตัว
+-- ฟังก์ชันตรวจสอบ "ความกว้างของช่อง" (Gap Width Check)
+local function isGapSafe(pos, moveDir)
+    -- ยิง Ray ขนานไปด้านซ้ายและขวา เพื่อดูว่าช่องแคบไปไหม
+    local leftDir = (CFrame.Angles(0, math.rad(90), 0) * moveDir).Unit
+    local rightDir = (CFrame.Angles(0, math.rad(-90), 0) * moveDir).Unit
     
-    local bestDir = nil
-    local maxDist = 0
+    local leftHit = workspace:Raycast(pos, leftDir * 3, rayParams) -- เช็คข้างซ้าย 3 studs
+    local rightHit = workspace:Raycast(pos, rightDir * 3, rayParams) -- เช็คข้างขวา 3 studs
     
-    for _, angle in ipairs(scanAngles) do
-        local dir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(baseDir.X, 0, baseDir.Z)).Unit
-        local ray = workspace:Raycast(currentPos, dir * 15, rayParams)
-        local d = ray and ray.Distance or 15
-        
-        if d > maxDist then
-            maxDist = d
-            bestDir = dir
-        end
+    -- ถ้าติดทั้งสองฝั่งในระยะประชิด แสดงว่าเป็น "คอขวด" หรือช่องที่แคบเกินไป
+    if leftHit and rightHit then
+        return false 
     end
-    return bestDir
+    return true
 end
 
 -- --- UI ---
@@ -87,18 +74,15 @@ end
 Section:NewButton("Refresh List", "Update", refreshList)
 refreshList()
 
-local MoveSection = Tab:NewSection("Navigation Control")
-MoveSection:NewToggle("Enable Follow", "Start Logic", function(s) 
-    followEnabled = s 
-    if not s then currentWaypoints = {}; clearVisuals(); isProbing = false end
-end)
-MoveSection:NewToggle("Show Path", "Visuals", function(s) debugEnabled = s end)
-MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
+local MoveSection = Tab:NewSection("Tactical Control")
+MoveSection:NewToggle("Enable Follow", "Start Logic", function(s) followEnabled = s end)
+MoveSection:NewToggle("Show Debug", "Visuals", function(s) debugEnabled = s end)
+MoveSection:NewSlider("Gap", "Distance", 20, 1, function(s) followDistance = s end)
 
 -- --- MAIN LOOP ---
 task.spawn(function()
     while true do
-        task.wait(0.15)
+        task.wait(0.1)
         if not followEnabled then continue end
         
         pcall(function()
@@ -131,70 +115,50 @@ task.spawn(function()
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
 
                 if dist > followDistance then
-                    -- 1. ลองเดินตรง (Line of Sight)
+                    -- ** แผน 1: เช็คทางตรงก่อน (Aimbot Mode) **
                     local moveDir = (targetPos - currentPos).Unit
                     local directRay = workspace:Raycast(currentPos, moveDir * dist, rayParams)
 
-                    if not directRay then
-                        -- ทางโล่ง วิ่งใส่เลย
-                        isProbing = false
+                    if not directRay and isGapSafe(currentPos, moveDir) then
+                        -- ทางตรงโล่งและกว้างพอ วิ่งเข้าใส่เลย
                         currentWaypoints = {}
                         updateDebug("DirectTrace", currentPos, targetPos, Color3.fromRGB(0, 255, 0))
                         myHuman:MoveTo(targetPos)
                     else
-                        -- 2. ทางตัน/อยู่ในตึก -> ใช้ Pathfinding
+                        -- ** แผน 2: ทางตรงติดขัด หรือเป็นช่องแคบ -> ใช้ Pathfinding (ทางสีฟ้า) **
                         if os.clock() - lastComputeTime > 1.0 or (targetPos - lastTargetPos).Magnitude > 8 then
-                            local path = PathfindingService:CreatePath({AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true})
+                            local path = PathfindingService:CreatePath({AgentRadius = 3, AgentHeight = 5, AgentCanJump = true})
                             path:ComputeAsync(currentPos, targetPos)
-                            
                             if path.Status == Enum.PathStatus.Success then
-                                isProbing = false
                                 currentWaypoints = path:GetWaypoints()
                                 currentWaypointIndex = 2
-                                lastTargetPos = targetPos
-                                lastComputeTime = os.clock()
-                                if debugEnabled then
-                                    clearVisuals()
-                                    for _, wp in ipairs(currentWaypoints) do
-                                        local p = Instance.new("Part")
-                                        p.Name, p.Size, p.Position = "WP_Debug", Vector3.new(0.8,0.8,0.8), wp.Position
-                                        p.Anchored, p.CanCollide, p.CanQuery, p.Transparency = true, false, false, 0.4
-                                        p.Color, p.Material = Color3.fromRGB(0, 255, 255), Enum.Material.Neon
-                                        p.Parent = workspace.Terrain
-                                    end
-                                end
-                            else
-                                -- ** พิกัดล้มเหลว (Compute Fail) -> เข้าสู่ Explorer Mode **
-                                isProbing = true
-                                currentWaypoints = {}
+                                lastTargetPos, lastComputeTime = targetPos, os.clock()
                             end
                         end
 
-                        -- ** ส่วนตัดสินใจเดิน **
-                        if isProbing then
-                            -- โหมดสำรวจ: แหย่ไปเรื่อยๆ ตามทิศทางผู้เล่น
-                            local probeDir = getProbingDirection(myRoot, targetPos)
-                            if probeDir then
-                                updateDebug("ProbeTrace", currentPos, currentPos + (probeDir * 5), Color3.fromRGB(255, 165, 0))
-                                myHuman:MoveTo(currentPos + (probeDir * 8))
-                                -- ถ้าติดกำแพงให้โดดไถไป
-                                local wallCheck = workspace:Raycast(currentPos, probeDir * 4, rayParams)
-                                if wallCheck then forceJump(myHuman) end
-                            end
-                        elseif #currentWaypoints > 0 then
-                            -- เดินตาม Waypoints ปกติ
+                        -- ** แผน 3: เดินตามทางสีฟ้า แต่ "ตรวจสอบซ้ำ" ทุกก้าว (แผนซ้อนแผน) **
+                        if #currentWaypoints > 0 and currentWaypointIndex <= #currentWaypoints then
                             local wp = currentWaypoints[currentWaypointIndex]
-                            if wp then
+                            local wpDir = (wp.Position - currentPos).Unit
+                            
+                            -- ตรวจสอบว่าจุดสีฟ้าจุดต่อไป มันจะพาเราเข้าช่องแคบไหม?
+                            if not isGapSafe(currentPos, wpDir) then
+                                -- ถ้าจุดต่อไปดูอันตราย ให้ "ข้าม" หรือ "เบี่ยง" ออกทันที
+                                updateDebug("TacticalAlert", currentPos, wp.Position, Color3.fromRGB(255, 0, 0))
+                                -- สั่งหักเลี้ยวเล็กน้อยเพื่อหาองศาใหม่
+                                local detourDir = (CFrame.Angles(0, math.rad(45), 0) * wpDir).Unit
+                                myHuman:MoveTo(currentPos + (detourDir * 5))
+                                forceJump(myHuman)
+                                currentWaypointIndex = currentWaypointIndex + 1 -- ข้ามจุดนี้ไปเลย
+                            else
+                                -- ทางสีฟ้ายังโอเค เดินต่อไป
                                 myHuman:MoveTo(wp.Position)
                                 if (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude < 3.5 then
                                     currentWaypointIndex = currentWaypointIndex + 1
                                 end
-                                if wp.Action == Enum.PathWaypointAction.Jump or wp.Position.Y > currentPos.Y + 2 then
-                                    forceJump(myHuman)
-                                end
+                                if wp.Action == Enum.PathWaypointAction.Jump then forceJump(myHuman) end
                             end
                         end
-                        updateDebug("DirectTrace", currentPos, directRay.Position, Color3.fromRGB(255, 0, 0))
                     end
                 else
                     myHuman:MoveTo(currentPos)
