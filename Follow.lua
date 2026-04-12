@@ -42,19 +42,13 @@ Section:NewDropdown("Manual", "Choose how to find target", {"Manual", "Max HP", 
     SelectedMode = mode
 end)
 
--- --- ตัวแปรหลัก ---
-local dropSection = Tab:NewSection("Player Selection") -- แยก Section ออกมาเพื่อล้างได้ง่ายๆ
-local drop -- ไว้เก็บตัว Dropdown
+-- --- ส่วนของ Dropdown ที่จะถูกทำลายและสร้างใหม่ ---
+local PlayerSection = Tab:NewSection("Player Selection")
+local drop -- ไว้เก็บตัวแปร Dropdown
 
--- ฟังก์ชันสำหรับสร้าง Dropdown ใหม่ทุกครั้งที่ต้องการ Reset
-local function RenderDropdown()
-    -- ล้าง Dropdown เก่าในระบบ (ถ้ามี)
-    if drop then
-        -- ใน Kavo การสร้างทับใน Section เดิมอาจจะทำให้ UI ซ้อน 
-        -- แต่เราจะใช้การ Refresh ค่าเริ่มต้นแทนถ้าไม่อยากให้ UI กระโดด
-    end
-
-    drop = dropSection:NewDropdown("None (Off)", "Manual selection", UpdatePlayerTable(), function(name)
+local function CreateDrop()
+    -- ฟังนะเพื่อน ตรงนี้กูจะสร้าง Dropdown ขึ้นมาใหม่ทุกครั้งที่มึงกด Refresh
+    drop = PlayerSection:NewDropdown("None (Off)", "Manual selection", UpdatePlayerTable(), function(name)
         if name == "None (Off)" then
             SelectedPlayer = nil
         else
@@ -63,23 +57,23 @@ local function RenderDropdown()
     end)
 end
 
--- รันครั้งแรก
-RenderDropdown()
+-- สั่งสร้างครั้งแรกตอนรัน Script
+CreateDrop()
 
--- 3. ปุ่ม Refresh (แบบหักดิบให้ชื่อกลับมาเป็น None)
-Section:NewButton("Refresh Dropdown", "Update list & Clear Label", function()
-    SelectedPlayer = nil -- ล้างค่า Logic
+-- --- 3. ปุ่ม Refresh แบบทำลายแล้วสร้างใหม่ ---
+Section:NewButton("Refresh Dropdown", "Update list & Reset selection", function()
+    -- 1. ล้างค่าในสมองบอท
+    SelectedPlayer = nil 
     
-    -- ไม้ตาย: สั่ง Clear แล้ว Refresh ด้วยตารางที่มีแค่ "None (Off)" ก่อน
-    -- เพื่อบีบให้ UI มันกลับมาที่ค่าแรก
-    drop:Refresh({"None (Off)"}) 
+    -- 2. ไม้ตาย: สั่งลบ Elements ทั้งหมดใน Section ของผู้เล่นทิ้ง
+    for _, v in pairs(PlayerSection:GetContainer().container:GetChildren()) do
+        if v:IsA("Frame") then v:Destroy() end
+    end
     
-    task.wait(0.1) -- รอ UI หายเอ๋อแป๊บนึง
-    
-    -- แล้วค่อยโหลดรายชื่อผู้เล่นจริงๆ กลับมา
-    drop:Refresh(UpdatePlayerTable())
-    
-end end)
+    -- 3. สั่งสร้าง Dropdown ขึ้นมาใหม่จากศูนย์ ชื่อปุ่มจะเป็น None (Off) แน่นอน
+    task.wait(0.05)
+    CreateDrop()
+end)
 
 -- 4. Toggle ระบบเลือด %
 Section:NewToggle("Use % Health Logic", "If ON, check health by percentage", function(state)
