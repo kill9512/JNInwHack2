@@ -2,79 +2,57 @@ local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHept
 local Window = Library.CreateLib("KONG GUISUS", "DarkTheme")
 local Tab = Window:NewTab("Main")
 local Section = Tab:NewSection("Smart Follow Player")
-local PlayerTable = {}
 
 -- --- Variables ---
-local SelectedMode = "Manual" -- โหมดเริ่มต้น
-local SelectedPlayer = nil -- ชื่อผู้เล่นที่เลือกเอง
-local UsePercentage = false -- Toggle สำหรับ % HP
+local SelectedMode = "Manual"
+local SelectedPlayer = nil
+local UsePercentage = false
+local followDistance = 5
+local followEnabled = false
+local followMode = "Standard" -- [เพิ่มตัวแปรโหมด]
 
--- ฟังก์ชันหาเลือดผู้เล่น
+-- ฟังก์ชันต่างๆ (เหมือนเดิม)
 local function getHealth(plr)
     local char = plr.Character
     if char and char:FindFirstChild("Humanoid") then
-        if UsePercentage then
-            -- ส่งคืนค่าเป็น % (เลือดปัจจุบัน / เลือดสูงสุด)
-            return char.Humanoid.Health / char.Humanoid.MaxHealth
-        else
-            -- ส่งคืนค่าเลือดดิบๆ
-            return char.Humanoid.Health
-        end
+        return UsePercentage and (char.Humanoid.Health / char.Humanoid.MaxHealth) or char.Humanoid.Health
     end
     return nil
 end
 
--- ฟังก์ชันอัปเดตรายชื่อ (เหมือนเดิม)
 local function UpdatePlayerTable()
-    local tbl = {"None (Off)"} -- เพิ่ม Option พิเศษไว้หัวแถว
+    local tbl = {"None (Off)"}
     for _, plr in pairs(game.Players:GetPlayers()) do
-        if plr.Name ~= game.Players.LocalPlayer.Name then
-            table.insert(tbl, plr.Name)
-        end
+        if plr.Name ~= game.Players.LocalPlayer.Name then table.insert(tbl, plr.Name) end
     end
     return tbl
 end
 
 -- --- UI Elements ---
-
--- 1. เลือกโหมดการทำงาน (ตั้งชื่อหัวข้อเป็น Manual ไปเลย)
 Section:NewDropdown("Manual", "Choose how to find target", {"Manual", "Max HP", "Min HP", "Off"}, function(mode)
     SelectedMode = mode
 end)
 
--- 2. เลือกชื่อผู้เล่น (สร้างแบบปกติ ไม่ต้องใส่ในฟังก์ชันให้งง)
 local drop = Section:NewDropdown("None (Off)", "Manual selection", UpdatePlayerTable(), function(name)
-    if name == "None (Off)" then
-        SelectedPlayer = nil
-    else
-        SelectedPlayer = name
-    end
+    SelectedPlayer = (name == "None (Off)") and nil or name
 end)
 
--- 3. ปุ่ม Refresh (แบบล้างชื่อบนปุ่มได้ 100% โดย UI ไม่พัง)
 Section:NewButton("Refresh Dropdown", "Update list & Reset selection", function()
-    -- 1. ล้างสมองบอท
     SelectedPlayer = nil 
-    
-    -- 2. จังหวะแรก: บีบให้รายการเหลือแค่ None (Off) อันเดียว
-    -- วิธีนี้จะบังคับให้ Label บนปุ่มเด้งกลับมาเป็น None (Off) ทันที
-    drop:Refresh({"None (Off)"})
-    
-    -- 3. คั่นจังหวะนิดนึงให้ UI มันขยับ (ห้ามลบ)
-    task.wait(0.1)
-    
-    -- 4. จังหวะสอง: โหลดรายชื่อผู้เล่นปัจจุบันกลับมา
     drop:Refresh(UpdatePlayerTable())
+    pcall(function()
+        for _, v in pairs(Section:GetContainer().container:GetChildren()) do
+            if v:IsA("Frame") and v:FindFirstChild("Main") and v.Main:FindFirstChild("Title") then
+                -- แก้ให้เช็คว่าถ้าไม่ใช่ปุ่มโหมด Manual ให้กลับเป็น None (Off)
+                if v.Main.Title.Text ~= "Manual" then v.Main.Title.Text = "None (Off)" end
+            end
+        end
+    end)
 end)
 
--- 4. Toggle ระบบเลือด %
-Section:NewToggle("Use % Health Logic", "If ON, check health by percentage", function(state)
+Section:NewToggle("Use % Health Logic", "Check health by percentage", function(state)
     UsePercentage = state
 end)
-
--- --- เพิ่มตัวแปรคุมการเดิน ---
-local followDistance = 5
-local followEnabled = false
 
 -- --- UI ส่วนควบคุมการเดิน ---
 local MoveSection = Tab:NewSection("Movement Control")
@@ -87,74 +65,76 @@ MoveSection:NewSlider("Follow Distance", "Distance from target", 20, 1, function
     followDistance = s
 end)
 
--- --- เพิ่ม Service ที่จำเป็นไว้บนสุดของ Script ---
+-- [เพิ่มพลังที่ 1 & 2 ตรงนี้]
+MoveSection:NewDropdown("Standard", "Movement Mode", {"Standard", "Match Speed", "Teleport Behind"}, function(mode)
+    followMode = mode
+    -- คืนค่าความเร็วถ้าไม่ใช่ Match Speed
+    if mode ~= "Match Speed" then
+        pcall(function() game.Players.LocalPlayer.Character.Humanoid.WalkSpeed = 16 end)
+    end
+end)
+
+-- --- LOGIC CORE (Smart Pathfinding + Super Powers) ---
 local PathfindingService = game:GetService("PathfindingService")
 
--- --- LOGIC CORE (ตัวคำนวณและสั่งเดินแบบฉลาด) ---
 task.spawn(function()
     while task.wait(0.1) do 
         if not followEnabled then continue end 
         
         local finalTarget = nil
-        -- [ส่วนเลือกเป้าหมาย SelectedMode เหมือนเดิม...]
+        -- 1. เลือกเป้าหมาย (Logic เดิม)
         if SelectedMode == "Manual" then
             finalTarget = game.Players:FindFirstChild(SelectedPlayer)
-        elseif SelectedMode == "Max HP" then
-            local highHealth = -1
+        elseif SelectedMode == "Max HP" or SelectedMode == "Min HP" then
+            local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
             for _, p in pairs(game.Players:GetPlayers()) do
                 if p ~= game.Players.LocalPlayer then
                     local hp = getHealth(p)
-                    if hp and hp > highHealth then highHealth = hp; finalTarget = p end
-                end
-            end
-        elseif SelectedMode == "Min HP" then
-            local lowHealth = math.huge
-            for _, p in pairs(game.Players:GetPlayers()) do
-                if p ~= game.Players.LocalPlayer then
-                    local hp = getHealth(p)
-                    if hp and hp < lowHealth then lowHealth = hp; finalTarget = p end
+                    if hp then
+                        if (SelectedMode == "Max HP" and hp > bestHP) or (SelectedMode == "Min HP" and hp < bestHP) then
+                            bestHP = hp; finalTarget = p
+                        end
+                    end
                 end
             end
         end
 
-        -- --- ส่วนสั่งเดินแบบ Smart Pathfinding ---
+        -- 2. สั่งการเคลื่อนไหว
         if finalTarget and finalTarget.Character and finalTarget.Character:FindFirstChild("HumanoidRootPart") then
             local myChar = game.Players.LocalPlayer.Character
             local myHuman = myChar:FindFirstChild("Humanoid")
             local myRoot = myChar:FindFirstChild("HumanoidRootPart")
             local targetRoot = finalTarget.Character.HumanoidRootPart
+            local targetHuman = finalTarget.Character:FindFirstChild("Humanoid")
             
             if myHuman and myRoot and targetRoot then
-                local distance = (myRoot.Position - targetRoot.Position).Magnitude
                 
-                -- ถ้าอยู่ไกลกว่าระยะที่ตั้งไว้ ให้คำนวณทางเดิน
-                if distance > followDistance then
-                    -- 1. สร้าง Path
-                    local path = PathfindingService:CreatePath({
-                        AgentCanJump = true, -- อนุญาตให้กระโดดข้ามสิ่งกีดขวาง
-                        AgentWaypointSpacing = 2 -- ระยะห่างของจุดเดิน
-                    })
-                    
-                    -- 2. คำนวณเส้นทางจาก 'เรา' ไป 'เป้าหมาย'
-                    path:ComputeAsync(myRoot.Position, targetRoot.Position)
-                    
-                    -- 3. ถ้าคำนวณสำเร็จ ให้เดินตามจุด Waypoints
-                    if path.Status == Enum.PathStatus.Success then
-                        local waypoints = path:GetWaypoints()
+                -- --- พลังที่ 2: Teleport Behind (สิงหลัง) ---
+                if followMode == "Teleport Behind" then
+                    local offset = targetRoot.CFrame.LookVector * -followDistance
+                    myRoot.CFrame = CFrame.new(targetRoot.Position + offset, targetRoot.Position)
+                
+                else
+                    -- --- พลังที่ 1: Match Speed (ก๊อปความเร็ว) ---
+                    if followMode == "Match Speed" and targetHuman then
+                        myHuman.WalkSpeed = targetHuman.WalkSpeed
+                    end
+
+                    -- --- ระบบเดินปกติ (Smart Pathfinding) ---
+                    local distance = (myRoot.Position - targetRoot.Position).Magnitude
+                    if distance > followDistance then
+                        local path = PathfindingService:CreatePath({AgentCanJump = true, AgentWaypointSpacing = 2})
+                        path:ComputeAsync(myRoot.Position, targetRoot.Position)
                         
-                        -- เดินไปหาจุดที่ 2 (จุดแรกคือที่ที่เรายืนอยู่)
-                        if waypoints[2] then
-                            local wp = waypoints[2]
-                            myHuman:MoveTo(wp.Position)
-                            
-                            -- ถ้าจุดนั้นบอกให้กระโดด ก็กระโดด
-                            if wp.Action == Enum.PathfindingWaypointAction.Jump then
-                                myHuman.Jump = true
+                        if path.Status == Enum.PathStatus.Success then
+                            local waypoints = path:GetWaypoints()
+                            if waypoints[2] then
+                                myHuman:MoveTo(waypoints[2].Position)
+                                if waypoints[2].Action == Enum.PathfindingWaypointAction.Jump then myHuman.Jump = true end
                             end
+                        else
+                            myHuman:MoveTo(targetRoot.Position)
                         end
-                    else
-                        -- ถ้า Pathfinding ล้มเหลว (ทางตัน) ให้เดินตรงๆ ไปก่อนกันนิ่ง
-                        myHuman:MoveTo(targetRoot.Position)
                     end
                 end
             end
