@@ -42,37 +42,28 @@ Section:NewDropdown("Manual", "Choose how to find target", {"Manual", "Max HP", 
     SelectedMode = mode
 end)
 
--- --- ส่วนของ Dropdown ที่จะถูกทำลายและสร้างใหม่ ---
-local PlayerSection = Tab:NewSection("Player Selection")
-local drop -- ไว้เก็บตัวแปร Dropdown
-
-local function CreateDrop()
-    -- ฟังนะเพื่อน ตรงนี้กูจะสร้าง Dropdown ขึ้นมาใหม่ทุกครั้งที่มึงกด Refresh
-    drop = PlayerSection:NewDropdown("None (Off)", "Manual selection", UpdatePlayerTable(), function(name)
-        if name == "None (Off)" then
-            SelectedPlayer = nil
-        else
-            SelectedPlayer = name
-        end
-    end)
-end
-
--- สั่งสร้างครั้งแรกตอนรัน Script
-CreateDrop()
-
--- --- 3. ปุ่ม Refresh แบบทำลายแล้วสร้างใหม่ ---
-Section:NewButton("Refresh Dropdown", "Update list & Reset selection", function()
-    -- 1. ล้างค่าในสมองบอท
-    SelectedPlayer = nil 
-    
-    -- 2. ไม้ตาย: สั่งลบ Elements ทั้งหมดใน Section ของผู้เล่นทิ้ง
-    for _, v in pairs(PlayerSection:GetContainer().container:GetChildren()) do
-        if v:IsA("Frame") then v:Destroy() end
+-- 2. เลือกชื่อผู้เล่น (เริ่มมาเป็น None (Off))
+local drop = Section:NewDropdown("None (Off)", "Manual selection", UpdatePlayerTable(), function(name)
+    if name == "None (Off)" then
+        SelectedPlayer = nil
+    else
+        SelectedPlayer = name
     end
+end)
+
+-- 3. ปุ่ม Refresh (ท่าแก้เผ็ด Kavo ให้ชื่อกลับเป็น None)
+Section:NewButton("Refresh Dropdown", "Update list & Reset selection", function()
+    SelectedPlayer = nil -- ล้างค่า Logic บอทหยุดเดินทันที
     
-    -- 3. สั่งสร้าง Dropdown ขึ้นมาใหม่จากศูนย์ ชื่อปุ่มจะเป็น None (Off) แน่นอน
-    task.wait(0.05)
-    CreateDrop()
+    -- ขั้นตอนที่ 1: บีบให้ปุ่มโชว์ None (Off) โดยการส่งลิสต์ที่มีแค่ค่าเดียวไป
+    drop:Refresh({"None (Off)"}) 
+    
+    -- ขั้นตอนที่ 2: รอให้ UI มันรับรู้ (แป๊บเดียว)
+    task.wait(0.01)
+    
+    -- ขั้นตอนที่ 3: โหลดรายชื่อผู้เล่นจริงๆ กลับมา
+    -- ชื่อบนปุ่มมันจะ "ค้าง" อยู่ที่ None (Off) เพราะมันเป็นค่าแรกที่มันจำได้ตอน Refresh ครั้งล่าสุด
+    drop:Refresh(UpdatePlayerTable())
 end)
 
 -- 4. Toggle ระบบเลือด %
