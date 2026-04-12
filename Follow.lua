@@ -32,25 +32,15 @@ local function UpdatePlayerTable()
     return tbl
 end
 
-local function getHealth(plr)
-    local char = plr.Character
-    if char and char:FindFirstChild("Humanoid") then
-        local hum = char.Humanoid
-        return UsePercentage and (hum.Health / hum.MaxHealth) or hum.Health
-    end
-    return nil
-end
-
--- เช็คว่ามองเห็นเป้าหมายตรงๆ หรือไม่ (Line of Sight)
+-- เช็คว่ามองเห็นเป้าหมายหรือไม่
 local function canSeeTarget(myRoot, targetRoot)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character, targetRoot.Parent}
     local direction = (targetRoot.Position - myRoot.Position)
     local result = workspace:Raycast(myRoot.Position, direction, rayParams)
-    return result == nil -- ถ้าไม่ติดอะไรเลยแปลว่าเห็น
+    return result == nil
 end
 
 -- --- UI Elements ---
-
 Section:NewDropdown("Target Mode", "Choose how to find target", {"Manual", "Max HP", "Min HP"}, function(mode)
     SelectedMode = mode
 end)
@@ -83,14 +73,14 @@ task.spawn(function()
         if not followEnabled then continue end
         
         local finalTarget = nil
-        -- [ส่วนหาเป้าหมายเหมือนเดิม]
+        -- [ค้นหาเป้าหมาย]
         if SelectedMode == "Manual" then
             if SelectedPlayerName then finalTarget = Players:FindFirstChild(SelectedPlayerName) end
         elseif SelectedMode == "Max HP" or SelectedMode == "Min HP" then
             local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
             for _, p in pairs(Players:GetPlayers()) do
                 if p ~= LocalPlayer then
-                    local hp = getHealth(p)
+                    local hp = p.Character and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health
                     if hp and ((SelectedMode == "Max HP" and hp > bestHP) or (SelectedMode == "Min HP" and hp < bestHP)) then
                         bestHP = hp; finalTarget = p
                     end
@@ -106,26 +96,47 @@ task.spawn(function()
             
             if myHuman and myRoot then
                 local dist = (myRoot.Position - tRoot.Position).Magnitude
-                local heightDiff = math.abs(myRoot.Position.Y - tRoot.Position.Y)
+                local heightDiff = tRoot.Position.Y - myRoot.Position.Y -- เช็คว่าเขาอยู่สูงกว่าเราไหม
                 
                 if dist > followDistance then
-                    -- **จุดแก้ปัญหาสำคัญ**: ถ้าสูงต่างกัน หรือ มองไม่เห็นตัว ให้ใช้ Pathfinding
-                    if heightDiff > 5 or not canSeeTarget(myRoot, tRoot) then
-                        local path = PathfindingService:CreatePath({AgentCanJump = true, AgentRadius = 3})
+                    -- 1. เช็คว่าควรใช้ Pathfinding หรือไม่ (สูงต่างกัน หรือ มองไม่เห็น)
+                    if math.abs(heightDiff) > 4 or not canSeeTarget(myRoot, tRoot) then
+                        local path = PathfindingService:CreatePath({
+                            AgentCanJump = true, 
+                            AgentRadius = 2.5,
+                            AgentHeight = 5
+                        })
                         path:ComputeAsync(myRoot.Position, tRoot.Position)
                         
                         if path.Status == Enum.PathStatus.Success then
                             local waypoints = path:GetWaypoints()
-                            -- เดินไปที่ Waypoint ที่ 2 (จุดถัดไปจากที่ยืนอยู่)
-                            if waypoints[2] then
-                                if waypoints[2].Action == Enum.PathWaypointAction.Jump then myHuman.Jump = true end
-                                myHuman:MoveTo(waypoints[2].Position)
+                            local nextWaypoint = waypoints[2]
+                            
+                            if nextWaypoint then
+                                -- **บังคับกระโดดถ้า Waypoint บอก หรือถ้าเป้าหมายอยู่สูงกว่า**
+                                if nextWaypoint.Action == Enum.PathWaypointAction.Jump or heightDiff > 2 then
+                                    myHuman.Jump = true
+                                end
+                                myHuman:MoveTo(nextWaypoint.Position)
                             end
                         end
                     else
-                        -- ถ้าอยู่ชั้นเดียวกันและเห็นตัว ก็เดินตรงๆ (สมูทกว่า)
+                        -- 2. เดินตรงปกติ แต่เพิ่มระบบกันติด (Stuck Detection)
                         local moveDir = (tRoot.Position - myRoot.Position).Unit
                         myHuman:MoveTo(tRoot.Position - (moveDir * followDistance))
+                        
+                        -- ยิง Ray เช็คของขวางระดับเข่า
+                        rayParams.FilterDescendantsInstances = {myChar, finalTarget.Character}
+                        local hitCheck = workspace:Raycast(myRoot.Position + Vector3.new(0, -1, 0), moveDir * 3, rayParams)
+                        
+                        if hitCheck and hitCheck.Instance.CanCollide then
+                            myHuman.Jump = true -- เจอของขวางให้โดดทันที
+                        end
+                    end
+                    
+                    -- 3. ตรวจสอบความเร็ว (ถ้าเดินอยู่แต่ตัวไม่ขยับ = ติดแน่นอน)
+                    if myRoot.Velocity.Magnitude < 1 and myHuman.MoveDirection.Magnitude > 0 then
+                        myHuman.Jump = true
                     end
                 else
                     -- ถึงระยะแล้ว
