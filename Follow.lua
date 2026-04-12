@@ -1,30 +1,26 @@
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
 local Window = Library.CreateLib("KONG GUISUS", "DarkTheme")
 
--- --- Variables (ประกาศตัวแปรไว้บนสุด) ---
+-- --- Variables (ค่าเริ่มต้นตามที่มึงสั่ง) ---
 local SelectedMode = "Manual"
 local SelectedPlayer = nil
 local UsePercentage = false
 local followDistance = 5
 local followEnabled = false
-local followMode = "Normal"
-local flySpeed = 10 -- ปรับความเร็วได้จาก Slider
+local followMode = "Normal" -- Default เป็น Normal
+local flySpeed = 10
 
--- --- Functions (ฟังก์ชันตัวช่วย) ---
+-- --- Functions ---
 local function getHealth(plr)
     local char = plr.Character
     if char and char:FindFirstChild("Humanoid") then
-        if UsePercentage then
-            return char.Humanoid.Health / char.Humanoid.MaxHealth
-        else
-            return char.Humanoid.Health
-        end
+        return UsePercentage and (char.Humanoid.Health / char.Humanoid.MaxHealth) or char.Humanoid.Health
     end
     return nil
 end
 
 local function UpdatePlayerTable()
-    local tbl = {"None (Off)"}
+    local tbl = {"None (Off)"} -- Default หัวแถว
     for _, plr in pairs(game.Players:GetPlayers()) do
         if plr.Name ~= game.Players.LocalPlayer.Name then
             table.insert(tbl, plr.Name)
@@ -33,27 +29,39 @@ local function UpdatePlayerTable()
     return tbl
 end
 
--- --- UI: Section 1 (Target Selection) ---
+-- --- UI: Main Tab ---
 local Tab = Window:NewTab("Main")
 local Section = Tab:NewSection("Smart Follow Player")
 
-Section:NewDropdown("Target Mode", "Choose how to find target", {"Manual", "Max HP", "Min HP", "Off"}, function(mode)
+-- 1. Target Mode (Default: Manual)
+Section:NewDropdown("Target Mode", "Choose find mode", {"Manual", "Max HP", "Min HP", "Off"}, function(mode)
     SelectedMode = mode
 end)
 
+-- 2. Select Player (Default: None (Off))
 local drop = Section:NewDropdown("Select Player", "Manual selection", UpdatePlayerTable(), function(name)
-    SelectedPlayer = (name == "None (Off)") and nil or name
+    if name == "None (Off)" then
+        SelectedPlayer = nil
+    else
+        SelectedPlayer = name
+    end
 end)
 
-Section:NewButton("Refresh Players", "Update manual list", function()
-    drop:Refresh(UpdatePlayerTable())
+-- 3. ปุ่ม Refresh (แบบล้างค่าผีออก)
+Section:NewButton("Refresh Players", "Update list & Reset Selection", function()
+    local newList = UpdatePlayerTable()
+    drop:Refresh(newList)
+    SelectedPlayer = nil -- ล้างค่าตัวแปร
+    -- หมายเหตุ: Kavo ไม่รองรับการบังคับ Text ใน Dropdown ให้เปลี่ยนผ่าน Script 
+    -- แต่มันจะล้างค่าในระบบให้เพื่อป้องกันตัวละครวิ่งไปหาคนที่ไม่อยู่แล้ว
+    Library:Notify("Refreshed", "Selection reset to None", 2)
 end)
 
-Section:NewToggle("Use % Health Logic", "Check health by percentage", function(state)
+Section:NewToggle("Use % Health Logic", "Percentage mode", function(state)
     UsePercentage = state
 end)
 
--- --- UI: Section 2 (Movement Control) ---
+-- --- UI: Movement Section ---
 local MoveSection = Tab:NewSection("Movement Control")
 
 MoveSection:NewToggle("Enable Follow", "Start/Stop Movement", function(state)
@@ -64,6 +72,7 @@ MoveSection:NewSlider("Follow Distance", "Distance to keep", 20, 1, function(s)
     followDistance = s
 end)
 
+-- 3. Follow Mode (Default: Normal)
 MoveSection:NewDropdown("Follow Mode", "Power Selection", {"Normal", "Walk", "TeleportBehind", "CFrameFly"}, function(mode)
     followMode = mode
     if mode == "Normal" then
@@ -78,14 +87,14 @@ MoveSection:NewSlider("Fly Speed", "Speed for CFrameFly", 100, 1, function(s)
     flySpeed = s
 end)
 
--- --- LOGIC CORE (หัวใจหลักที่คุมทุกอย่าง) ---
+-- --- LOGIC CORE ( optimization ) ---
 task.spawn(function()
-    while task.wait(0.01) do -- รันถี่ๆ เพื่อความเนียน
+    while task.wait(0.01) do
         if not followEnabled then continue end
         
         local finalTarget = nil
 
-        -- 1. ค้นหาเป้าหมายตามโหมดที่เลือก
+        -- ค้นหาเป้าหมาย
         if SelectedMode == "Manual" then
             finalTarget = game.Players:FindFirstChild(SelectedPlayer)
         elseif SelectedMode == "Max HP" then
@@ -106,7 +115,7 @@ task.spawn(function()
             end
         end
 
-        -- 2. สั่งการเคลื่อนไหวไปหา finalTarget
+        -- การเคลื่อนไหว
         if finalTarget and finalTarget.Character and finalTarget.Character:FindFirstChild("HumanoidRootPart") then
             local myChar = game.Players.LocalPlayer.Character
             local myRoot = myChar:FindFirstChild("HumanoidRootPart")
@@ -116,7 +125,6 @@ task.spawn(function()
             if myRoot and targetRoot and myHuman then
                 local dist = (myRoot.Position - targetRoot.Position).Magnitude
 
-                -- โหมด Walk (เดินตาม)
                 if followMode == "Walk" then
                     local targetHuman = finalTarget.Character:FindFirstChild("Humanoid")
                     if targetHuman then myHuman.WalkSpeed = targetHuman.WalkSpeed end
@@ -124,24 +132,19 @@ task.spawn(function()
                         local dir = (targetRoot.Position - myRoot.Position).Unit
                         myHuman:MoveTo(targetRoot.Position - (dir * followDistance))
                         
-                        -- กันติด (Raycast Jump)
+                        -- Raycast Jump
                         local ray = Ray.new(myRoot.Position, dir * 3)
                         local hit = workspace:FindPartOnRayWithIgnoreList(ray, {myChar})
                         if hit and hit.CanCollide then myHuman.Jump = true end
                     end
-
-                -- โหมดผีสิง (Teleport Behind)
                 elseif followMode == "TeleportBehind" then
-                    local backPos = targetRoot.CFrame * CFrame.new(0, 0, followDistance)
-                    myRoot.CFrame = CFrame.lookAt(backPos.Position, targetRoot.Position)
-
-                -- โหมดลอยไปหา (CFrame Fly)
+                    myRoot.CFrame = targetRoot.CFrame * CFrame.new(0, 0, followDistance) * CFrame.Angles(0, math.pi, 0)
                 elseif followMode == "CFrameFly" then
                     if dist > followDistance then
                         local direction = (targetRoot.Position - myRoot.Position).Unit
                         myRoot.CFrame = myRoot.CFrame + (direction * (flySpeed / 100))
                         myRoot.CFrame = CFrame.lookAt(myRoot.Position, targetRoot.Position)
-                        myRoot.Velocity = Vector3.new(0, 0, 0) -- กันตัวสั่น
+                        myRoot.Velocity = Vector3.new(0, 0, 0)
                     end
                 end
             end
