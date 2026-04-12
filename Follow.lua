@@ -15,35 +15,34 @@ local followEnabled = false
 
 local lastPos = Vector3.new(0,0,0)
 local stuckTime = 0
-local detourTimer = 0 -- ตัวนับเวลาการเดินอ้อม
-local lockedDir = nil -- ทิศทางที่ถูกล็อกไว้
+local detourTarget = nil -- พิกัดเป้าหมายชั่วคราวเพื่อหลบกำแพง
+local detourTimer = 0
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
--- --- ฟังก์ชันวิเคราะห์ทางเบี่ยง (เพิ่มระบบป้องกันการสลับฝั่ง) ---
-local function getBestEscapeDir(myRoot, moveDir)
-    local scanAngles = {45, -45, 90, -90, 135, -135}
-    local bestDir = nil
-    local maxFreeDist = 0
+-- --- ฟังก์ชันวิเคราะห์ทางหลบที่ฉลาดที่สุด ---
+local function getBestDetourPoint(myRoot, moveDir)
+    -- แสกนมุมกว้างขึ้นเพื่อหา "ช่องว่าง" ไม่ใช่แค่ทางที่ไกลที่สุด
+    local scanAngles = {60, -60, 90, -90, 120, -120}
+    local bestPoint = nil
+    local maxDist = 0
 
     for _, angle in ipairs(scanAngles) do
         local rotatedDir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
-        -- ยิง Ray 2 เส้นคู่ขนานเพื่อเช็คความกว้างตัวละคร (ไหล่ซ้าย-ขวา)
-        local offset = Vector3.new(0, 0.5, 0)
-        local result = workspace:Raycast(myRoot.Position + offset, rotatedDir * 10, rayParams)
+        local result = workspace:Raycast(myRoot.Position, rotatedDir * 12, rayParams)
         
-        local freeDist = result and result.Distance or 10
-        if freeDist > maxFreeDist then
-            maxFreeDist = freeDist
-            bestDir = rotatedDir
+        local currentDist = result and result.Distance or 12
+        if currentDist > maxDist then
+            maxDist = currentDist
+            bestPoint = myRoot.Position + (rotatedDir * 10) -- สร้างจุดเป้าหมายห่างออกไป 10 Studs
         end
     end
-    return bestDir
+    return bestPoint
 end
 
 -- --- UI Setup ---
 Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP"}, function(m) SelectedMode = m end)
-local drop = Section:NewDropdown("Select Player", "Select Target", {}, function(s) 
+local drop = Section:NewDropdown("Select Target", "Select Player", {}, function(s) 
     SelectedPlayerName = s:match("@([^%)]+)") 
 end)
 
@@ -58,8 +57,8 @@ Section:NewButton("Refresh Players", "Update List", refresh)
 refresh()
 
 local MoveSection = Tab:NewSection("Movement Control")
-MoveSection:NewToggle("Enable Follow", "Start Movement", function(state) followEnabled = state end)
-MoveSection:NewSlider("Distance", "Follow Gap", 20, 1, function(s) followDistance = s end)
+MoveSection:NewToggle("Enable Follow", "Start", function(state) followEnabled = state end)
+MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
 
 -- --- LOGIC CORE ---
 task.spawn(function()
@@ -67,7 +66,6 @@ task.spawn(function()
         if not followEnabled then continue end
         
         local target = nil
-        -- [ส่วนหาเป้าหมาย]
         if SelectedMode == "Manual" then
             target = Players:FindFirstChild(SelectedPlayerName or "")
         else
@@ -92,52 +90,53 @@ task.spawn(function()
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
                 local dist = (myRoot.Position - tRoot.Position).Magnitude
                 local moveDir = (tRoot.Position - myRoot.Position).Unit
-                local jumpable = (myHuman.JumpPower > 0 or myHuman.JumpHeight > 0)
+                local canJump = (myHuman.JumpPower > 0 or myHuman.JumpHeight > 0)
 
-                -- ** 1. ระบบจัดการสถานะการเดินอ้อม (Detour State) **
-                if detourTimer > 0 then
-                    detourTimer = detourTimer - 0.1
-                    if lockedDir then
-                        myHuman:MoveTo(myRoot.Position + (lockedDir * 10))
-                        if jumpable then myHuman.Jump = true end
-                        
-                        -- เช็คว่าทางข้างหน้าเป้าหมายจริงๆ เริ่มโล่งหรือยัง ถ้าโล่งแล้วให้ยกเลิกการอ้อมก่อนกำหนด
-                        local clearRay = workspace:Raycast(myRoot.Position, moveDir * 6, rayParams)
-                        if not clearRay then detourTimer = 0 end
-                        
-                        continue -- ล็อกคำสั่งเดินอ้อมไว้ ห้ามทำอย่างอื่น
-                    end
-                end
-
-                -- ตรวจจับการติดนิ่ง
-                if (myRoot.Position - lastPos).Magnitude < 0.4 and myHuman.MoveDirection.Magnitude > 0 then
+                -- 1. ระบบเช็คการติด (Stuck Detection)
+                if (myRoot.Position - lastPos).Magnitude < 0.5 and myHuman.MoveDirection.Magnitude > 0 then
                     stuckTime = stuckTime + 0.1
                 else
                     stuckTime = 0
                 end
                 lastPos = myRoot.Position
 
+                -- 2. ระบบจัดการทิศทาง (Decision Logic)
                 if dist > followDistance then
-                    -- เช็คสิ่งกีดขวางข้างหน้าตรงๆ
-                    local frontHit = workspace:Raycast(myRoot.Position, moveDir * 6, rayParams)
-                    local headHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 2.5, 0), moveDir * 6, rayParams)
+                    -- เช็คว่ากำลังอยู่ในโหมด "เดินเลี่ยงกำแพง" หรือไม่
+                    if detourTarget and detourTimer > 0 then
+                        detourTimer = detourTimer - 0.1
+                        myHuman:MoveTo(detourTarget)
+                        if stuckTime > 0.2 and canJump then myHuman.Jump = true end
+                        
+                        -- ถ้าถึงจุดเลี่ยงแล้ว หรือติดหนัก ให้เลิกเลี่ยงเพื่อคำนวณใหม่
+                        if (myRoot.Position - detourTarget).Magnitude < 2 or stuckTime > 0.6 then
+                            detourTarget = nil
+                            detourTimer = 0
+                        end
+                        continue
+                    end
 
-                    -- ** 2. เงื่อนไขการเข้าสู่โหมดเดินอ้อม **
-                    if stuckTime > 0.3 or frontHit then
-                        local bestDir = getBestEscapeDir(myRoot, moveDir)
-                        if bestDir then
-                            lockedDir = bestDir
-                            detourTimer = 1.2 -- ล็อกให้เดินอ้อมเป็นเวลา 1.2 วินาที (ห้ามวอกแวก)
-                            stuckTime = 0
-                            
-                            if jumpable and not headHit then myHuman.Jump = true end
+                    -- เช็คสิ่งกีดขวางข้างหน้า (Low, Mid, High)
+                    local lowHit = workspace:Raycast(myRoot.Position + Vector3.new(0,-1.2,0), moveDir * 6, rayParams)
+                    local midHit = workspace:Raycast(myRoot.Position, moveDir * 6, rayParams)
+                    local highHit = workspace:Raycast(myRoot.Position + Vector3.new(0,2.5,0), moveDir * 6, rayParams)
+
+                    if stuckTime > 0.4 or lowHit or midHit then
+                        -- ** ตรวจพบสิ่งกีดขวาง: เข้าโหมดเดินเลี่ยง **
+                        local newPoint = getBestDetourPoint(myRoot, moveDir)
+                        if newPoint then
+                            detourTarget = newPoint
+                            detourTimer = 1.5 -- บังคับเดินเลี่ยง 1.5 วินาที
+                            if canJump and not highHit then myHuman.Jump = true end
+                            myHuman:MoveTo(detourTarget)
                         end
                     else
-                        -- 3. ทางสะดวก เดินปกติ
-                        myHuman:MoveTo(tRoot.Position - (moveDir * followDistance))
+                        -- ทางสะดวก: เดินตรงไป
+                        myHuman:MoveTo(tRoot.Position)
                     end
                 else
-                    -- ถึงระยะแล้ว
+                    -- ถึงระยะแล้ว: หยุดและหันหน้า
+                    detourTarget = nil
                     myHuman:MoveTo(myRoot.Position)
                     myRoot.CFrame = CFrame.lookAt(myRoot.Position, Vector3.new(tRoot.Position.X, myRoot.Position.Y, tRoot.Position.Z))
                 end
