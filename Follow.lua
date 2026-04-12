@@ -3,59 +3,89 @@ local Window = Library.CreateLib("KONG GUISUS", "DarkTheme")
 local Tab = Window:NewTab("Main")
 local Section = Tab:NewSection("Smart Follow Player")
 
+-- --- Services ---
 local Players = game.Players
 local LocalPlayer = Players.LocalPlayer
 
+-- --- Variables ---
+local SelectedMode = "Manual"
 local SelectedPlayerName = nil
 local followDistance = 5
 local followEnabled = false
+
 local lastPos = Vector3.new(0,0,0)
 local stuckTime = 0
-
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
--- --- ฟังก์ชันเช็คว่า "กระโดดได้ไหม" ---
-local function canGameJump(humanoid)
-    local hasPower = humanoid.JumpPower > 0 or humanoid.JumpHeight > 0
-    local isStateEnabled = humanoid:GetStateEnabled(Enum.HumanoidStateType.Jumping)
-    return hasPower and isStateEnabled
-end
+-- --- ฟังก์ชันวิเคราะห์ทางเบี่ยงที่ฉลาดที่สุด ---
+local function getBestEscapeDir(myRoot, moveDir)
+    -- แสกนมุมต่างๆ เพื่อหาทางที่ "โล่ง" ที่สุด
+    local scanAngles = {30, -30, 60, -60, 90, -90}
+    local bestDir = nil
+    local maxFreeDist = 0
 
--- --- ฟังก์ชันแสกนหาทางที่โล่งที่สุด ---
-local function getBestDir(myRoot, moveDir)
-    local scanAngles = {45, -45, 90, -90}
-    local best = nil
-    local maxDist = 0
     for _, angle in ipairs(scanAngles) do
-        local rotDir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
-        local res = workspace:Raycast(myRoot.Position, rotDir * 8, rayParams)
-        local d = res and res.Distance or 8
-        if d > maxDist then maxDist = d; best = rotDir end
+        local rotatedDir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
+        local result = workspace:Raycast(myRoot.Position, rotatedDir * 8, rayParams)
+        
+        local freeDist = result and result.Distance or 8
+        if freeDist > maxFreeDist then
+            maxFreeDist = freeDist
+            bestDir = rotatedDir
+        end
     end
-    return best
+    return bestDir
 end
 
--- [UI Setup ส่วนที่เหลือเหมือนเดิม...]
-local drop = Section:NewDropdown("Select Player", "Select Target", {}, function(s) SelectedPlayerName = s:match("@([^%)]+)") end)
+-- --- UI Setup ---
+Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP"}, function(m) SelectedMode = m end)
+local drop = Section:NewDropdown("Select Player", "Select Target", {}, function(s) 
+    SelectedPlayerName = s:match("@([^%)]+)") 
+end)
+
 local function refresh()
     local t = {"None (Off)"}
-    for _, p in pairs(Players:GetPlayers()) do if p ~= LocalPlayer then table.insert(t, p.DisplayName.." (@"..p.Name..")") end end
+    for _, p in pairs(Players:GetPlayers()) do 
+        if p ~= LocalPlayer then table.insert(t, p.DisplayName.." (@"..p.Name..")") end 
+    end
     drop:Refresh(t)
 end
-Section:NewButton("Refresh Players", "Update", refresh)
+Section:NewButton("Refresh Players", "Update List", refresh)
 refresh()
 
 local MoveSection = Tab:NewSection("Movement Control")
-MoveSection:NewToggle("Enable Follow", "Start", function(state) followEnabled = state end)
-MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
+MoveSection:NewToggle("Enable Follow", "Start Movement", function(state) followEnabled = state end)
+MoveSection:NewSlider("Distance", "Follow Gap", 20, 1, function(s) followDistance = s end)
 
--- --- LOGIC CORE ---
+-- --- ฟังก์ชันเช็คว่าเกมนี้กระโดดได้ไหม ---
+local function canGameJump(humanoid)
+    local powerEnabled = (humanoid.JumpPower > 0 or humanoid.JumpHeight > 0)
+    local stateEnabled = humanoid:GetStateEnabled(Enum.HumanoidStateType.Jumping)
+    return powerEnabled and stateEnabled
+end
+
+-- --- LOGIC CORE (เวอร์ชันอัปเกรดการตรวจจับและกระโดด) ---
 task.spawn(function()
     while task.wait(0.1) do
         if not followEnabled then continue end
         
-        local target = Players:FindFirstChild(SelectedPlayerName or "")
+        -- [ส่วนการหา Target เหมือนเดิม]
+        local target = nil
+        if SelectedMode == "Manual" then
+            target = Players:FindFirstChild(SelectedPlayerName or "")
+        else
+            local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
+            for _, p in pairs(Players:GetPlayers()) do
+                if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") then
+                    local hp = p.Character.Humanoid.Health
+                    if (SelectedMode == "Max HP" and hp > bestHP) or (SelectedMode == "Min HP" and hp < bestHP) then
+                        bestHP = hp; target = p
+                    end
+                end
+            end
+        end
+
         if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
             local myChar = LocalPlayer.Character
             local myHuman = myChar and myChar:FindFirstChild("Humanoid")
@@ -64,45 +94,54 @@ task.spawn(function()
             
             if myHuman and myRoot then
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
-                local moveDir = (tRoot.Position - myRoot.Position).Unit
                 local dist = (myRoot.Position - tRoot.Position).Magnitude
-                
-                -- ตรวจสอบว่า "กระโดดได้ไหม" ในเกมนี้
-                local ableToJump = canGameJump(myHuman)
+                local moveDir = (tRoot.Position - myRoot.Position).Unit
+                local isJumpable = canGameJump(myHuman) -- เช็คว่าเกมโดดได้ไหม
 
-                -- Stuck Detection
+                -- ระบบตรวจจับการติด (Stuck Detection)
                 if (myRoot.Position - lastPos).Magnitude < 0.4 and myHuman.MoveDirection.Magnitude > 0 then
                     stuckTime = stuckTime + 0.1
-                else stuckTime = 0 end
+                else
+                    stuckTime = 0
+                end
                 lastPos = myRoot.Position
 
                 if dist > followDistance then
-                    -- 1. ยิง Ray เช็ค 3 ระดับ (เท้า, เอว, เหนือหัว)
-                    local footHit = workspace:Raycast(myRoot.Position + Vector3.new(0, -1.5, 0), moveDir * 4, rayParams)
-                    local waistHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 0, 0), moveDir * 4, rayParams)
-                    local headHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 3, 0), moveDir * 4, rayParams)
-
-                    -- 2. ตัดสินใจ "กระโดด" (เพิ่มลำดับความสำคัญให้สูงขึ้น)
-                    if ableToJump and (footHit or waistHit) then
-                        if not headHit then
-                            -- ถ้าเท้าติดหรือเอวติด แต่หัวว่าง = "กระโดดอัดเข้าไปเลย"
-                            myHuman.Jump = true
-                        end
+                    -- ** โหมดแก้ติด: ถ้าเกมโดดได้ ให้ลองโดดรัวๆ ก่อน **
+                    if stuckTime > 0.3 then
+                        if isJumpable then myHuman.Jump = true end
+                        local escape = getBestEscapeDir(myRoot, moveDir) or -moveDir
+                        myHuman:MoveTo(myRoot.Position + (escape * 7)) 
+                        task.wait(0.2)
+                        stuckTime = 0
+                        continue
                     end
 
-                    -- 3. ถ้าติดมุม (Stuck) หรือโดดแล้วไม่ไป ให้พยายาม "หักเลี้ยว"
-                    if stuckTime > 0.3 or (waistHit and headHit) then
-                        if ableToJump then myHuman.Jump = true end -- ลองโดดเผื่อไว้
-                        local detour = getBestDir(myRoot, moveDir)
-                        if detour then
-                            myHuman:MoveTo(myRoot.Position + (detour * 6))
-                            if ableToJump and stuckTime > 0.5 then myHuman.Jump = true end
+                    -- ยิง Ray เช็คสิ่งกีดขวาง (ปรับระยะและความสูงใหม่ให้แม่นขึ้น)
+                    -- เส้นล่าง (ระดับเข่า): ถ้าโดนแปลว่าต้องโดดหรือเลี้ยว
+                    local lowHit = workspace:Raycast(myRoot.Position + Vector3.new(0, -0.8, 0), moveDir * 4, rayParams)
+                    -- เส้นกลาง (ระดับอก): ถ้าโดนแปลว่าของสูง
+                    local midHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 1.5, 0), moveDir * 4, rayParams)
+                    -- เส้นบน (เหนือหัว): ถ้าโดนแปลว่าทางตัน/เพดานต่ำ
+                    local highHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 3.5, 0), moveDir * 4, rayParams)
+
+                    if lowHit or midHit then
+                        -- 1. ถ้าเกมโดดได้ และข้างบนไม่มีอะไรขวาง -> กระโดดทันที
+                        if isJumpable and not highHit then
+                            myHuman.Jump = true
+                        end
+                        
+                        -- 2. หักเลี้ยว (ทำควบคู่ไปกับการกระโดด)
+                        local bestDir = getBestEscapeDir(myRoot, moveDir)
+                        if bestDir then
+                            myHuman:MoveTo(myRoot.Position + (bestDir * 6))
                         end
                     else
-                        -- ทางสะดวก เดินไปหาเป้าหมาย
+                        -- ทางสะดวก เดินไปหาเป้าหมายปกติ
                         myHuman:MoveTo(tRoot.Position - (moveDir * followDistance))
                     end
                 else
+                    -- ถึงระยะแล้ว
                     myHuman:MoveTo(myRoot.Position)
                     myRoot.CFrame = CFrame.lookAt(myRoot.Position, Vector3.new(tRoot.Position.X, myRoot.Position.Y, tRoot.Position.Z))
                 end
