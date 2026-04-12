@@ -7,55 +7,52 @@ local Section = Tab:NewSection("Advanced Follow + Debug")
 local Players = game.Players
 local LocalPlayer = Players.LocalPlayer
 local RunService = game:GetService("RunService")
-local Terrain = workspace:FindFirstChildOfClass("Terrain") -- นิยาม Terrain ให้ชัดเจน
 
 -- --- Variables ---
 local SelectedMode = "Manual"
 local SelectedPlayerName = nil
 local followDistance = 5
 local followEnabled = false
-local debugEnabled = false
+local debugEnabled = false 
 
 local lastJump = 0
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
--- --- ฟังก์ชันวาดเส้น Debug (ปรับปรุงให้ปลอดภัยขึ้น) ---
+-- --- ฟังก์ชันวาดเส้น Debug (ปรับปรุงให้บางและจาง) ---
 local function updateDebugLine(name, startPos, endPos, color)
-    if not debugEnabled or not startPos or not endPos then 
-        if Terrain:FindFirstChild(name) then Terrain[name]:Destroy() end
+    local terrain = workspace.Terrain
+    local line = terrain:FindFirstChild(name)
+    
+    if not debugEnabled then 
+        if line then line:Destroy() end
         return 
     end
     
-    local line = Terrain:FindFirstChild(name) or Instance.new("LineHandleAdornment")
-    line.Name = name
-    line.Length = (startPos - endPos).Magnitude
-    line.Thickness = 5
+    if not line then
+        line = Instance.new("LineHandleAdornment")
+        line.Name = name
+        line.Thickness = 2 -- เส้นเล็กตามคำขอ
+        line.Transparency = 0.5 -- จางๆ
+        line.AlwaysOnTop = true
+        line.Adornee = terrain
+        line.Parent = terrain
+    end
+    
     line.Color3 = color or Color3.fromRGB(255, 0, 0)
-    line.Adornee = Terrain
+    line.Length = (startPos - endPos).Magnitude
     line.CFrame = CFrame.lookAt(startPos, endPos)
-    line.AlwaysOnTop = true
-    line.Parent = Terrain
 end
 
--- --- ฟังก์ชันคำนวณการกระจัด ---
-local function calculateDisplacementPath(myRoot, moveDir)
-    local scanAngles = {15, -15, 30, -30, 45, -45, 60, -60}
-    local bestPoint = nil
-    local minAngle = math.huge
-
-    for _, angle in ipairs(scanAngles) do
-        local rotatedDir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
-        local result = workspace:Raycast(myRoot.Position, rotatedDir * 12, rayParams)
-        
-        if not result then
-            if math.abs(angle) < minAngle then
-                minAngle = math.abs(angle)
-                bestPoint = myRoot.Position + (rotatedDir * 10)
-            end
-        end
+-- --- ฟังก์ชันอัปเดตรายชื่อ ---
+local function refresh()
+    local t = {"None (Off)"}
+    for _, p in pairs(Players:GetPlayers()) do 
+        if p ~= LocalPlayer then 
+            table.insert(t, p.DisplayName.." (@"..p.Name..")") 
+        end 
     end
-    return bestPoint
+    return t
 end
 
 -- --- UI Elements ---
@@ -63,55 +60,44 @@ Section:NewDropdown("Target Mode", "Choose Mode", {"Manual", "Max HP", "Min HP"}
     SelectedMode = m 
 end)
 
-local drop = Section:NewDropdown("Select Target", "User", {}, function(s) 
-    local name = s:match("@([^%)]+)")
-    SelectedPlayerName = name
+local drop = Section:NewDropdown("Select Target", "User", refresh(), function(s) 
+    if s == "None (Off)" then
+        SelectedPlayerName = nil
+    else
+        SelectedPlayerName = s:match("@([^%)]+)")
+    end
 end)
 
-local function refresh()
-    local t = {"None (Off)"}
-    for _, p in pairs(Players:GetPlayers()) do 
-        if p ~= LocalPlayer then 
-            table.insert(t, p.DisplayName .. " (@" .. p.Name .. ")") 
-        end 
-    end
-    drop:Refresh(t)
-end
-
-Section:NewButton("Refresh List", "Update", refresh)
-refresh()
+Section:NewButton("Refresh List", "Update Player List", function()
+    drop:Refresh(refresh())
+end)
 
 local MoveSection = Tab:NewSection("Control & Debug")
-MoveSection:NewToggle("Enable Follow", "Start Follow Logic", function(s) followEnabled = s end)
-MoveSection:NewToggle("Show Debug Lines", "Visual Pathing (Lines)", function(s) 
+MoveSection:NewToggle("Enable Follow", "Start Movement Logic", function(s) 
+    followEnabled = s 
+end)
+
+MoveSection:NewToggle("Show Debug Lines", "Faint Red Line to Target", function(s) 
     debugEnabled = s 
     if not s then
-        for _, v in pairs(Terrain:GetChildren()) do
-            if v.Name:find("DebugLine") then v:Destroy() end
-        end
+        if workspace.Terrain:FindFirstChild("TargetTrace") then workspace.Terrain.TargetTrace:Destroy() end
     end
 end)
-MoveSection:NewSlider("Follow Distance", "Gap", 20, 1, function(s) followDistance = s end)
 
--- --- LOGIC CORE ---
+MoveSection:NewSlider("Follow Distance", "Gap", 20, 1, function(s) 
+    followDistance = s 
+end)
+
+-- --- LOOP 1: DEBUG LINE (ทำงานแยกอิสระ) ---
 task.spawn(function()
     while true do
-        task.wait(0.05)
-        if not followEnabled then 
-            -- ล้างเส้นถ้าไม่ได้เปิดใช้งาน
-            updateDebugLine("DebugLine_Main", nil, nil)
-            updateDebugLine("DebugLine_Detour", nil, nil)
-            continue 
-        end
-        
-        -- ใช้ pcall ครอบเพื่อไม่ให้ลูปตายถ้ามี Error
-        pcall(function()
+        task.wait()
+        if debugEnabled then
             local target = nil
             if SelectedMode == "Manual" then
-                if SelectedPlayerName then
-                    target = Players:FindFirstChild(SelectedPlayerName)
-                end
+                target = Players:FindFirstChild(SelectedPlayerName or "")
             else
+                -- หาเป้าหมายตาม HP
                 local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
                 for _, p in pairs(Players:GetPlayers()) do
                     if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") then
@@ -123,63 +109,62 @@ task.spawn(function()
                 end
             end
 
-            if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
-                local myChar = LocalPlayer.Character
-                local myHuman = myChar and myChar:FindFirstChild("Humanoid")
-                local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-                local tRoot = target.Character.HumanoidRootPart
-                
-                if myHuman and myRoot then
-                    rayParams.FilterDescendantsInstances = {myChar, target.Character}
-                    local currentPos = myRoot.Position
-                    local targetPos = tRoot.Position
-                    local moveVec = (targetPos - currentPos)
-                    local dist = moveVec.Magnitude
-                    local moveDir = moveVec.Unit
+            if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                local startPos = LocalPlayer.Character.HumanoidRootPart.Position
+                local endPos = target.Character.HumanoidRootPart.Position
+                updateDebugLine("TargetTrace", startPos, endPos, Color3.fromRGB(255, 50, 50))
+            else
+                if workspace.Terrain:FindFirstChild("TargetTrace") then workspace.Terrain.TargetTrace:Destroy() end
+            end
+        end
+    end
+end)
 
-                    if dist > followDistance then
-                        local directRay = workspace:Raycast(currentPos, moveDir * 10, rayParams)
-                        
-                        if directRay then
-                            -- ติดกำแพง (เส้นแดง)
-                            updateDebugLine("DebugLine_Main", currentPos, directRay.Position, Color3.fromRGB(255, 0, 0))
-                            
-                            -- เช็คกระโดด
-                            local headCheck = workspace:Raycast(currentPos + Vector3.new(0, 2, 0), moveDir * 5, rayParams)
-                            if not headCheck and tick() - lastJump > 0.7 then
-                                myHuman.Jump = true
-                                lastJump = tick()
-                            end
-                            
-                            -- คำนวณทางเลี่ยง (เส้นฟ้า)
-                            local detour = calculateDisplacementPath(myRoot, moveDir)
-                            if detour then
-                                updateDebugLine("DebugLine_Detour", currentPos, detour, Color3.fromRGB(0, 255, 255))
-                                myHuman:MoveTo(detour)
-                            else
-                                myHuman:MoveTo(currentPos - (moveDir * 2)) -- ถอยถ้าตัน
-                            end
-                        else
-                            -- ทางโล่ง (เส้นเขียว)
-                            updateDebugLine("DebugLine_Main", currentPos, targetPos, Color3.fromRGB(0, 255, 0))
-                            if Terrain:FindFirstChild("DebugLine_Detour") then Terrain.DebugLine_Detour:Destroy() end
-                            myHuman:MoveTo(targetPos)
-                        end
-                    else
-                        -- ระยะประชิด
-                        myHuman:MoveTo(currentPos)
-                        local lookAt = Vector3.new(targetPos.X, currentPos.Y, targetPos.Z)
-                        myRoot.CFrame = myRoot.CFrame:Lerp(CFrame.lookAt(currentPos, lookAt), 0.2)
-                        
-                        updateDebugLine("DebugLine_Main", nil, nil)
-                        updateDebugLine("DebugLine_Detour", nil, nil)
+-- --- LOOP 2: MOVEMENT LOGIC (การเดิน) ---
+task.spawn(function()
+    while task.wait(0.05) do
+        if not followEnabled then continue end
+        
+        local target = nil
+        -- ค้นหาเป้าหมาย (ซ้ำกับข้างบนเพื่อให้แน่ใจว่าค่าตรงกัน)
+        if SelectedMode == "Manual" then
+            target = Players:FindFirstChild(SelectedPlayerName or "")
+        else
+            local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
+            for _, p in pairs(Players:GetPlayers()) do
+                if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") then
+                    local hp = p.Character.Humanoid.Health
+                    if (SelectedMode == "Max HP" and hp > bestHP) or (SelectedMode == "Min HP" and hp < bestHP) then
+                        bestHP = hp; target = p
                     end
                 end
-            else
-                -- ถ้าไม่มีเป้าหมาย ให้ล้างเส้น
-                updateDebugLine("DebugLine_Main", nil, nil)
-                updateDebugLine("DebugLine_Detour", nil, nil)
             end
-        end)
+        end
+
+        if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+            local myChar = LocalPlayer.Character
+            local myHuman = myChar and myChar:FindFirstChild("Humanoid")
+            local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            local tRoot = target.Character.HumanoidRootPart
+            
+            if myHuman and myRoot then
+                rayParams.FilterDescendantsInstances = {myChar, target.Character}
+                local dist = (tRoot.Position - myRoot.Position).Magnitude
+
+                if dist > followDistance then
+                    -- สั่งเดินตรงไปหาเป้าหมาย (Logic การกระจัดเดิม)
+                    myHuman:MoveTo(tRoot.Position)
+                    
+                    -- เช็คสิ่งกีดขวางระดับเข่าเพื่อกระโดด
+                    local ray = workspace:Raycast(myRoot.Position, (tRoot.Position - myRoot.Position).Unit * 5, rayParams)
+                    if ray and tick() - lastJump > 0.6 then
+                        myHuman.Jump = true
+                        lastJump = tick()
+                    end
+                else
+                    myHuman:MoveTo(myRoot.Position) -- หยุดเดิน
+                end
+            end
+        end
     end
 end)
