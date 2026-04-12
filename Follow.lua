@@ -1,14 +1,14 @@
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
-local Window = Library.CreateLib("KONG GUISUS - STABLE", "DarkTheme")
+local Window = Library.CreateLib("KONG GUISUS - INDOOR PRO", "DarkTheme")
 local Tab = Window:NewTab("Main")
-local Section = Tab:NewSection("Optimized Pathing")
+local Section = Tab:NewSection("Indoor & Tight Spaces Pathing")
 
 -- --- Services ---
 local Players = game.Players
 local LocalPlayer = Players.LocalPlayer
 local PathfindingService = game:GetService("PathfindingService")
 
--- --- Settings & States ---
+-- --- Settings ---
 local SelectedMode = "Manual"
 local SelectedPlayerName = nil
 local followDistance = 5
@@ -23,33 +23,17 @@ local lastTargetPos = Vector3.new()
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
--- --- Debug Visualization ---
-local function updateDebug(name, startPos, endPos, color)
-    if not debugEnabled then 
-        if workspace.Terrain:FindFirstChild(name) then workspace.Terrain[name]:Destroy() end
-        return 
-    end
-    local line = workspace.Terrain:FindFirstChild(name) or Instance.new("LineHandleAdornment")
-    line.Name = name
-    line.Thickness, line.Transparency, line.AlwaysOnTop = 3, 0.4, true
-    line.Adornee = workspace.Terrain
-    line.Color3 = color
-    line.Length = (startPos - endPos).Magnitude
-    line.CFrame = CFrame.lookAt(startPos, endPos)
-    line.Parent = workspace.Terrain
-end
-
-local function clearVisuals()
-    for _, v in pairs(workspace.Terrain:GetChildren()) do
-        if v.Name == "WP_Debug" or v.Name == "DirectTrace" then v:Destroy() end
-    end
-end
-
 -- --- Core Functions ---
 local function forceJump(hum)
     if hum.FloorMaterial ~= Enum.Material.Air then
         hum.Jump = true
         hum:ChangeState(Enum.HumanoidStateType.Jumping)
+    end
+end
+
+local function clearVisuals()
+    for _, v in pairs(workspace.Terrain:GetChildren()) do
+        if v.Name == "WP_Debug" or v.Name == "DirectTrace" then v:Destroy() end
     end
 end
 
@@ -70,28 +54,22 @@ refreshList()
 local MoveSection = Tab:NewSection("Control")
 MoveSection:NewToggle("Enable Follow", "Start Logic", function(s) 
     followEnabled = s 
-    if not s then 
-        currentWaypoints = {}
-        clearVisuals()
-    end
+    if not s then currentWaypoints = {}; clearVisuals() end
 end)
 MoveSection:NewToggle("Show Path", "Visuals", function(s) debugEnabled = s end)
-MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
+MoveSection:NewSlider("Gap", "Distance", 20, 1, function(s) followDistance = s end)
 
 -- --- MAIN LOOP ---
 task.spawn(function()
     while true do
-        local dt = task.wait(0.15) -- เพิ่มดีเลย์เล็กน้อยเพื่อลด CPU Usage
-        
+        task.wait(0.1) -- ความถี่กำลังดีสำหรับในอาคาร
         if not followEnabled then continue end
         
-        -- ป้องกันสคริปต์ค้างด้วย pcall
-        local status, err = pcall(function()
+        pcall(function()
             local target = nil
             if SelectedMode == "Manual" then
                 target = Players:FindFirstChild(SelectedPlayerName or "")
             else
-                -- [ค้นหาเป้าหมายตาม HP]
                 local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
                 for _, p in pairs(Players:GetPlayers()) do
                     if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") then
@@ -103,9 +81,7 @@ task.spawn(function()
                 end
             end
 
-            if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then 
-                return 
-            end
+            if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then return end
 
             local myChar = LocalPlayer.Character
             local myHuman = myChar:FindFirstChildOfClass("Humanoid")
@@ -116,31 +92,30 @@ task.spawn(function()
                 local currentPos = myRoot.Position
                 local targetPos = tRoot.Position
                 local dist = (targetPos - currentPos).Magnitude
-                local heightDiff = targetPos.Y - currentPos.Y
                 
+                -- ** ระบบเช็คว่าอยู่ Indoor หรือไม่ (ยิงขึ้นฟ้า) **
+                local ceilingCheck = workspace:Raycast(currentPos, Vector3.new(0, 20, 0), rayParams)
+                local isIndoor = ceilingCheck ~= nil
+
                 if dist > followDistance then
                     rayParams.FilterDescendantsInstances = {myChar, target.Character}
                     local moveDir = (targetPos - currentPos).Unit
                     
-                    -- ** เช็คทางตรง (ข้ามไป Pathfinding ทันทีถ้าเป้าหมายอยู่สูงมาก) **
-                    local directRay = nil
-                    if heightDiff < 10 then -- ถ้าไม่สูงมาก ลองยิงเส้นตรง
-                        directRay = workspace:Raycast(currentPos, moveDir * dist, rayParams)
-                    end
-
-                    if not directRay and heightDiff < 10 then
-                        -- ทางโล่ง (ระดับราบ)
+                    -- ** ถ้าอยู่ Indoor หรือมองไม่เห็นตัว ให้ใช้ Pathfinding ทันที **
+                    local directRay = workspace:Raycast(currentPos, moveDir * dist, rayParams)
+                    
+                    if not directRay and not isIndoor then
+                        -- ทางโล่ง (Outdoor เท่านั้น)
                         currentWaypoints = {}
-                        updateDebug("DirectTrace", currentPos, targetPos, Color3.fromRGB(0, 255, 0))
                         myHuman:MoveTo(targetPos)
                     else
-                        -- ทางตัน หรือ เป้าหมายอยู่สูงเกินไป -> คำนวณทางล่วงหน้า
-                        if (os.clock() - lastComputeTime > 1.2) or (targetPos - lastTargetPos).Magnitude > 8 then
+                        -- ในตึก หรือ ทางตัน -> คำนวณทางล่วงหน้าด้วย Parameter ที่ "เล็ก" ลง
+                        if (os.clock() - lastComputeTime > 1.0) or (targetPos - lastTargetPos).Magnitude > 5 then
                             local path = PathfindingService:CreatePath({
-                                AgentRadius = 3,
-                                AgentHeight = 6,
+                                AgentRadius = 1.8, -- เล็กลงเพื่อมุดประตู
+                                AgentHeight = 5,
                                 AgentCanJump = true,
-                                AgentMaxSlope = 45
+                                AgentMaxSlope = 55 -- ชันขึ้นเพื่อบันไดในบ้าน
                             })
                             
                             path:ComputeAsync(currentPos, targetPos)
@@ -153,44 +128,49 @@ task.spawn(function()
                                 
                                 if debugEnabled then
                                     clearVisuals()
-                                    for _, wp in ipairs(currentWaypoints) do
+                                    for i, wp in ipairs(currentWaypoints) do
                                         local p = Instance.new("Part")
-                                        p.Name, p.Size, p.Position = "WP_Debug", Vector3.new(1,1,1), wp.Position
+                                        p.Name, p.Size, p.Position = "WP_Debug", Vector3.new(0.6, 0.6, 0.6), wp.Position
                                         p.Anchored, p.CanCollide, p.CanQuery = true, false, false
-                                        p.Color, p.Material = Color3.fromRGB(0, 160, 255), Enum.Material.Neon
+                                        p.Color = (i == currentWaypointIndex) and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 200, 255)
+                                        p.Material = Enum.Material.Neon
                                         p.Parent = workspace.Terrain
                                     end
                                 end
                             end
                         end
 
-                        -- เดินตาม Waypoints
+                        -- เดินตาม Waypoints (ระบบมุด)
                         if #currentWaypoints > 0 and currentWaypointIndex <= #currentWaypoints then
                             local wp = currentWaypoints[currentWaypointIndex]
                             local dist2D = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude
                             
-                            if dist2D < 3.5 then
+                            -- ถ้ามองเห็น Waypoint ถัดไป (Shortcut) ให้ข้ามจุดปัจจุบันไปเลย (กันเดินชนขอบประตู)
+                            if currentWaypoints[currentWaypointIndex + 1] then
+                                local nextWp = currentWaypoints[currentWaypointIndex + 1]
+                                local lookNext = workspace:Raycast(currentPos, (nextWp.Position - currentPos).Unit * (nextWp.Position - currentPos).Magnitude, rayParams)
+                                if not lookNext then
+                                    currentWaypointIndex = currentWaypointIndex + 1
+                                    wp = nextWp
+                                end
+                            end
+
+                            if dist2D < 2.5 then -- ระยะเช็คจุดที่แคบลงเพื่อความแม่นยำในอาคาร
                                 currentWaypointIndex = currentWaypointIndex + 1
                             end
                             
                             if wp then
                                 myHuman:MoveTo(wp.Position)
-                                if wp.Action == Enum.PathWaypointAction.Jump or wp.Position.Y > currentPos.Y + 2 then
+                                if wp.Action == Enum.PathWaypointAction.Jump or wp.Position.Y > currentPos.Y + 1.5 then
                                     forceJump(myHuman)
                                 end
                             end
                         end
-                        if directRay then updateDebug("DirectTrace", currentPos, directRay.Position, Color3.fromRGB(255, 0, 0)) end
                     end
                 else
                     myHuman:MoveTo(currentPos)
                 end
             end
         end)
-        
-        if not status then
-            warn("AI Loop Error: " .. err)
-            task.wait(1) -- ถ้า Error ให้หยุดพัก 1 วินาทีกันค้าง
-        end
     end
 end)
