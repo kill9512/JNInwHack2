@@ -49,6 +49,15 @@ local function forceJump(hum)
     end
 end
 
+-- --- ฟังก์ชันใหม่: เช็คว่าพิกัดเป้าหมายอยู่ในของแข็งไหม ---
+local function isPositionClear(pos)
+    local hitParts = workspace:GetPartBoundsInRadius(pos, 2, rayParams) -- เช็ครัศมี 2 studs
+    for _, part in ipairs(hitParts) do
+        if part.CanCollide then return false end -- ถ้าเจอ Part ที่มี Collision = ตัน
+    end
+    return true
+end
+
 -- --- Logic ค้นหาทางที่ดีที่สุด ---
 local function calculateBestPath(myRoot, targetPos)
     local currentPos = myRoot.Position
@@ -57,65 +66,75 @@ local function calculateBestPath(myRoot, targetPos)
     
     clearBlocks()
 
-    -- 1. ลากบล็อกทางตรง
+    -- 1. เช็คทางตรง (ลากบล็อก 4 สเต็ป)
     local hitPos = nil
     for i = 1, 4 do
         local checkPos = currentPos + (moveDir * ((i-1) * stepSize))
+        local nextExpectedPos = currentPos + (moveDir * (i * stepSize))
+        
         local hit = workspace:Raycast(checkPos, moveDir * stepSize, rayParams)
         
-        if hit then
-            hitPos = hit.Position
-            createVisualBlock(hitPos, Color3.fromRGB(255, 0, 0)) -- บล็อกแดง = ชนกำแพง
+        if hit or not isPositionClear(nextExpectedPos) then
+            hitPos = hit and hit.Position or nextExpectedPos
+            createVisualBlock(hitPos, Color3.fromRGB(255, 0, 0)) -- บล็อกแดง
             break
         else
-            createVisualBlock(currentPos + (moveDir * (i * stepSize)), Color3.fromRGB(0, 255, 0)) -- บล็อกเขียว = ทางสะดวก
+            createVisualBlock(nextExpectedPos, Color3.fromRGB(0, 255, 0)) -- บล็อกเขียว
         end
     end
 
     -- 2. ถ้าชนกำแพง ให้วิเคราะห์หาทางออก
     if hitPos then
-        -- เช็คกระโดด: ยิง Ray เหนือหัว (ความสูง +4) ไปข้างหน้า 15 studs
-        local jumpRay = workspace:Raycast(currentPos + Vector3.new(0, 4, 0), moveDir * 15, rayParams)
+        -- ** เช็คกระโดด (ต้องผ่าน 2 เงื่อนไข: สูงไม่เกินหัว, หนาไม่เกิน 24 studs) **
+        local jumpDir = moveDir
+        -- ยิง Ray ข้ามหัว (สูง 4 studs) ไป 24 studs
+        local overHeadRay = workspace:Raycast(currentPos + Vector3.new(0, 4, 0), jumpDir * 24, rayParams)
         
-        if not jumpRay then
-            -- ถ้าข้างบนโล่ง แปลว่ากำแพงเตี้ยหรือแคบพอจะกระโดดข้ามได้!
-            local landingPos = hitPos + (moveDir * 6) -- จุดลงจอดหลังกำแพง
-            createVisualBlock(landingPos, Color3.fromRGB(255, 255, 0)) -- บล็อกเหลือง = ให้กระโดด
-            return landingPos, true, true -- (ตำแหน่ง, เป็นทางเลี่ยงไหม, ต้องกระโดดไหม)
+        if not overHeadRay then
+            -- ถ้าข้ามหัวโล่ง ต้องเช็คว่า "จุดลงจอด" ไม่ทะลุกำแพงด้วย
+            local landingPos = hitPos + (jumpDir * 6)
+            if isPositionClear(landingPos) then
+                createVisualBlock(landingPos, Color3.fromRGB(255, 255, 0)) -- บล็อกเหลือง = ให้กระโดด
+                return landingPos, true, true 
+            end
         end
 
-        -- ถ้ากระโดดไม่ได้ ให้หาทางเลี้ยว (ซ้าย/ขวา)
-        -- สแกน 90, 45, -45, -90 องศา
-        local scanAngles = {90, 45, -45, -90}
+        -- ** 3. ถ้ากระโดดไม่ได้ ให้หาทางเลี้ยว (ซ้าย/ขวา) **
+        local scanAngles = {90, -90, 45, -45, 135, -135} -- สแกนมุมกว้างขึ้นเพื่อแก้ติดมุม
         local bestPos = nil
         local minDist = math.huge
 
         for _, angle in ipairs(scanAngles) do
             local dir = (CFrame.Angles(0, math.rad(angle), 0) * moveDir).Unit
             
-            -- ยิง Ray ไปทางที่จะเลี้ยวว่ามีกำแพงไหม?
-            local sideHit = workspace:Raycast(currentPos, dir * 12, rayParams)
+            -- ยิง Ray เช็คทางเลี้ยว (ระยะ 10 studs)
+            local sideHit = workspace:Raycast(currentPos, dir * 10, rayParams)
             
             if not sideHit then
-                -- ถ้าไม่มีกำแพง ลองคำนวณว่าระยะห่างจากจุดนี้ไปหาเป้าหมาย ใกล้ขึ้นไหม?
-                local testPos = currentPos + (dir * 10)
-                local distToTarget = (testPos - targetPos).Magnitude
+                local testPos = currentPos + (dir * 8)
                 
-                if distToTarget < minDist then
-                    minDist = distToTarget
-                    bestPos = testPos
+                -- ** แก้บั๊กบล็อกฟ้าทะลุกำแพง: เช็คให้ชัวร์ว่าจุดหมายปลายทางของบล็อกฟ้าว่างจริงๆ **
+                if isPositionClear(testPos) then
+                    local distToTarget = (testPos - targetPos).Magnitude
+                    
+                    if distToTarget < minDist then
+                        minDist = distToTarget
+                        bestPos = testPos
+                    end
                 end
             end
         end
 
         if bestPos then
-            createVisualBlock(bestPos, Color3.fromRGB(0, 255, 255)) -- บล็อกฟ้า = ทางเลี้ยวที่ปลอดภัย
+            createVisualBlock(bestPos, Color3.fromRGB(0, 255, 255)) -- บล็อกฟ้า
             return bestPos, true, false
         else
-            -- ถ้าตันทุกทาง ให้ถอยหลังนิดหน่อย
+            -- ถ้าตันทุกทาง ให้ถอยหลัง
             local fallback = currentPos - (moveDir * 5)
-            createVisualBlock(fallback, Color3.fromRGB(255, 100, 100))
-            return fallback, true, false
+            if isPositionClear(fallback) then
+                createVisualBlock(fallback, Color3.fromRGB(255, 100, 100))
+                return fallback, true, false
+            end
         end
     end
 
@@ -180,12 +199,13 @@ task.spawn(function()
 
                 if dist > followDistance then
                     
-                    -- ระบบจำเป้าหมาย (Anti-Jitter)
+                    -- ** ระบบจำเป้าหมาย (Anti-Jitter) **
+                    -- แก้ปัญหาติดมุม 4 เหลี่ยมแล้วเปลี่ยนใจกลับ
                     if lockTimer > 0 and lockedTargetPos then
                         lockTimer = lockTimer - 0.1
                         myHuman:MoveTo(lockedTargetPos)
                         
-                        -- ถ้าระยะถึงบล็อกเป้าหมายแล้ว ให้ปลดล็อกก่อนเวลา
+                        -- ถ้าระยะถึงบล็อกเป้าหมายแล้ว ให้ปลดล็อก
                         if (currentPos - lockedTargetPos).Magnitude < 3 then
                             lockTimer = 0
                         end
@@ -196,9 +216,9 @@ task.spawn(function()
                     local nextMovePoint, isDetour, shouldJump = calculateBestPath(myRoot, targetPos)
                     
                     if isDetour then
-                        -- ถ้าเป็นทางเลี้ยวหรือต้องกระโดด ให้ "ล็อก" เป้าหมายนี้ไว้ 1 วินาที
+                        -- เพิ่มเวลาล็อกเป้าเป็น 1.5 วินาที เพื่อให้แน่ใจว่าพ้นเหลี่ยมกำแพงจริงๆ
                         lockedTargetPos = nextMovePoint
-                        lockTimer = 1.0 
+                        lockTimer = 1.5 
                         myHuman:MoveTo(lockedTargetPos)
                         
                         if shouldJump then
