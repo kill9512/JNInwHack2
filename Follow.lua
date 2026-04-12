@@ -10,8 +10,6 @@ local MoveSection = Tab:NewSection("Movement Control")
 
 -- ===================== VARIABLES =====================
 
-local PlayerTable = {}
-
 local SelectedMode = "Manual"
 local SelectedPlayer = nil
 local UsePercentage = false
@@ -47,9 +45,8 @@ local function UpdatePlayerTable()
     return tbl
 end
 
--- ===================== UI ELEMENTS =====================
+-- ===================== UI =====================
 
--- Mode Selection
 Section:NewDropdown("Manual", "Choose how to find target",
     {"Manual", "Max HP", "Min HP", "Off"},
     function(mode)
@@ -57,26 +54,18 @@ Section:NewDropdown("Manual", "Choose how to find target",
     end
 )
 
--- Player Selection
 local drop = Section:NewDropdown("None (Off)", "Manual selection",
     UpdatePlayerTable(),
     function(name)
-        if name == "None (Off)" then
-            SelectedPlayer = nil
-        else
-            SelectedPlayer = name
-        end
+        SelectedPlayer = (name ~= "None (Off)") and name or nil
     end
 )
 
--- Refresh Button
 Section:NewButton("Refresh Dropdown", "Update list & Clear selection", function()
-    local newList = UpdatePlayerTable()
-    drop:Refresh(newList)
+    drop:Refresh(UpdatePlayerTable())
     SelectedPlayer = nil
 end)
 
--- Health Mode Toggle
 Section:NewToggle("Use % Health Logic", "If ON, check health by percentage", function(state)
     UsePercentage = state
 end)
@@ -91,7 +80,7 @@ MoveSection:NewSlider("Follow Distance", "Distance from target", 20, 1, function
     followDistance = s
 end)
 
--- ===================== CORE LOGIC =====================
+-- ===================== CORE =====================
 
 task.spawn(function()
     while task.wait(0.1) do
@@ -142,28 +131,47 @@ task.spawn(function()
                 local distance = (myRoot.Position - targetRoot.Position).Magnitude
 
                 if distance > followDistance then
-                    local path = PathfindingService:CreatePath({
-                        AgentCanJump = true,
-                        AgentWaypointSpacing = 2
-                    })
+                    -- Raycast check
+                    local ray = Ray.new(
+                        myRoot.Position,
+                        (targetRoot.Position - myRoot.Position).Unit * distance
+                    )
 
-                    path:ComputeAsync(myRoot.Position, targetRoot.Position)
+                    local hit = workspace:FindPartOnRayWithIgnoreList(
+                        ray,
+                        {myChar, finalTarget.Character}
+                    )
 
-                    if path.Status == Enum.PathStatus.Success then
-                        local waypoints = path:GetWaypoints()
-
-                        if waypoints[2] then
-                            local wp = waypoints[2]
-                            myHuman:MoveTo(wp.Position)
-
-                            if wp.Action == Enum.PathfindingWaypointAction.Jump then
-                                myHuman.Jump = true
-                            end
-                        end
-                    else
-                        -- fallback เดินตรง
+                    if not hit then
+                        -- เดินตรง
                         myHuman:MoveTo(targetRoot.Position)
+                    else
+                        -- Pathfinding
+                        local path = PathfindingService:CreatePath({
+                            AgentCanJump = true,
+                            AgentWaypointSpacing = 2
+                        })
+
+                        path:ComputeAsync(myRoot.Position, targetRoot.Position)
+
+                        if path.Status == Enum.PathStatus.Success then
+                            local waypoints = path:GetWaypoints()
+                            local nextWaypoint = waypoints[3] or waypoints[2]
+
+                            if nextWaypoint then
+                                myHuman:MoveTo(nextWaypoint.Position)
+
+                                if nextWaypoint.Action == Enum.PathfindingWaypointAction.Jump then
+                                    myHuman.Jump = true
+                                end
+                            end
+                        else
+                            myHuman:MoveTo(targetRoot.Position)
+                        end
                     end
+                else
+                    -- หยุดเมื่อถึงระยะ
+                    myHuman:MoveTo(myRoot.Position)
                 end
             end
         end
