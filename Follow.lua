@@ -20,9 +20,9 @@ local lockedDir = nil
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
--- --- ฟังก์ชันวิเคราะห์ทาง 180 องศา (7 Rays Scan) ---
+-- --- ฟังก์ชันวิเคราะห์ทาง 180 องศา ---
 local function findBestPath(myRoot, moveDir)
-    local scanAngles = {-90, -60, -30, 0, 30, 60, 90} -- 180 องศา ทุกๆ 30 องศา
+    local scanAngles = {-90, -60, -30, 0, 30, 60, 90}
     local bestDir = nil
     local bestScore = -1
 
@@ -30,21 +30,20 @@ local function findBestPath(myRoot, moveDir)
         local rotatedDir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
         local score = 0
         
-        -- เช็ค 3 ระดับความสูง
-        local footHit = workspace:Raycast(myRoot.Position + Vector3.new(0, -1.5, 0), rotatedDir * 8, rayParams)
-        local kneeHit = workspace:Raycast(myRoot.Position, rotatedDir * 8, rayParams)
-        local headHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 2.5, 0), rotatedDir * 8, rayParams)
+        -- เช็คความสูง 3 ระดับ
+        local footHit = workspace:Raycast(myRoot.Position + Vector3.new(0, -1.8, 0), rotatedDir * 8, rayParams) -- ระดับพื้น
+        local kneeHit = workspace:Raycast(myRoot.Position + Vector3.new(0, -0.5, 0), rotatedDir * 8, rayParams) -- ระดับเข่า
+        local headHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 2.5, 0), rotatedDir * 8, rayParams) -- ระดับหัว
 
         if not footHit and not kneeHit then
-            score = 10 -- ทางโล่งมาก
-        elseif footHit and not headHit then
-            score = 5 -- มีของเตี้ย/บันได (กระโดดได้)
-        elseif footHit and headHit then
-            score = 1 -- กำแพงสูง (อ้อมเท่านั้น)
+            score = 10 
+        elseif (footHit or kneeHit) and not headHit then
+            score = 7 -- เป็นบันไดหรือของเตี้ย (ชอบทิศนี้)
+        elseif headHit then
+            score = 1 -- กำแพงสูง
         end
 
-        -- เพิ่มคะแนนตามระยะทางที่ว่าง
-        local dist = (footHit and footHit.Distance) or 8
+        local dist = (kneeHit and kneeHit.Distance) or 8
         score = score + dist
 
         if score > bestScore then
@@ -55,7 +54,7 @@ local function findBestPath(myRoot, moveDir)
     return bestDir
 end
 
--- --- UI Setup ---
+-- --- UI Setup (เหมือนเดิม) ---
 Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP"}, function(m) SelectedMode = m end)
 local drop = Section:NewDropdown("Select Player", "Target", {}, function(s) 
     SelectedPlayerName = s:match("@([^%)]+)") 
@@ -84,7 +83,6 @@ task.spawn(function()
         if SelectedMode == "Manual" then
             target = Players:FindFirstChild(SelectedPlayerName or "")
         else
-            -- [Logic หา HP สูง/ต่ำ]
             local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
             for _, p in pairs(Players:GetPlayers()) do
                 if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") then
@@ -106,6 +104,8 @@ task.spawn(function()
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
                 local dist = (myRoot.Position - tRoot.Position).Magnitude
                 local moveDir = (tRoot.Position - myRoot.Position).Unit
+                
+                -- เช็คว่าเกมนี้กระโดดได้ไหม
                 local canJump = (myHuman.JumpPower > 0 or myHuman.JumpHeight > 0)
 
                 -- เช็คการติดนิ่ง
@@ -117,29 +117,42 @@ task.spawn(function()
                 lastPos = myRoot.Position
 
                 if dist > followDistance then
-                    -- ** ระบบล็อกการตัดสินใจ (ป้องกันการส่าย) **
+                    -- ** ระบบกระโดดฉุกเฉินเมื่อติดมุม **
+                    if stuckTime > 0.4 and canJump then
+                        myHuman.Jump = true
+                    end
+
+                    -- ** ระบบล็อกการตัดสินใจ (เลี่ยงกำแพง) **
                     if detourTimer > 0 then
                         detourTimer = detourTimer - 0.1
                         if lockedDir then
                             myHuman:MoveTo(myRoot.Position + (lockedDir * 5))
-                            -- ลองกระโดดตรวจสอบทาง
+                            
+                            -- เช็คดักหน้าขณะเลี่ยง: ถ้าเจอของเตี้ยให้โดดเรื่อยๆ
+                            local obstCheck = workspace:Raycast(myRoot.Position + Vector3.new(0, -0.5, 0), lockedDir * 3, rayParams)
                             local headCheck = workspace:Raycast(myRoot.Position + Vector3.new(0, 2.5, 0), lockedDir * 3, rayParams)
-                            if canJump and not headCheck then myHuman.Jump = true end
+                            if obstCheck and not headCheck and canJump then
+                                myHuman.Jump = true
+                            end
                         end
                         continue
                     end
 
-                    -- ตรวจสอบสิ่งกีดขวางข้างหน้าตรงๆ
-                    local frontHit = workspace:Raycast(myRoot.Position, moveDir * 5, rayParams)
-                    local headHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 2.5, 0), moveDir * 5, rayParams)
+                    -- ตรวจสอบสิ่งกีดขวางข้างหน้า (ใช้ 2 ระดับ: เอว และ หัว)
+                    local midHit = workspace:Raycast(myRoot.Position + Vector3.new(0, -0.5, 0), moveDir * 4, rayParams)
+                    local headHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 2.5, 0), moveDir * 4, rayParams)
 
-                    if stuckTime > 0.3 or frontHit then
-                        -- ** เริ่มการสแกนเรดาร์ 180 องศา **
+                    if stuckTime > 0.3 or midHit then
+                        -- ถ้าเจอของขวางระดับเอว แต่หัวว่าง = บันได/กล่อง -> ให้กระโดด
+                        if midHit and not headHit and canJump then
+                            myHuman.Jump = true
+                        end
+                        
+                        -- เริ่มสแกนหาทางอ้อม
                         local best = findBestPath(myRoot, moveDir)
                         if best then
                             lockedDir = best
-                            detourTimer = 1.0 -- ล็อกทิศทางไว้ 1 วินาที
-                            if canJump and not headHit then myHuman.Jump = true end
+                            detourTimer = 1.0 
                             myHuman:MoveTo(myRoot.Position + (lockedDir * 5))
                         end
                     else
