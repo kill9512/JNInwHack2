@@ -42,41 +42,29 @@ Section:NewDropdown("Manual", "Choose how to find target", {"Manual", "Max HP", 
     SelectedMode = mode
 end)
 
--- --- แก้ไขส่วน Dropdown และ Refresh (แบบหักดิบชื่อปุ่ม) ---
+-- 2. เลือกชื่อผู้เล่น (สร้างแบบปกติ ไม่ต้องใส่ในฟังก์ชันให้งง)
+local drop = Section:NewDropdown("None (Off)", "Manual selection", UpdatePlayerTable(), function(name)
+    if name == "None (Off)" then
+        SelectedPlayer = nil
+    else
+        SelectedPlayer = name
+    end
+end)
 
-local function CreatePlayerDropdown()
-    -- สั่งสร้าง Dropdown ใหม่ (ชื่อหัวข้อจะเป็น None (Off) เสมอตอนเริ่ม)
-    drop = Section:NewDropdown("None (Off)", "Manual selection", UpdatePlayerTable(), function(name)
-        if name == "None (Off)" then
-            SelectedPlayer = nil
-        else
-            SelectedPlayer = name
-        end
-    end)
-end
-
--- สร้างครั้งแรกตอนรัน Script
-CreatePlayerDropdown()
-
--- 3. ปุ่ม Refresh แบบทำลายแล้วสร้างใหม่ (จบปัญหาชื่อค้าง)
+-- 3. ปุ่ม Refresh (แบบล้างชื่อบนปุ่มได้ 100% โดย UI ไม่พัง)
 Section:NewButton("Refresh Dropdown", "Update list & Reset selection", function()
-    -- 1. ล้างค่าในระบบ
+    -- 1. ล้างสมองบอท
     SelectedPlayer = nil 
     
-    -- 2. วนลูปหาปุ่ม Dropdown เก่าใน Section แล้วทำลายทิ้ง
-    for _, v in pairs(Section:GetContainer().container:GetChildren()) do
-        -- เช็คว่าเป็น Frame ของ Dropdown (ดูจากชื่อหรือลำดับ) 
-        -- ใน Kavo UI การสร้างใหม่ต่อท้ายจะช่วยให้ไม่บัค
-        if v:IsA("Frame") and v:FindFirstChild("Main") and v.Main:FindFirstChild("Title") then
-            if v.Main.Title.Text == (SelectedPlayer or "None (Off)") or v.Main.Title.Text == "None (Off)" then
-                v:Destroy()
-            end
-        end
-    end
-
-    -- 3. เสกอันใหม่ขึ้นมา ชื่อปุ่มจะกลับมาเป็น None (Off) แน่นอน
-    task.wait(0.05)
-    CreatePlayerDropdown()
+    -- 2. จังหวะแรก: บีบให้รายการเหลือแค่ None (Off) อันเดียว
+    -- วิธีนี้จะบังคับให้ Label บนปุ่มเด้งกลับมาเป็น None (Off) ทันที
+    drop:Refresh({"None (Off)"})
+    
+    -- 3. คั่นจังหวะนิดนึงให้ UI มันขยับ (ห้ามลบ)
+    task.wait(0.1)
+    
+    -- 4. จังหวะสอง: โหลดรายชื่อผู้เล่นปัจจุบันกลับมา
+    drop:Refresh(UpdatePlayerTable())
 end)
 
 -- 4. Toggle ระบบเลือด %
