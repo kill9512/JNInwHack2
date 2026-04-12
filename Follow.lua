@@ -20,7 +20,15 @@ local lockedDir = nil
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
--- --- ฟังก์ชันวิเคราะห์ทาง 180 องศา ---
+-- --- ฟังก์ชันสั่งกระโดดแบบบังคับ (Force Jump) ---
+local function forceJump(hum)
+    if hum.FloorMaterial ~= Enum.Material.Air then -- กระโดดเฉพาะเมื่ออยู่บนพื้น
+        hum.Jump = true
+        hum:ChangeState(Enum.HumanoidStateType.Jumping)
+    end
+end
+
+-- --- ฟังก์ชันวิเคราะห์ทาง 180 องศา (7 Rays Scan) ---
 local function findBestPath(myRoot, moveDir)
     local scanAngles = {-90, -60, -30, 0, 30, 60, 90}
     local bestDir = nil
@@ -30,20 +38,19 @@ local function findBestPath(myRoot, moveDir)
         local rotatedDir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
         local score = 0
         
-        -- เช็คความสูง 3 ระดับ
-        local footHit = workspace:Raycast(myRoot.Position + Vector3.new(0, -1.8, 0), rotatedDir * 8, rayParams) -- ระดับพื้น
-        local kneeHit = workspace:Raycast(myRoot.Position + Vector3.new(0, -0.5, 0), rotatedDir * 8, rayParams) -- ระดับเข่า
-        local headHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 2.5, 0), rotatedDir * 8, rayParams) -- ระดับหัว
+        local footHit = workspace:Raycast(myRoot.Position + Vector3.new(0, -1.5, 0), rotatedDir * 8, rayParams)
+        local kneeHit = workspace:Raycast(myRoot.Position, rotatedDir * 8, rayParams)
+        local headHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 2.5, 0), rotatedDir * 8, rayParams)
 
         if not footHit and not kneeHit then
             score = 10 
-        elseif (footHit or kneeHit) and not headHit then
-            score = 7 -- เป็นบันไดหรือของเตี้ย (ชอบทิศนี้)
-        elseif headHit then
-            score = 1 -- กำแพงสูง
+        elseif footHit and not headHit then
+            score = 7 -- คะแนนสูงสำหรับทางที่กระโดดได้
+        elseif footHit and headHit then
+            score = 1 
         end
 
-        local dist = (kneeHit and kneeHit.Distance) or 8
+        local dist = (footHit and footHit.Distance) or 8
         score = score + dist
 
         if score > bestScore then
@@ -104,11 +111,12 @@ task.spawn(function()
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
                 local dist = (myRoot.Position - tRoot.Position).Magnitude
                 local moveDir = (tRoot.Position - myRoot.Position).Unit
+                local heightDiff = tRoot.Position.Y - myRoot.Position.Y
                 
                 -- เช็คว่าเกมนี้กระโดดได้ไหม
-                local canJump = (myHuman.JumpPower > 0 or myHuman.JumpHeight > 0)
+                local canJump = myHuman.JumpPower > 0 or myHuman.JumpHeight > 0
 
-                -- เช็คการติดนิ่ง
+                -- Stuck Detection
                 if (myRoot.Position - lastPos).Magnitude < 0.4 and myHuman.MoveDirection.Magnitude > 0 then
                     stuckTime = stuckTime + 0.1
                 else
@@ -117,50 +125,39 @@ task.spawn(function()
                 lastPos = myRoot.Position
 
                 if dist > followDistance then
-                    -- ** ระบบกระโดดฉุกเฉินเมื่อติดมุม **
-                    if stuckTime > 0.4 and canJump then
-                        myHuman.Jump = true
-                    end
-
-                    -- ** ระบบล็อกการตัดสินใจ (เลี่ยงกำแพง) **
+                    -- 1. ระบบล็อกทิศทางเลี่ยง
                     if detourTimer > 0 then
                         detourTimer = detourTimer - 0.1
                         if lockedDir then
                             myHuman:MoveTo(myRoot.Position + (lockedDir * 5))
-                            
-                            -- เช็คดักหน้าขณะเลี่ยง: ถ้าเจอของเตี้ยให้โดดเรื่อยๆ
-                            local obstCheck = workspace:Raycast(myRoot.Position + Vector3.new(0, -0.5, 0), lockedDir * 3, rayParams)
-                            local headCheck = workspace:Raycast(myRoot.Position + Vector3.new(0, 2.5, 0), lockedDir * 3, rayParams)
-                            if obstCheck and not headCheck and canJump then
-                                myHuman.Jump = true
+                            -- ถ้าเป้าหมายอยู่สูงกว่า หรือติดมุม ให้กระโดด
+                            if canJump and (heightDiff > 2 or stuckTime > 0.2) then
+                                forceJump(myHuman)
                             end
                         end
                         continue
                     end
 
-                    -- ตรวจสอบสิ่งกีดขวางข้างหน้า (ใช้ 2 ระดับ: เอว และ หัว)
-                    local midHit = workspace:Raycast(myRoot.Position + Vector3.new(0, -0.5, 0), moveDir * 4, rayParams)
-                    local headHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 2.5, 0), moveDir * 4, rayParams)
+                    -- 2. วิเคราะห์สิ่งกีดขวางข้างหน้า
+                    local frontHit = workspace:Raycast(myRoot.Position, moveDir * 5, rayParams)
+                    local headHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 2.5, 0), moveDir * 5, rayParams)
 
-                    if stuckTime > 0.3 or midHit then
-                        -- ถ้าเจอของขวางระดับเอว แต่หัวว่าง = บันได/กล่อง -> ให้กระโดด
-                        if midHit and not headHit and canJump then
-                            myHuman.Jump = true
-                        end
-                        
-                        -- เริ่มสแกนหาทางอ้อม
+                    if stuckTime > 0.3 or frontHit or heightDiff > 3 then
                         local best = findBestPath(myRoot, moveDir)
                         if best then
                             lockedDir = best
-                            detourTimer = 1.0 
+                            detourTimer = 0.8 
+                            if canJump and not headHit then forceJump(myHuman) end
                             myHuman:MoveTo(myRoot.Position + (lockedDir * 5))
                         end
                     else
                         -- ทางสะดวก เดินไปหาเป้าหมาย
                         myHuman:MoveTo(tRoot.Position)
+                        -- ถ้าต้องขึ้นบันได (เป้าหมายสูงกว่า) ให้กระโดดดักหน้า
+                        if heightDiff > 1.5 and canJump then forceJump(myHuman) end
                     end
                 else
-                    -- ถึงระยะที่กำหนด
+                    -- ถึงระยะแล้ว
                     myHuman:MoveTo(myRoot.Position)
                     myRoot.CFrame = CFrame.lookAt(myRoot.Position, Vector3.new(tRoot.Position.X, myRoot.Position.Y, tRoot.Position.Z))
                 end
