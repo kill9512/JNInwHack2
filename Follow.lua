@@ -1,12 +1,11 @@
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
-local Window = Library.CreateLib("KONG GUISUS + PATH DEBUG", "DarkTheme")
+local Window = Library.CreateLib("KONG GUISUS", "DarkTheme")
 local Tab = Window:NewTab("Main")
-local Section = Tab:NewSection("Pathfinding Debugger")
+local Section = Tab:NewSection("Path Visualizer Follow")
 
 -- --- Services ---
 local Players = game.Players
 local LocalPlayer = Players.LocalPlayer
-local Terrain = workspace.Terrain
 
 -- --- Variables ---
 local SelectedMode = "Manual"
@@ -18,54 +17,106 @@ local debugEnabled = false
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
--- --- ฟังก์ชันวาดเส้น Path ---
-local function drawLine(name, startPos, endPos, color, thickness, transparency)
-    local line = Terrain:FindFirstChild(name) or Instance.new("LineHandleAdornment")
-    line.Name = name
-    line.Length = (startPos - endPos).Magnitude
-    line.Thickness = thickness or 3
-    line.Color3 = color or Color3.fromRGB(255, 255, 255)
-    line.Transparency = transparency or 0
-    line.Adornee = Terrain
-    line.CFrame = CFrame.lookAt(startPos, endPos)
-    line.AlwaysOnTop = true
-    line.Parent = Terrain
+-- --- Folder สำหรับเก็บบล็อก Debug ---
+local debugFolder = workspace:FindFirstChild("DebugPathFolder") or Instance.new("Folder", workspace)
+debugFolder.Name = "DebugPathFolder"
+
+-- --- ฟังก์ชันล้างบล็อกเก่า ---
+local function clearBlocks()
+    debugFolder:ClearAllChildren()
 end
 
-local function clearDebug()
-    for _, v in pairs(Terrain:GetChildren()) do
-        if v.Name:find("PathLine") then v:Destroy() end
+-- --- ฟังก์ชันเสกบล็อกจำลอง (Visual Block) ---
+local function createVisualBlock(pos, color)
+    if not debugEnabled then return end
+    local p = Instance.new("Part")
+    p.Size = Vector3.new(1, 1, 1)
+    p.Position = pos
+    p.Anchored = true
+    p.CanCollide = false
+    p.Transparency = 0.5
+    p.Color = color
+    p.Material = Enum.Material.Neon
+    p.Parent = debugFolder
+    return p
+end
+
+-- --- Logic ค้นหาทางเดินที่ดีที่สุดโดยการจำลองบล็อก ---
+local function calculateBestPath(myRoot, targetPos)
+    local currentPos = myRoot.Position
+    local moveDir = (targetPos - currentPos).Unit
+    local stepSize = 4 -- ระยะห่างแต่ละบล็อก
+    
+    clearBlocks() -- ล้างก่อนวาดใหม่
+
+    -- 1. ลองจำลองทางตรง
+    local isBlocked = false
+    for i = 1, 4 do -- จำลองไปข้างหน้า 4 บล็อก
+        local nextPos = currentPos + (moveDir * (i * stepSize))
+        local hit = workspace:Raycast(currentPos + (moveDir * ((i-1) * stepSize)), moveDir * stepSize, rayParams)
+        
+        if hit then
+            isBlocked = true
+            createVisualBlock(hit.Position, Color3.fromRGB(255, 0, 0)) -- บล็อกแดงเมื่อชน
+            break
+        else
+            createVisualBlock(nextPos, Color3.fromRGB(0, 255, 0)) -- บล็อกเขียวเมื่อผ่านได้
+        end
     end
+
+    -- 2. ถ้าทางตรงบล็อก ให้ลองซ้ายและขวา
+    if isBlocked then
+        local leftDir = (CFrame.Angles(0, math.rad(45), 0) * moveDir).Unit
+        local rightDir = (CFrame.Angles(0, math.rad(-45), 0) * moveDir).Unit
+        
+        -- คำนวณหา "การกระจัด" (Distance to Target) ว่าทางไหนใกล้กว่า
+        local leftPathPos = currentPos + (leftDir * stepSize)
+        local rightPathPos = currentPos + (rightDir * stepSize)
+        
+        local leftDist = (leftPathPos - targetPos).Magnitude
+        local rightDist = (rightPathPos - targetPos).Magnitude
+        
+        if leftDist < rightDist then
+            createVisualBlock(leftPathPos, Color3.fromRGB(0, 255, 255)) -- สีฟ้า = ทางเลือก
+            return leftPathPos
+        else
+            createVisualBlock(rightPathPos, Color3.fromRGB(0, 255, 255))
+            return rightPathPos
+        end
+    end
+
+    return targetPos
 end
 
 -- --- UI Setup ---
-Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP"}, function(m) SelectedMode = m end)
-local drop = Section:NewDropdown("Select Player", "User", {}, function(s) 
+Section:NewDropdown("Target Mode", "Choose Mode", {"Manual", "Max HP", "Min HP"}, function(m) SelectedMode = m end)
+local drop = Section:NewDropdown("Select Target", "User", {}, function(s) 
     SelectedPlayerName = s:match("@([^%)]+)") 
 end)
 
 local function refresh()
     local t = {"None (Off)"}
-    for _, p in pairs(Players:GetPlayers()) do if p ~= LocalPlayer then table.insert(t, p.DisplayName.." (@"..p.Name..")") end end
+    for _, p in pairs(Players:GetPlayers()) do 
+        if p ~= LocalPlayer then table.insert(t, p.DisplayName.." (@"..p.Name..")") end 
+    end
     drop:Refresh(t)
 end
 Section:NewButton("Refresh List", "Update", refresh)
 refresh()
 
-local MoveSection = Tab:NewSection("Movement & Visual")
-MoveSection:NewToggle("Enable Follow", "Start AI", function(s) followEnabled = s end)
-MoveSection:NewToggle("Debug Path (Show Lines)", "Show Scanning Logic", function(s) 
+local MoveSection = Tab:NewSection("Control & Debug")
+MoveSection:NewToggle("Enable Follow", "Start Follow Logic", function(s) followEnabled = s end)
+MoveSection:NewToggle("Show Path Blocks", "Spawn Visual Blocks", function(s) 
     debugEnabled = s 
-    if not s then clearDebug() end
+    if not s then clearBlocks() end
 end)
-MoveSection:NewSlider("Gap", "Distance", 20, 1, function(s) followDistance = s end)
+MoveSection:NewSlider("Follow Distance", "Gap", 20, 1, function(s) followDistance = s end)
 
 -- --- LOGIC CORE ---
 task.spawn(function()
-    while task.wait(0.05) do
-        if not debugEnabled and not followEnabled then continue end
+    while task.wait(0.1) do
+        if not followEnabled then continue end
         
-        -- ค้นหาเป้าหมาย
         local target = nil
         if SelectedMode == "Manual" then
             target = Players:FindFirstChild(SelectedPlayerName or "")
@@ -81,77 +132,34 @@ task.spawn(function()
             end
         end
 
-        if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
             local myChar = LocalPlayer.Character
-            local myRoot = myChar.HumanoidRootPart
-            local myHuman = myChar.Humanoid
+            local myHuman = myChar and myChar:FindFirstChild("Humanoid")
+            local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
             local tRoot = target.Character.HumanoidRootPart
             
-            rayParams.FilterDescendantsInstances = {myChar, target.Character}
-            
-            local currentPos = myRoot.Position
-            local targetPos = tRoot.Position
-            local moveVec = (targetPos - currentPos)
-            local moveDir = moveVec.Unit
-            
-            -- ** 1. แสกนเส้นทางหลัก (Primary Path) **
-            local mainRay = workspace:Raycast(currentPos, moveDir * 10, rayParams)
-            
-            if mainRay then
-                -- ติดกำแพง! วาดเส้นแดงไปจุดที่ติด
-                if debugEnabled then drawLine("PathLine_Main", currentPos, mainRay.Position, Color3.fromRGB(255, 0, 0), 5, 0) end
-                
-                -- ** 2. แสกนซ้าย-ขวาเพื่อหาทางเลี่ยง (Displacement Scan) **
-                local scanAngles = {30, -30, 60, -60}
-                local bestDetour = nil
-                local minGapToTarget = math.huge
-                
-                for i, angle in ipairs(scanAngles) do
-                    local rotDir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
-                    local scanRay = workspace:Raycast(currentPos, rotDir * 10, rayParams)
+            if myHuman and myRoot then
+                rayParams.FilterDescendantsInstances = {myChar, target.Character, debugFolder}
+                local dist = (tRoot.Position - myRoot.Position).Magnitude
+
+                if dist > followDistance then
+                    -- คำนวณทางเดินด้วยระบบบล็อกจำลอง
+                    local nextMovePoint = calculateBestPath(myRoot, tRoot.Position)
                     
-                    local endPoint = currentPos + (rotDir * 10)
-                    local color = Color3.fromRGB(0, 255, 255) -- สีฟ้าสำหรับการแสกน
+                    myHuman:MoveTo(nextMovePoint)
                     
-                    if not scanRay then
-                        -- ทางนี้ว่าง! คำนวณว่าถ้าไปทางนี้ จะห่างจากผู้เล่นเท่าไหร่
-                        local gap = (endPoint - targetPos).Magnitude
-                        if gap < minGapToTarget then
-                            minGapToTarget = gap
-                            bestDetour = rotDir
-                            color = Color3.fromRGB(0, 255, 0) -- สีเขียวคือทางที่เลือก
-                        end
-                    end
-                    if debugEnabled then drawLine("PathLine_Scan"..i, currentPos, endPoint, color, 2, 0.5) end
-                end
-                
-                -- ** 3. สั่งเดินและกระโดด **
-                if followEnabled then
-                    if bestDetour then
-                        myHuman:MoveTo(currentPos + (bestDetour * 5))
-                    else
-                        myHuman:MoveTo(currentPos - (moveDir * 5)) -- ตันถอยหลัง
-                    end
-                    
-                    -- เช็คความสูงบล็อกที่ขวางอยู่ ถ้าหัวไม่ติด -> กระโดด!
-                    local headCheck = workspace:Raycast(currentPos + Vector3.new(0, 2.5, 0), moveDir * 5, rayParams)
-                    if not headCheck and mainRay.Distance < 5 then
+                    -- เช็คกระโดด
+                    local jumpRay = workspace:Raycast(myRoot.Position, (nextMovePoint - myRoot.Position).Unit * 5, rayParams)
+                    if jumpRay and myHuman.FloorMaterial ~= Enum.Material.Air then
                         myHuman.Jump = true
                     end
-                end
-            else
-                -- ทางสะดวก!
-                if debugEnabled then 
-                    drawLine("PathLine_Main", currentPos, targetPos, Color3.fromRGB(0, 255, 0), 3, 0.5)
-                    -- ลบเส้นแสกนเก่าๆ
-                    for i=1, 4 do if Terrain:FindFirstChild("PathLine_Scan"..i) then Terrain["PathLine_Scan"..i]:Destroy() end end
-                end
-                if followEnabled and moveVec.Magnitude > followDistance then
-                    myHuman:MoveTo(targetPos)
+                else
+                    myHuman:MoveTo(myRoot.Position)
+                    clearBlocks()
                 end
             end
         else
-            clearDebug()
+            clearBlocks()
         end
     end
 end)
