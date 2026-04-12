@@ -1,18 +1,15 @@
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
 local Window = Library.CreateLib("KONG GUISUS", "DarkTheme")
-local Tab = Window:NewTab("Main")
-local Section = Tab:NewSection("Smart Follow Player")
-local PlayerTable = {}
 
 -- --- Variables ---
-local SelectedMode = "Manual" -- โหมดเริ่มต้น
-local SelectedPlayer = nil -- ชื่อผู้เล่นที่เลือกเอง
-local UsePercentage = false -- Toggle สำหรับ % HP
+local SelectedMode = "Manual"
+local SelectedPlayer = nil
+local UsePercentage = false
 local followMode = "Standard"
 local followDistance = 5
 local followEnabled = false
 
--- ฟังก์ชันหาเลือดผู้เล่น
+-- --- Functions ---
 local function getHealth(plr)
     local char = plr.Character
     if char and char:FindFirstChild("Humanoid") then
@@ -25,7 +22,6 @@ local function getHealth(plr)
     return nil
 end
 
--- ฟังก์ชันอัปเดตรายชื่อ
 local function UpdatePlayerTable()
     local tbl = {"None (Off)"}
     for _, plr in pairs(game.Players:GetPlayers()) do
@@ -36,7 +32,12 @@ local function UpdatePlayerTable()
     return tbl
 end
 
--- --- UI Elements: Section 1 ---
+-- ================= TAB 1: MAIN =================
+local Tab = Window:NewTab("Main")
+
+-- --- Section 1: Target Selection ---
+local Section = Tab:NewSection("Smart Follow Player")
+
 Section:NewDropdown("Target Mode", "Choose how to find target", {"Manual", "Max HP", "Min HP", "Off"}, function(mode)
     SelectedMode = mode
 end)
@@ -57,7 +58,8 @@ Section:NewToggle("Use % Health Logic", "If ON, check health by percentage", fun
     UsePercentage = state
 end)
 
--- --- UI Elements: Section 2 ---
+-- --- Section 2: Movement Control ---
+-- *** ต้องสร้าง Section ก่อน แล้วค่อยใส่ Slider/Dropdown นะเพื่อน ***
 local MoveSection = Tab:NewSection("Movement Control")
 
 MoveSection:NewToggle("Enable Follow", "Start moving to target", function(state)
@@ -78,7 +80,7 @@ MoveSection:NewDropdown("Movement Mode", "Choose how to move", {"Standard", "Mat
     end
 end)
 
--- --- LOGIC CORE ---
+-- ================= LOGIC CORE =================
 task.spawn(function()
     while task.wait(0.1) do
         if not followEnabled then continue end 
