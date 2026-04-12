@@ -4,7 +4,6 @@ local Tab = Window:NewTab("Main")
 local Section = Tab:NewSection("Smart Follow Player")
 
 -- --- Services ---
-local PathfindingService = game:GetService("PathfindingService")
 local Players = game.Players
 local LocalPlayer = Players.LocalPlayer
 
@@ -16,78 +15,82 @@ local followEnabled = false
 
 local lastPos = Vector3.new(0,0,0)
 local stuckTime = 0
-
--- --- Raycast Settings ---
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
-rayParams.IgnoreWater = true
 
--- --- ฟังก์ชันแสกนหาทางเดินอ้อม (ปรับให้กว้างขึ้น) ---
-local function getScanDirection(myRoot, moveDir)
-    local scanAngles = {45, -45, 90, -90, 135, -135} 
-    for _, angle in ipairs(scanAngles) do
-        local rotatedDir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
-        local scanRay = workspace:Raycast(myRoot.Position, rotatedDir * 8, rayParams)
-        if not scanRay then return rotatedDir end
+-- --- ฟังก์ชันวิเคราะห์ทางเดิน (Smart Side Scan) ---
+local function getBestEscapeDir(myRoot, moveDir)
+    -- ยิง Ray 2 เส้นเพื่อเปรียบเทียบ ซ้าย 45 และ ขวา 45 องศา
+    local leftDir = (CFrame.Angles(0, math.rad(45), 0) * moveDir).Unit
+    local rightDir = (CFrame.Angles(0, math.rad(-45), 0) * moveDir).Unit
+    
+    local leftHit = workspace:Raycast(myRoot.Position, leftDir * 7, rayParams)
+    local rightHit = workspace:Raycast(myRoot.Position, rightDir * 7, rayParams)
+    
+    -- ถ้าฝั่งไหนว่างให้ไปฝั่งนั้น
+    if not leftHit then return leftDir end
+    if not rightHit then return rightDir end
+    
+    -- ถ้าติดทั้งคู่ ให้ดูว่าอันไหน "ไกลกว่า" (มีพื้นที่มากกว่า)
+    if (leftHit.Distance > rightHit.Distance) then
+        return leftDir
+    else
+        return rightDir
     end
-    return nil
 end
 
--- --- UI Elements ---
-Section:NewDropdown("Target Mode", "Choose target", {"Manual", "Max HP", "Min HP"}, function(mode) SelectedMode = mode end)
-
-local drop = Section:NewDropdown("Select Player", "Selection", (function()
-    local t = {"None (Off)"}
-    for _, p in pairs(Players:GetPlayers()) do if p ~= LocalPlayer then table.insert(t, p.DisplayName .. " (@" .. p.Name .. ")") end end
-    return t
-end)(), function(selection)
-    if selection == "None (Off)" then SelectedPlayerName = nil
-    else SelectedPlayerName = selection:match("@([^%)]+)") end
+-- --- UI Elements (เหมือนเดิมแต่ปรับแก้ Dropdown เล็กน้อย) ---
+Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP"}, function(m) SelectedMode = m end)
+local drop = Section:NewDropdown("Select Player", "Select", {}, function(s) 
+    SelectedPlayerName = s:match("@([^%)]+)") 
 end)
 
-Section:NewButton("Refresh Players", "Update list", function() drop:Refresh((function()
+local function refresh()
     local t = {"None (Off)"}
-    for _, p in pairs(Players:GetPlayers()) do if p ~= LocalPlayer then table.insert(t, p.DisplayName .. " (@" .. p.Name .. ")") end end
-    return t
-end)()) end)
+    for _, p in pairs(Players:GetPlayers()) do if p ~= LocalPlayer then table.insert(t, p.DisplayName.." (@"..p.Name..")") end end
+    drop:Refresh(t)
+end
+Section:NewButton("Refresh Players", "Update", refresh)
+refresh()
 
 local MoveSection = Tab:NewSection("Movement Control")
-MoveSection:NewToggle("Enable Follow", "Start following", function(state) followEnabled = state end)
-MoveSection:NewSlider("Follow Distance", "Distance", 20, 1, function(s) followDistance = s end)
+MoveSection:NewToggle("Enable Follow", "Start", function(state) followEnabled = state end)
+MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
 
 -- --- LOGIC CORE ---
 task.spawn(function()
     while task.wait(0.1) do
         if not followEnabled then continue end
         
-        local finalTarget = nil
+        local target = nil
         if SelectedMode == "Manual" then
-            if SelectedPlayerName then finalTarget = Players:FindFirstChild(SelectedPlayerName) end
+            target = Players:FindFirstChild(SelectedPlayerName or "")
         else
-            -- Logic หา Max/Min HP (ย่อเพื่อความกระชับ)
+            -- [Logic หา HP สูง/ต่ำ เหมือนเดิม]
             local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
             for _, p in pairs(Players:GetPlayers()) do
                 if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") then
                     local hp = p.Character.Humanoid.Health
                     if (SelectedMode == "Max HP" and hp > bestHP) or (SelectedMode == "Min HP" and hp < bestHP) then
-                        bestHP = hp; finalTarget = p
+                        bestHP = hp; target = p
                     end
                 end
             end
         end
 
-        if finalTarget and finalTarget.Character and finalTarget.Character:FindFirstChild("HumanoidRootPart") then
+        if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
             local myChar = LocalPlayer.Character
             local myHuman = myChar and myChar:FindFirstChild("Humanoid")
             local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-            local tRoot = finalTarget.Character.HumanoidRootPart
+            local tRoot = target.Character.HumanoidRootPart
             
             if myHuman and myRoot then
-                rayParams.FilterDescendantsInstances = {myChar, finalTarget.Character}
+                rayParams.FilterDescendantsInstances = {myChar, target.Character}
                 local dist = (myRoot.Position - tRoot.Position).Magnitude
-                
-                -- ตรวจสอบว่าติดมุมหรือไม่ (Stuck Detection)
-                if (myRoot.Position - lastPos).Magnitude < 0.5 and myHuman.MoveDirection.Magnitude > 0 then
+                local moveDir = (tRoot.Position - myRoot.Position).Unit
+
+                -- ตรวจจับการติด (Stuck Detection)
+                if (myRoot.Position - lastPos).Magnitude < 0.3 and myHuman.MoveDirection.Magnitude > 0 then
                     stuckTime = stuckTime + 0.1
                 else
                     stuckTime = 0
@@ -95,38 +98,34 @@ task.spawn(function()
                 lastPos = myRoot.Position
 
                 if dist > followDistance then
-                    local moveDir = (tRoot.Position - myRoot.Position).Unit
-                    
-                    -- โหมดแก้ปัญหาเมื่อติด (Stuck Recovery)
-                    if stuckTime > 0.5 then
+                    -- 1. ถ้าติด (Stuck) ให้ "พุ่งตัวและกระโดด" (Panic Mode)
+                    if stuckTime > 0.4 then
                         myHuman.Jump = true
-                        local escapeDir = getScanDirection(myRoot, moveDir) or -moveDir
-                        myHuman:MoveTo(myRoot.Position + (escapeDir * 10))
-                        task.wait(0.3) -- ให้เวลามันขยับออกจากมุม
+                        local escape = getBestEscapeDir(myRoot, moveDir) or -moveDir
+                        myHuman:MoveTo(myRoot.Position + (escape * 8)) -- พุ่งไปทิศที่ว่าง
+                        task.wait(0.2) -- บังคับให้พุ่งออกไปก่อน
                         stuckTime = 0
                         continue
                     end
 
-                    -- เช็คสิ่งกีดขวางระดับเอวและหัว
-                    local lowRay = workspace:Raycast(myRoot.Position + Vector3.new(0,-1,0), moveDir * 6, rayParams)
-                    local highRay = workspace:Raycast(myRoot.Position + Vector3.new(0,1.5,0), moveDir * 6, rayParams)
+                    -- 2. ยิง Ray เช็คระดับต่างๆ
+                    local lowHit = workspace:Raycast(myRoot.Position + Vector3.new(0, -1, 0), moveDir * 5, rayParams)
+                    local midHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 1, 0), moveDir * 5, rayParams)
+                    local highHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 3, 0), moveDir * 5, rayParams)
 
-                    if lowRay then
-                        -- เจอของขวาง
-                        if not highRay then
-                            myHuman.Jump = true -- ของเตี้ยโดดข้าม
+                    if lowHit then
+                        -- ถ้าเจอของขวางเตี้ยๆ ให้กระโดดอัดเข้าไปเลย
+                        if not highHit then
+                            myHuman.Jump = true
                         end
                         
-                        -- หาทางเบี่ยง
-                        local detour = getScanDirection(myRoot, moveDir)
-                        if detour then
-                            myHuman:MoveTo(myRoot.Position + (detour * 7))
-                        else
-                            myHuman.Jump = true
-                            myHuman:MoveTo(myRoot.Position - (moveDir * 5)) -- ตันถอยหลัง
+                        -- หาทางเบี่ยงที่ฉลาดขึ้น
+                        local bestDir = getBestEscapeDir(myRoot, moveDir)
+                        if bestDir then
+                            myHuman:MoveTo(myRoot.Position + (bestDir * 6))
                         end
                     else
-                        -- ทางสะดวก เดินไปหาเป้าหมาย
+                        -- ทางสะดวก เดินไปหาเป้าหมายปกติ
                         myHuman:MoveTo(tRoot.Position - (moveDir * followDistance))
                     end
                 else
