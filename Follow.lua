@@ -42,7 +42,7 @@ Section:NewDropdown("Manual", "Choose how to find target", {"Manual", "Max HP", 
     SelectedMode = mode
 end)
 
--- 2. เลือกชื่อผู้เล่น (เริ่มมาเป็น None (Off))
+-- 2. เลือกชื่อผู้เล่น (ตั้งชื่อหัวข้อเป็น None (Off) ไปเลยตามที่ตกลงกัน)
 local drop = Section:NewDropdown("None (Off)", "Manual selection", UpdatePlayerTable(), function(name)
     if name == "None (Off)" then
         SelectedPlayer = nil
@@ -51,19 +51,12 @@ local drop = Section:NewDropdown("None (Off)", "Manual selection", UpdatePlayerT
     end
 end)
 
--- 3. ปุ่ม Refresh (ท่าแก้เผ็ด Kavo ให้ชื่อกลับเป็น None)
-Section:NewButton("Refresh Dropdown", "Update list & Reset selection", function()
-    SelectedPlayer = nil -- ล้างค่า Logic บอทหยุดเดินทันที
-    
-    -- ขั้นตอนที่ 1: บีบให้ปุ่มโชว์ None (Off) โดยการส่งลิสต์ที่มีแค่ค่าเดียวไป
-    drop:Refresh({"None (Off)"}) 
-    
-    -- ขั้นตอนที่ 2: รอให้ UI มันรับรู้ (แป๊บเดียว)
-    task.wait(0.01)
-    
-    -- ขั้นตอนที่ 3: โหลดรายชื่อผู้เล่นจริงๆ กลับมา
-    -- ชื่อบนปุ่มมันจะ "ค้าง" อยู่ที่ None (Off) เพราะมันเป็นค่าแรกที่มันจำได้ตอน Refresh ครั้งล่าสุด
-    drop:Refresh(UpdatePlayerTable())
+-- 3. ปุ่ม Refresh (แก้แบบที่มึงต้องการ แต่ทำให้ Logic มันสะอาดขึ้น)
+Section:NewButton("Refresh Dropdown", "Update list & Clear selection", function()
+    -- ดึงลิสต์ใหม่จากฟังก์ชัน (ที่มี None และไม่มีชื่อเรา)
+    local newList = UpdatePlayerTable()
+    drop:Refresh(newList)
+    SelectedPlayer = nil 
 end)
 
 -- 4. Toggle ระบบเลือด %
