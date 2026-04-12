@@ -4,58 +4,68 @@ local Tab = Window:NewTab("Main")
 local Section = Tab:NewSection("Smart Follow Player")
 
 -- --- Services ---
+local PathfindingService = game:GetService("PathfindingService")
 local Players = game.Players
 local LocalPlayer = Players.LocalPlayer
 
 -- --- Variables ---
 local SelectedMode = "Manual"
 local SelectedPlayerName = nil
+local UsePercentage = false
 local followDistance = 5
 local followEnabled = false
 
-local lastPos = Vector3.new(0,0,0)
-local stuckTime = 0
+-- --- Raycast Settings ---
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
+rayParams.IgnoreWater = true
 
--- --- ฟังก์ชันวิเคราะห์ทางเดิน (Smart Side Scan) ---
-local function getBestEscapeDir(myRoot, moveDir)
-    -- ยิง Ray 2 เส้นเพื่อเปรียบเทียบ ซ้าย 45 และ ขวา 45 องศา
-    local leftDir = (CFrame.Angles(0, math.rad(45), 0) * moveDir).Unit
-    local rightDir = (CFrame.Angles(0, math.rad(-45), 0) * moveDir).Unit
-    
-    local leftHit = workspace:Raycast(myRoot.Position, leftDir * 7, rayParams)
-    local rightHit = workspace:Raycast(myRoot.Position, rightDir * 7, rayParams)
-    
-    -- ถ้าฝั่งไหนว่างให้ไปฝั่งนั้น
-    if not leftHit then return leftDir end
-    if not rightHit then return rightDir end
-    
-    -- ถ้าติดทั้งคู่ ให้ดูว่าอันไหน "ไกลกว่า" (มีพื้นที่มากกว่า)
-    if (leftHit.Distance > rightHit.Distance) then
-        return leftDir
-    else
-        return rightDir
+-- --- ฟังก์ชันเสริม ---
+
+local function UpdatePlayerTable()
+    local tbl = {"None (Off)"}
+    for _, plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            table.insert(tbl, plr.DisplayName .. " (@" .. plr.Name .. ")")
+        end
     end
+    return tbl
 end
 
--- --- UI Elements (เหมือนเดิมแต่ปรับแก้ Dropdown เล็กน้อย) ---
-Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP"}, function(m) SelectedMode = m end)
-local drop = Section:NewDropdown("Select Player", "Select", {}, function(s) 
-    SelectedPlayerName = s:match("@([^%)]+)") 
+-- เช็คว่ามองเห็นเป้าหมายหรือไม่
+local function canSeeTarget(myRoot, targetRoot)
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character, targetRoot.Parent}
+    local direction = (targetRoot.Position - myRoot.Position)
+    local result = workspace:Raycast(myRoot.Position, direction, rayParams)
+    return result == nil
+end
+
+-- --- UI Elements ---
+Section:NewDropdown("Target Mode", "Choose how to find target", {"Manual", "Max HP", "Min HP"}, function(mode)
+    SelectedMode = mode
 end)
 
-local function refresh()
-    local t = {"None (Off)"}
-    for _, p in pairs(Players:GetPlayers()) do if p ~= LocalPlayer then table.insert(t, p.DisplayName.." (@"..p.Name..")") end end
-    drop:Refresh(t)
-end
-Section:NewButton("Refresh Players", "Update", refresh)
-refresh()
+local drop = Section:NewDropdown("Select Player", "Manual selection", UpdatePlayerTable(), function(selection)
+    if selection == "None (Off)" then SelectedPlayerName = nil
+    else SelectedPlayerName = selection:match("@([^%)]+)") end
+end)
+
+Section:NewButton("Refresh Players", "Update manual list", function()
+    drop:Refresh(UpdatePlayerTable())
+end)
+
+Section:NewToggle("Use % Health Logic", "Check health by percentage", function(state)
+    UsePercentage = state
+end)
 
 local MoveSection = Tab:NewSection("Movement Control")
-MoveSection:NewToggle("Enable Follow", "Start", function(state) followEnabled = state end)
-MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
+MoveSection:NewToggle("Enable Follow", "Start moving to target", function(state)
+    followEnabled = state
+end)
+
+MoveSection:NewSlider("Follow Distance", "Distance from target", 20, 1, function(s)
+    followDistance = s
+end)
 
 -- --- ฟังก์ชันเช็คว่าเกมนี้กระโดดได้ไหม ---
 local function canGameJump(humanoid)
