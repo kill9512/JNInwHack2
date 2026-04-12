@@ -1,7 +1,7 @@
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
 local Window = Library.CreateLib("KONG GUISUS", "DarkTheme")
 local Tab = Window:NewTab("Main")
-local Section = Tab:NewSection("Path Visualizer Follow")
+local Section = Tab:NewSection("Architect Path Follower")
 
 -- --- Services ---
 local Players = game.Players
@@ -14,82 +14,90 @@ local followDistance = 5
 local followEnabled = false
 local debugEnabled = false
 
+local currentWaypoint = nil -- จุดหมายชั่วคราวเพื่ออ้อมกำแพง
+local maxJumpHeight = 7 -- ความสูงที่กระโดดพ้น (ปรับตามเกม)
+
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
--- --- Folder สำหรับเก็บบล็อก Debug ---
-local debugFolder = workspace:FindFirstChild("DebugPathFolder") or Instance.new("Folder", workspace)
-debugFolder.Name = "DebugPathFolder"
+local debugFolder = workspace:FindFirstChild("ArchitectDebug") or Instance.new("Folder", workspace)
+debugFolder.Name = "ArchitectDebug"
 
--- --- ฟังก์ชันล้างบล็อกเก่า ---
-local function clearBlocks()
+-- --- Utility Functions ---
+local function clearDebug()
     debugFolder:ClearAllChildren()
 end
 
--- --- ฟังก์ชันเสกบล็อกจำลอง (Visual Block) ---
-local function createVisualBlock(pos, color)
+local function createPoint(pos, color)
     if not debugEnabled then return end
     local p = Instance.new("Part")
-    p.Size = Vector3.new(1, 1, 1)
+    p.Shape = Enum.PartType.Ball
+    p.Size = Vector3.new(1.2, 1.2, 1.2)
     p.Position = pos
     p.Anchored = true
     p.CanCollide = false
-    p.Transparency = 0.5
     p.Color = color
+    p.Transparency = 0.4
     p.Material = Enum.Material.Neon
     p.Parent = debugFolder
-    return p
 end
 
--- --- Logic ค้นหาทางเดินที่ดีที่สุดโดยการจำลองบล็อก ---
-local function calculateBestPath(myRoot, targetPos)
-    local currentPos = myRoot.Position
-    local moveDir = (targetPos - currentPos).Unit
-    local stepSize = 4 -- ระยะห่างแต่ละบล็อก
+-- --- Logic: วิเคราะห์สิ่งกีดขวางและความสูง ---
+local function analyzePath(myRoot, targetPos)
+    local startPos = myRoot.Position
+    local moveVec = (targetPos - startPos)
+    local moveDir = moveVec.Unit
     
-    clearBlocks() -- ล้างก่อนวาดใหม่
+    clearDebug()
 
-    -- 1. ลองจำลองทางตรง
-    local isBlocked = false
-    for i = 1, 4 do -- จำลองไปข้างหน้า 4 บล็อก
-        local nextPos = currentPos + (moveDir * (i * stepSize))
-        local hit = workspace:Raycast(currentPos + (moveDir * ((i-1) * stepSize)), moveDir * stepSize, rayParams)
-        
-        if hit then
-            isBlocked = true
-            createVisualBlock(hit.Position, Color3.fromRGB(255, 0, 0)) -- บล็อกแดงเมื่อชน
-            break
+    -- 1. ยิง Ray เช็คทางตรง
+    local mainRay = workspace:Raycast(startPos, moveDir * 15, rayParams)
+    
+    if mainRay then
+        -- ตรวจสอบความสูงตรงจุดที่ชน
+        local hitPos = mainRay.Position
+        createPoint(hitPos, Color3.fromRGB(255, 0, 0)) -- จุดสีแดง = ชนกำแพง
+
+        -- ยิง Ray ด้านบนเพื่อเช็คว่ากระโดดพ้นไหม
+        local topRay = workspace:Raycast(hitPos + Vector3.new(0, maxJumpHeight, 0), moveDir * 2, rayParams)
+        local isJumpable = (not topRay)
+
+        if isJumpable then
+            -- ถ้ากระโดดพ้น ให้สร้างจุด Waypoint เหนือหัวกำแพง
+            return hitPos + Vector3.new(0, maxJumpHeight + 2, 0), true
         else
-            createVisualBlock(nextPos, Color3.fromRGB(0, 255, 0)) -- บล็อกเขียวเมื่อผ่านได้
+            -- ถ้ากระโดดไม่พ้น ให้สแกนหา "ทางเลี่ยงซ้าย/ขวา"
+            local scanAngles = {30, -30, 60, -60, 90, -90}
+            local bestEscape = nil
+            local minOffset = math.huge
+
+            for _, angle in ipairs(scanAngles) do
+                local scanDir = (CFrame.Angles(0, math.rad(angle), 0) * moveDir).Unit
+                local scanRay = workspace:Raycast(startPos, scanDir * 15, rayParams)
+
+                if not scanRay then
+                    -- พบทางว่าง! คำนวณจุดอ้อมที่ใกล้เป้าหมายที่สุด
+                    local testPos = startPos + (scanDir * 12)
+                    local distToTarget = (testPos - targetPos).Magnitude
+                    if distToTarget < minOffset then
+                        minOffset = distToTarget
+                        bestEscape = testPos
+                    end
+                end
+            end
+            
+            if bestEscape then
+                createPoint(bestEscape, Color3.fromRGB(0, 255, 255)) -- จุดสีฟ้า = ทางเบี่ยง
+                return bestEscape, false
+            end
         end
     end
 
-    -- 2. ถ้าทางตรงบล็อก ให้ลองซ้ายและขวา
-    if isBlocked then
-        local leftDir = (CFrame.Angles(0, math.rad(45), 0) * moveDir).Unit
-        local rightDir = (CFrame.Angles(0, math.rad(-45), 0) * moveDir).Unit
-        
-        -- คำนวณหา "การกระจัด" (Distance to Target) ว่าทางไหนใกล้กว่า
-        local leftPathPos = currentPos + (leftDir * stepSize)
-        local rightPathPos = currentPos + (rightDir * stepSize)
-        
-        local leftDist = (leftPathPos - targetPos).Magnitude
-        local rightDist = (rightPathPos - targetPos).Magnitude
-        
-        if leftDist < rightDist then
-            createVisualBlock(leftPathPos, Color3.fromRGB(0, 255, 255)) -- สีฟ้า = ทางเลือก
-            return leftPathPos
-        else
-            createVisualBlock(rightPathPos, Color3.fromRGB(0, 255, 255))
-            return rightPathPos
-        end
-    end
-
-    return targetPos
+    return targetPos, false
 end
 
 -- --- UI Setup ---
-Section:NewDropdown("Target Mode", "Choose Mode", {"Manual", "Max HP", "Min HP"}, function(m) SelectedMode = m end)
+Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP"}, function(m) SelectedMode = m end)
 local drop = Section:NewDropdown("Select Target", "User", {}, function(s) 
     SelectedPlayerName = s:match("@([^%)]+)") 
 end)
@@ -104,12 +112,9 @@ end
 Section:NewButton("Refresh List", "Update", refresh)
 refresh()
 
-local MoveSection = Tab:NewSection("Control & Debug")
-MoveSection:NewToggle("Enable Follow", "Start Follow Logic", function(s) followEnabled = s end)
-MoveSection:NewToggle("Show Path Blocks", "Spawn Visual Blocks", function(s) 
-    debugEnabled = s 
-    if not s then clearBlocks() end
-end)
+local MoveSection = Tab:NewSection("Movement Control")
+MoveSection:NewToggle("Enable Follow", "Start AI", function(s) followEnabled = s end)
+MoveSection:NewToggle("Debug Mode", "Visual Path Points", function(s) debugEnabled = s if not s then clearDebug() end end)
 MoveSection:NewSlider("Follow Distance", "Gap", 20, 1, function(s) followDistance = s end)
 
 -- --- LOGIC CORE ---
@@ -118,20 +123,9 @@ task.spawn(function()
         if not followEnabled then continue end
         
         local target = nil
-        if SelectedMode == "Manual" then
-            target = Players:FindFirstChild(SelectedPlayerName or "")
-        else
-            local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
-            for _, p in pairs(Players:GetPlayers()) do
-                if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") then
-                    local hp = p.Character.Humanoid.Health
-                    if (SelectedMode == "Max HP" and hp > bestHP) or (SelectedMode == "Min HP" and hp < bestHP) then
-                        bestHP = hp; target = p
-                    end
-                end
-            end
-        end
-
+        -- [ค้นหาเป้าหมายคงเดิม]
+        if SelectedMode == "Manual" then target = Players:FindFirstChild(SelectedPlayerName or "") end
+        
         if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
             local myChar = LocalPlayer.Character
             local myHuman = myChar and myChar:FindFirstChild("Humanoid")
@@ -143,23 +137,24 @@ task.spawn(function()
                 local dist = (tRoot.Position - myRoot.Position).Magnitude
 
                 if dist > followDistance then
-                    -- คำนวณทางเดินด้วยระบบบล็อกจำลอง
-                    local nextMovePoint = calculateBestPath(myRoot, tRoot.Position)
-                    
-                    myHuman:MoveTo(nextMovePoint)
-                    
-                    -- เช็คกระโดด
-                    local jumpRay = workspace:Raycast(myRoot.Position, (nextMovePoint - myRoot.Position).Unit * 5, rayParams)
-                    if jumpRay and myHuman.FloorMaterial ~= Enum.Material.Air then
-                        myHuman.Jump = true
+                    -- ถ้ายันไม่มี Waypoint ชั่วคราว หรือถึง Waypoint เดิมแล้ว ให้คำนวณใหม่
+                    if not currentWaypoint or (myRoot.Position - currentWaypoint).Magnitude < 3 then
+                        local nextPoint, shouldJump = analyzePath(myRoot, tRoot.Position)
+                        currentWaypoint = nextPoint
+                        
+                        if shouldJump then
+                            myHuman.Jump = true
+                        end
                     end
+                    
+                    -- เดินไปหาจุดที่คำนวณได้
+                    myHuman:MoveTo(currentWaypoint)
                 else
                     myHuman:MoveTo(myRoot.Position)
-                    clearBlocks()
+                    currentWaypoint = nil
+                    clearDebug()
                 end
             end
-        else
-            clearBlocks()
         end
     end
 end)
