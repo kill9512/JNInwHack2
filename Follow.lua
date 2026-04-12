@@ -42,22 +42,44 @@ Section:NewDropdown("Manual", "Choose how to find target", {"Manual", "Max HP", 
     SelectedMode = mode
 end)
 
--- 2. เลือกชื่อผู้เล่น (ตั้งชื่อหัวข้อเป็น None (Off) ไปเลยตามที่ตกลงกัน)
-local drop = Section:NewDropdown("None (Off)", "Manual selection", UpdatePlayerTable(), function(name)
-    if name == "None (Off)" then
-        SelectedPlayer = nil
-    else
-        SelectedPlayer = name
-    end
-end)
+-- --- ตัวแปรหลัก ---
+local dropSection = Tab:NewSection("Player Selection") -- แยก Section ออกมาเพื่อล้างได้ง่ายๆ
+local drop -- ไว้เก็บตัว Dropdown
 
--- 3. ปุ่ม Refresh (แก้แบบที่มึงต้องการ แต่ทำให้ Logic มันสะอาดขึ้น)
-Section:NewButton("Refresh Dropdown", "Update list & Clear selection", function()
-    -- ดึงลิสต์ใหม่จากฟังก์ชัน (ที่มี None และไม่มีชื่อเรา)
-    local newList = UpdatePlayerTable()
-    drop:Refresh(newList)
-    SelectedPlayer = nil 
-end)
+-- ฟังก์ชันสำหรับสร้าง Dropdown ใหม่ทุกครั้งที่ต้องการ Reset
+local function RenderDropdown()
+    -- ล้าง Dropdown เก่าในระบบ (ถ้ามี)
+    if drop then
+        -- ใน Kavo การสร้างทับใน Section เดิมอาจจะทำให้ UI ซ้อน 
+        -- แต่เราจะใช้การ Refresh ค่าเริ่มต้นแทนถ้าไม่อยากให้ UI กระโดด
+    end
+
+    drop = dropSection:NewDropdown("None (Off)", "Manual selection", UpdatePlayerTable(), function(name)
+        if name == "None (Off)" then
+            SelectedPlayer = nil
+        else
+            SelectedPlayer = name
+        end
+    end)
+end
+
+-- รันครั้งแรก
+RenderDropdown()
+
+-- 3. ปุ่ม Refresh (แบบหักดิบให้ชื่อกลับมาเป็น None)
+Section:NewButton("Refresh Dropdown", "Update list & Clear Label", function()
+    SelectedPlayer = nil -- ล้างค่า Logic
+    
+    -- ไม้ตาย: สั่ง Clear แล้ว Refresh ด้วยตารางที่มีแค่ "None (Off)" ก่อน
+    -- เพื่อบีบให้ UI มันกลับมาที่ค่าแรก
+    drop:Refresh({"None (Off)"}) 
+    
+    task.wait(0.1) -- รอ UI หายเอ๋อแป๊บนึง
+    
+    -- แล้วค่อยโหลดรายชื่อผู้เล่นจริงๆ กลับมา
+    drop:Refresh(UpdatePlayerTable())
+    
+end end)
 
 -- 4. Toggle ระบบเลือด %
 Section:NewToggle("Use % Health Logic", "If ON, check health by percentage", function(state)
