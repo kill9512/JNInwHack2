@@ -22,6 +22,9 @@ local currentWaypoints = {}
 local currentWaypointIndex = 1
 local lastTargetPos = Vector3.new()
 
+local stuckTimer = 0
+local lastPosForStuck = Vector3.new()
+
 -- --- ฟังก์ชันวาดเส้น Debug ---
 local function updateDebugLine(name, startPos, endPos, color)
     local terrain = workspace.Terrain
@@ -49,13 +52,11 @@ end
 
 -- --- ฟังก์ชันวาดจุด Waypoints ---
 local function drawWaypoints(waypoints)
-    -- ลบของเก่า
     for _, v in pairs(workspace.Terrain:GetChildren()) do
         if v.Name == "WP_Debug" then v:Destroy() end
     end
     if not debugEnabled or not waypoints then return end
 
-    -- วาดจุดใหม่
     for i, wp in ipairs(waypoints) do
         local p = Instance.new("Part")
         p.Name = "WP_Debug"
@@ -63,6 +64,7 @@ local function drawWaypoints(waypoints)
         p.Position = wp.Position
         p.Anchored = true
         p.CanCollide = false
+        p.CanQuery = false -- สำคัญมาก: ป้องกันไม่ให้เลเซอร์ยิงไปติดบล็อกตัวเอง
         p.Material = Enum.Material.Neon
         p.Color = Color3.fromRGB(0, 150, 255)
         p.Parent = workspace.Terrain
@@ -134,26 +136,32 @@ task.spawn(function()
                 local distToTarget = (targetPos - currentPos).Magnitude
                 local moveDir = (targetPos - currentPos).Unit
 
+                -- ตรวจจับการติดนิ่ง (Stuck Detection)
+                if (currentPos - lastPosForStuck).Magnitude < 0.2 and myHuman.MoveDirection.Magnitude > 0 then
+                    stuckTimer = stuckTimer + 0.1
+                else
+                    stuckTimer = 0
+                end
+                lastPosForStuck = currentPos
+
                 if distToTarget > followDistance then
-                    -- ** 1. ลองยิง Ray ตรงดิ่งไปหาเป้าหมายเลย (Line of Sight) **
+                    -- ** 1. ยิง Ray ตรงดิ่งหาเป้าหมาย **
                     local directRay = workspace:Raycast(currentPos, moveDir * distToTarget, rayParams)
 
                     if not directRay then
-                        -- ** ลุยเลย! ทางโล่งยันตัวเป้าหมาย (ไม่มีอะไรบัง) **
-                        currentWaypoints = {} -- ล้าง Path เก่าทิ้ง
+                        -- ** ทางโล่ง **
+                        currentWaypoints = {} 
                         drawWaypoints(nil)
-                        updateDebugLine("DirectTrace", currentPos, targetPos, Color3.fromRGB(0, 255, 0)) -- เส้นเขียว
+                        updateDebugLine("DirectTrace", currentPos, targetPos, Color3.fromRGB(0, 255, 0))
                         
                         myHuman:MoveTo(targetPos)
                         
-                        -- เช็คกระโดดเผื่อเจอบันไดเตี้ยๆ
                         local footRay = workspace:Raycast(currentPos + Vector3.new(0,-1.5,0), moveDir * 4, rayParams)
                         if footRay and myHuman.FloorMaterial ~= Enum.Material.Air then forceJump(myHuman) end
                     else
-                        -- ** มีสิ่งกีดขวางบังอยู่! เราจะ Pre-calculate Path **
-                        updateDebugLine("DirectTrace", currentPos, directRay.Position, Color3.fromRGB(255, 0, 0)) -- เส้นแดง
+                        -- ** ติดสิ่งกีดขวาง (Pre-calculate Path) **
+                        updateDebugLine("DirectTrace", currentPos, directRay.Position, Color3.fromRGB(255, 0, 0))
                         
-                        -- คำนวณทางใหม่เฉพาะตอนที่เป้าหมายขยับไปไกล หรือยังไม่มี Path
                         if #currentWaypoints == 0 or (targetPos - lastTargetPos).Magnitude > 5 then
                             local path = PathfindingService:CreatePath({
                                 AgentRadius = 2,
@@ -168,22 +176,28 @@ task.spawn(function()
                             
                             if success and path.Status == Enum.PathStatus.Success then
                                 currentWaypoints = path:GetWaypoints()
-                                currentWaypointIndex = 2 -- เริ่มเดินไปจุดที่ 2 (จุดแรกคือที่ยืนอยู่)
+                                currentWaypointIndex = 2 
                                 lastTargetPos = targetPos
                                 drawWaypoints(currentWaypoints)
                             end
                         end
 
-                        -- ** เดินตามพิกัดที่คำนวณไว้ล่วงหน้า (Waypoints) **
                         if currentWaypoints and currentWaypointIndex <= #currentWaypoints then
                             local wp = currentWaypoints[currentWaypointIndex]
                             
-                            -- ถ้าถึงจุด Waypoint แล้ว ให้ขยับไปจุดต่อไป
-                            if (currentPos - wp.Position).Magnitude < 3 then
+                            -- ** [แก้ไขแล้ว] ตรวจสอบระยะทางแบบ 2D (ละทิ้งแกน Y) **
+                            local posXZ = Vector3.new(currentPos.X, 0, currentPos.Z)
+                            local wpXZ = Vector3.new(wp.Position.X, 0, wp.Position.Z)
+                            
+                            -- ถ้าระยะราบถึงแล้ว หรือติดแหงกอยู่ที่เดิมเกิน 1 วินาที ให้ข้ามไปจุดต่อไปเลย
+                            if (posXZ - wpXZ).Magnitude < 3 or stuckTimer > 1 then
                                 currentWaypointIndex = currentWaypointIndex + 1
+                                if stuckTimer > 1 then 
+                                    forceJump(myHuman) -- โดดสะบัดถ้าติด
+                                    stuckTimer = 0 
+                                end
                             end
                             
-                            -- สั่งเดินและกระโดดตามที่คำนวณไว้
                             if wp then
                                 myHuman:MoveTo(wp.Position)
                                 if wp.Action == Enum.PathWaypointAction.Jump then
@@ -193,7 +207,6 @@ task.spawn(function()
                         end
                     end
                 else
-                    -- ถึงระยะแล้ว
                     myHuman:MoveTo(currentPos)
                     updateDebugLine("DirectTrace", currentPos, currentPos, Color3.fromRGB(0,0,0))
                 end
