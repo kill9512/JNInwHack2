@@ -1,7 +1,7 @@
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
-local Window = Library.CreateLib("KONG GUISUS - STRATEGIST", "DarkTheme")
+local Window = Library.CreateLib("KONG GUISUS - COMMITMENT", "DarkTheme")
 local Tab = Window:NewTab("Main")
-local Section = Tab:NewSection("Tactical Navigation (Plan in Plan)")
+local Section = Tab:NewSection("Deep Pathing & Decision Lock")
 
 -- --- Services ---
 local Players = game.Players
@@ -17,7 +17,7 @@ local debugEnabled = false
 
 local currentWaypoints = {}
 local currentWaypointIndex = 1
-local lastComputeTime = 0
+local commitmentPoint = nil -- จุดที่บอทสัญญาว่าจะเดินไปให้ถึง
 local lastTargetPos = Vector3.new()
 
 local rayParams = RaycastParams.new()
@@ -30,13 +30,12 @@ local function updateDebug(name, startPos, endPos, color)
         return 
     end
     local line = workspace.Terrain:FindFirstChild(name) or Instance.new("LineHandleAdornment")
-    line.Name, line.Thickness, line.Transparency = name, 3, 0.4
-    line.Adornee, line.AlwaysOnTop = workspace.Terrain, true
+    line.Name, line.Thickness, line.Transparency = name, 4, 0.3
+    line.Adornee, line.AlwaysOnTop, line.Parent = workspace.Terrain, true, workspace.Terrain
     line.Color3, line.Length = color, (startPos - endPos).Magnitude
-    line.CFrame, line.Parent = CFrame.lookAt(startPos, endPos), workspace.Terrain
+    line.CFrame = CFrame.lookAt(startPos, endPos)
 end
 
--- --- Helper Functions ---
 local function forceJump(hum)
     if hum.FloorMaterial ~= Enum.Material.Air then
         hum.Jump = true
@@ -44,25 +43,32 @@ local function forceJump(hum)
     end
 end
 
--- ฟังก์ชันตรวจสอบ "ความกว้างของช่อง" (Gap Width Check)
-local function isGapSafe(pos, moveDir)
-    -- ยิง Ray ขนานไปด้านซ้ายและขวา เพื่อดูว่าช่องแคบไปไหม
-    local leftDir = (CFrame.Angles(0, math.rad(90), 0) * moveDir).Unit
-    local rightDir = (CFrame.Angles(0, math.rad(-90), 0) * moveDir).Unit
+-- ฟังก์ชันหาทางอ้อมแบบ "มองให้ไกลที่สุด"
+local function getDeepDetour(myRoot, targetPos)
+    local currentPos = myRoot.Position
+    local moveDir = (targetPos - currentPos).Unit
+    local scanAngles = {45, -45, 90, -90, 135, -135}
     
-    local leftHit = workspace:Raycast(pos, leftDir * 3, rayParams) -- เช็คข้างซ้าย 3 studs
-    local rightHit = workspace:Raycast(pos, rightDir * 3, rayParams) -- เช็คข้างขวา 3 studs
+    local bestPoint = nil
+    local maxClearance = 0
     
-    -- ถ้าติดทั้งสองฝั่งในระยะประชิด แสดงว่าเป็น "คอขวด" หรือช่องที่แคบเกินไป
-    if leftHit and rightHit then
-        return false 
+    for _, angle in ipairs(scanAngles) do
+        local dir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
+        -- ยิงเรดาร์ให้ไกลขึ้น (30 studs) เพื่อให้เห็น "จุดสิ้นสุดของกำแพง"
+        local ray = workspace:Raycast(currentPos, dir * 30, rayParams)
+        local d = ray and ray.Distance or 30
+        
+        if d > maxClearance then
+            maxClearance = d
+            bestPoint = currentPos + (dir * (d - 2)) -- ตั้งจุดหมายไว้ก่อนชนกำแพง 2 studs
+        end
     end
-    return true
+    return bestPoint
 end
 
 -- --- UI ---
 Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP"}, function(m) SelectedMode = m end)
-local drop = Section:NewDropdown("Select Target", "User", {}, function(s) SelectedPlayerName = s:match("@([^%)]+)") end)
+local drop = Section:NewDropdown("Select Player", "Target", {}, function(s) SelectedPlayerName = s:match("@([^%)]+)") end)
 
 local function refreshList()
     local t = {"None (Off)"}
@@ -74,9 +80,12 @@ end
 Section:NewButton("Refresh List", "Update", refreshList)
 refreshList()
 
-local MoveSection = Tab:NewSection("Tactical Control")
-MoveSection:NewToggle("Enable Follow", "Start Logic", function(s) followEnabled = s end)
-MoveSection:NewToggle("Show Debug", "Visuals", function(s) debugEnabled = s end)
+local MoveSection = Tab:NewSection("Decision Control")
+MoveSection:NewToggle("Enable Follow", "Start Logic", function(s) 
+    followEnabled = s 
+    if not s then commitmentPoint = nil; currentWaypoints = {} end
+end)
+MoveSection:NewToggle("Show Decision Path", "Visuals", function(s) debugEnabled = s end)
 MoveSection:NewSlider("Gap", "Distance", 20, 1, function(s) followDistance = s end)
 
 -- --- MAIN LOOP ---
@@ -90,6 +99,7 @@ task.spawn(function()
             if SelectedMode == "Manual" then
                 target = Players:FindFirstChild(SelectedPlayerName or "")
             else
+                -- [ค้นหาเป้าหมายตาม HP...]
                 local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
                 for _, p in pairs(Players:GetPlayers()) do
                     if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") then
@@ -114,49 +124,49 @@ task.spawn(function()
                 local dist = (targetPos - currentPos).Magnitude
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
 
+                -- ** ระบบ Commitment: ถ้ามีจุดหมายที่สัญญาไว้ ให้เดินไปให้ถึงก่อน **
+                if commitmentPoint then
+                    local distToCommit = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(commitmentPoint.X, commitmentPoint.Z)).Magnitude
+                    updateDebug("CommitTrace", currentPos, commitmentPoint, Color3.fromRGB(255, 170, 0)) -- เส้นสีส้ม = จุดยึดมั่น
+                    
+                    myHuman:MoveTo(commitmentPoint)
+                    
+                    -- ถ้าถึงจุดที่สัญญาไว้ หรือเดินติดนานเกินไป ให้ปลดล็อก
+                    if distToCommit < 4 then
+                        commitmentPoint = nil
+                    end
+                    -- เช็คกระโดดขณะเดินไปจุดยึดมั่น
+                    local frontRay = workspace:Raycast(currentPos, (commitmentPoint - currentPos).Unit * 5, rayParams)
+                    if frontRay then forceJump(myHuman) end
+                    
+                    return -- ข้ามการคำนวณอื่นจนกว่าจะถึงจุดหมายที่เลือกไว้
+                end
+
                 if dist > followDistance then
-                    -- ** แผน 1: เช็คทางตรงก่อน (Aimbot Mode) **
                     local moveDir = (targetPos - currentPos).Unit
                     local directRay = workspace:Raycast(currentPos, moveDir * dist, rayParams)
 
-                    if not directRay and isGapSafe(currentPos, moveDir) then
-                        -- ทางตรงโล่งและกว้างพอ วิ่งเข้าใส่เลย
-                        currentWaypoints = {}
+                    if not directRay then
+                        -- ทางโล่ง วิ่งใส่เลย
                         updateDebug("DirectTrace", currentPos, targetPos, Color3.fromRGB(0, 255, 0))
                         myHuman:MoveTo(targetPos)
                     else
-                        -- ** แผน 2: ทางตรงติดขัด หรือเป็นช่องแคบ -> ใช้ Pathfinding (ทางสีฟ้า) **
-                        if os.clock() - lastComputeTime > 1.0 or (targetPos - lastTargetPos).Magnitude > 8 then
+                        -- ** ทางตัน: วิเคราะห์หาทางออกให้สุดทาง **
+                        updateDebug("DirectTrace", currentPos, directRay.Position, Color3.fromRGB(255, 0, 0))
+                        
+                        -- ลองแสกนหาจุดที่ "ไปได้ไกลที่สุด" และล็อกเป้าหมายนั้น
+                        local bestEscape = getDeepDetour(myRoot, targetPos)
+                        if bestEscape then
+                            commitmentPoint = bestEscape
+                        else
+                            -- ถ้าเรดาร์มองไม่เห็นทางออก ให้ใช้ Pathfinding
                             local path = PathfindingService:CreatePath({AgentRadius = 3, AgentHeight = 5, AgentCanJump = true})
                             path:ComputeAsync(currentPos, targetPos)
                             if path.Status == Enum.PathStatus.Success then
                                 currentWaypoints = path:GetWaypoints()
-                                currentWaypointIndex = 2
-                                lastTargetPos, lastComputeTime = targetPos, os.clock()
-                            end
-                        end
-
-                        -- ** แผน 3: เดินตามทางสีฟ้า แต่ "ตรวจสอบซ้ำ" ทุกก้าว (แผนซ้อนแผน) **
-                        if #currentWaypoints > 0 and currentWaypointIndex <= #currentWaypoints then
-                            local wp = currentWaypoints[currentWaypointIndex]
-                            local wpDir = (wp.Position - currentPos).Unit
-                            
-                            -- ตรวจสอบว่าจุดสีฟ้าจุดต่อไป มันจะพาเราเข้าช่องแคบไหม?
-                            if not isGapSafe(currentPos, wpDir) then
-                                -- ถ้าจุดต่อไปดูอันตราย ให้ "ข้าม" หรือ "เบี่ยง" ออกทันที
-                                updateDebug("TacticalAlert", currentPos, wp.Position, Color3.fromRGB(255, 0, 0))
-                                -- สั่งหักเลี้ยวเล็กน้อยเพื่อหาองศาใหม่
-                                local detourDir = (CFrame.Angles(0, math.rad(45), 0) * wpDir).Unit
-                                myHuman:MoveTo(currentPos + (detourDir * 5))
-                                forceJump(myHuman)
-                                currentWaypointIndex = currentWaypointIndex + 1 -- ข้ามจุดนี้ไปเลย
-                            else
-                                -- ทางสีฟ้ายังโอเค เดินต่อไป
-                                myHuman:MoveTo(wp.Position)
-                                if (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude < 3.5 then
-                                    currentWaypointIndex = currentWaypointIndex + 1
-                                end
-                                if wp.Action == Enum.PathWaypointAction.Jump then forceJump(myHuman) end
+                                -- ล็อกเป้าหมายไปที่ Waypoint ที่ 5 (เดินไปให้ไกลหน่อยก่อนค่อยคำนวณใหม่)
+                                local targetIndex = math.min(5, #currentWaypoints)
+                                commitmentPoint = currentWaypoints[targetIndex].Position
                             end
                         end
                     end
