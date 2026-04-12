@@ -83,7 +83,7 @@ task.spawn(function()
         
         local finalTarget = nil
 
-        -- 1. เลือกเป้าหมายตามโหมด
+        -- 1. เลือกเป้าหมายตามโหมด (Logic เดิมที่เราคุยกัน)
         if SelectedMode == "Manual" then
             finalTarget = game.Players:FindFirstChild(SelectedPlayer)
         elseif SelectedMode == "Max HP" then
@@ -104,7 +104,7 @@ task.spawn(function()
             end
         end
 
-        -- 2. สั่งเดินไปหาเป้าหมาย
+        -- 2. สั่งเดินไปหาเป้าหมาย (Logic จากโค้ดที่คุณให้มา)
         if finalTarget and finalTarget.Character and finalTarget.Character:FindFirstChild("HumanoidRootPart") then
             local myChar = game.Players.LocalPlayer.Character
             local myHuman = myChar:FindFirstChild("Humanoid")
