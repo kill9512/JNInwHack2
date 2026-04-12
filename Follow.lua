@@ -18,45 +18,44 @@ local stuckTime = 0
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
--- --- ฟังก์ชันวิเคราะห์ทางเบี่ยงที่ฉลาดที่สุด ---
+-- --- ฟังก์ชันวิเคราะห์ทางเดิน (Smart Side Scan) ---
 local function getBestEscapeDir(myRoot, moveDir)
-    -- แสกนมุมต่างๆ เพื่อหาทางที่ "โล่ง" ที่สุด
-    local scanAngles = {30, -30, 60, -60, 90, -90}
-    local bestDir = nil
-    local maxFreeDist = 0
-
-    for _, angle in ipairs(scanAngles) do
-        local rotatedDir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
-        local result = workspace:Raycast(myRoot.Position, rotatedDir * 8, rayParams)
-        
-        local freeDist = result and result.Distance or 8
-        if freeDist > maxFreeDist then
-            maxFreeDist = freeDist
-            bestDir = rotatedDir
-        end
+    -- ยิง Ray 2 เส้นเพื่อเปรียบเทียบ ซ้าย 45 และ ขวา 45 องศา
+    local leftDir = (CFrame.Angles(0, math.rad(45), 0) * moveDir).Unit
+    local rightDir = (CFrame.Angles(0, math.rad(-45), 0) * moveDir).Unit
+    
+    local leftHit = workspace:Raycast(myRoot.Position, leftDir * 7, rayParams)
+    local rightHit = workspace:Raycast(myRoot.Position, rightDir * 7, rayParams)
+    
+    -- ถ้าฝั่งไหนว่างให้ไปฝั่งนั้น
+    if not leftHit then return leftDir end
+    if not rightHit then return rightDir end
+    
+    -- ถ้าติดทั้งคู่ ให้ดูว่าอันไหน "ไกลกว่า" (มีพื้นที่มากกว่า)
+    if (leftHit.Distance > rightHit.Distance) then
+        return leftDir
+    else
+        return rightDir
     end
-    return bestDir
 end
 
--- --- UI Setup ---
+-- --- UI Elements (เหมือนเดิมแต่ปรับแก้ Dropdown เล็กน้อย) ---
 Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP"}, function(m) SelectedMode = m end)
-local drop = Section:NewDropdown("Select Player", "Select Target", {}, function(s) 
+local drop = Section:NewDropdown("Select Player", "Select", {}, function(s) 
     SelectedPlayerName = s:match("@([^%)]+)") 
 end)
 
 local function refresh()
     local t = {"None (Off)"}
-    for _, p in pairs(Players:GetPlayers()) do 
-        if p ~= LocalPlayer then table.insert(t, p.DisplayName.." (@"..p.Name..")") end 
-    end
+    for _, p in pairs(Players:GetPlayers()) do if p ~= LocalPlayer then table.insert(t, p.DisplayName.." (@"..p.Name..")") end end
     drop:Refresh(t)
 end
-Section:NewButton("Refresh Players", "Update List", refresh)
+Section:NewButton("Refresh Players", "Update", refresh)
 refresh()
 
 local MoveSection = Tab:NewSection("Movement Control")
-MoveSection:NewToggle("Enable Follow", "Start Movement", function(state) followEnabled = state end)
-MoveSection:NewSlider("Distance", "Follow Gap", 20, 1, function(s) followDistance = s end)
+MoveSection:NewToggle("Enable Follow", "Start", function(state) followEnabled = state end)
+MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
 
 -- --- ฟังก์ชันเช็คว่าเกมนี้กระโดดได้ไหม ---
 local function canGameJump(humanoid)
