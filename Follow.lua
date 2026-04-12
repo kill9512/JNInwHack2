@@ -62,13 +62,13 @@ end
 local function calculateBestPath(myRoot, targetPos)
     local currentPos = myRoot.Position
     local moveDir = (targetPos - currentPos).Unit
-    local stepSize = 4
+    local stepSize = 8
     
     clearBlocks()
 
     -- 1. เช็คทางตรง (ลากบล็อก 4 สเต็ป)
     local hitPos = nil
-    for i = 1, 4 do
+    for i = 4, 8 do
         local checkPos = currentPos + (moveDir * ((i-1) * stepSize))
         local nextExpectedPos = currentPos + (moveDir * (i * stepSize))
         
