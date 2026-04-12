@@ -1,7 +1,18 @@
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
-local Window = Library.CreateLib("KONG GUISUS - EXPLORER", "DarkTheme")
+-- รอให้เกมโหลดเสร็จก่อน ป้องกัน UI ไม่ขึ้น
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+local success, Library = pcall(function()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
+end)
+
+if not success or not Library then
+    warn("โหลด Kavo UI ไม่สำเร็จ! ลิ้งค์อาจจะล่ม หรือ Executor ไม่รองรับ")
+    return
+end
+
+local Window = Library.CreateLib("KONG GUISUS - STRATEGIST", "DarkTheme")
 local Tab = Window:NewTab("Main")
-local Section = Tab:NewSection("Interior & Building Navigation")
+local Section = Tab:NewSection("Tactical Navigation (Plan in Plan)")
 
 -- --- Services ---
 local Players = game.Players
@@ -19,8 +30,7 @@ local currentWaypoints = {}
 local currentWaypointIndex = 1
 local lastComputeTime = 0
 local lastTargetPos = Vector3.new()
-local isProbing = false -- โหมดแหย่ทางเมื่อ Pathfinding ล้มเหลว
-
+local isProbing = false
 local stuckTimer = 0
 local lastPos = Vector3.new()
 
@@ -54,29 +64,7 @@ local function forceJump(hum)
     end
 end
 
--- ฟังก์ชันหาทางเดิน "แหย่" เมื่อติดในตึก
-local function getProbingDirection(myRoot, targetPos)
-    local currentPos = myRoot.Position
-    local baseDir = (targetPos - currentPos).Unit
-    local scanAngles = {0, 30, -30, 60, -60, 90, -90, 135, -135} 
-    
-    local bestDir = nil
-    local maxDist = 0
-    
-    for _, angle in ipairs(scanAngles) do
-        local dir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(baseDir.X, 0, baseDir.Z)).Unit
-        local ray = workspace:Raycast(currentPos, dir * 15, rayParams)
-        local d = ray and ray.Distance or 15
-        
-        if d > maxDist then
-            maxDist = d
-            bestDir = dir
-        end
-    end
-    return bestDir
-end
-
--- **เพิ่มใหม่: เซ็นเซอร์เช็คไหล่ (กันมุดช่องแคบ)**
+-- เช็คความกว้างของช่องทางเดิน
 local function checkShoulderClearance(myRoot, moveDir)
     local leftSide = (CFrame.Angles(0, math.rad(45), 0) * moveDir).Unit
     local rightSide = (CFrame.Angles(0, math.rad(-45), 0) * moveDir).Unit
@@ -92,21 +80,46 @@ local function checkShoulderClearance(myRoot, moveDir)
     return hitL, hitR
 end
 
--- --- UI ---
+-- ฟังก์ชันหาทางแหย่
+local function getProbingDirection(myRoot, targetPos)
+    local currentPos = myRoot.Position
+    local baseDir = (targetPos - currentPos).Unit
+    local scanAngles = {0, 30, -30, 60, -60, 90, -90, 135, -135} 
+    local bestDir = nil
+    local maxDist = 0
+    
+    for _, angle in ipairs(scanAngles) do
+        local dir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(baseDir.X, 0, baseDir.Z)).Unit
+        local ray = workspace:Raycast(currentPos, dir * 15, rayParams)
+        local d = ray and ray.Distance or 15
+        if d > maxDist then maxDist = d; bestDir = dir end
+    end
+    return bestDir
+end
+
+-- --- UI SETUP (แก้ไขป้องกันบั๊กพัง) ---
 Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP"}, function(m) SelectedMode = m end)
-local drop = Section:NewDropdown("Select Target", "User", {}, function(s) SelectedPlayerName = s:match("@([^%)]+)") end)
+
+-- ใส่ "None (Off)" ไว้เป็นค่าเริ่มต้น ป้องกันบั๊ก Kavo ทะลุเวลาอ่านตารางว่าง {}
+local drop = Section:NewDropdown("Select Target", "User", {"None (Off)"}, function(s) 
+    if s and s ~= "None (Off)" then
+        SelectedPlayerName = s:match("@([^%)]+)") 
+    else
+        SelectedPlayerName = nil
+    end
+end)
 
 local function refreshList()
     local t = {"None (Off)"}
     for _, p in pairs(Players:GetPlayers()) do 
         if p ~= LocalPlayer then table.insert(t, p.DisplayName.." (@"..p.Name..")") end 
     end
-    drop:Refresh(t)
+    -- ใช้ pcall กันพังเวลา Kavo หา object ไม่เจอ
+    pcall(function() drop:Refresh(t) end)
 end
 Section:NewButton("Refresh List", "Update", refreshList)
-refreshList()
 
-local MoveSection = Tab:NewSection("Navigation Control")
+local MoveSection = Tab:NewSection("Tactical Navigation")
 MoveSection:NewToggle("Enable Follow", "Start Logic", function(s) 
     followEnabled = s 
     if not s then currentWaypoints = {}; clearVisuals(); isProbing = false end
@@ -114,24 +127,24 @@ end)
 MoveSection:NewToggle("Show Path", "Visuals", function(s) debugEnabled = s end)
 MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
 
+-- พยายามอัปเดตรายชื่อครั้งแรกแบบปลอดภัย
+task.spawn(function() task.wait(0.5); refreshList() end)
+
 -- --- MAIN LOOP ---
 task.spawn(function()
     while true do
-        task.wait(0.15)
+        task.wait(0.12)
         if not followEnabled then continue end
         
         pcall(function()
             local target = nil
-            if SelectedMode == "Manual" then
-                target = Players:FindFirstChild(SelectedPlayerName or "")
+            if SelectedMode == "Manual" then target = Players:FindFirstChild(SelectedPlayerName or "")
             else
                 local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
                 for _, p in pairs(Players:GetPlayers()) do
                     if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") then
                         local hp = p.Character.Humanoid.Health
-                        if (SelectedMode == "Max HP" and hp > bestHP) or (SelectedMode == "Min HP" and hp < bestHP) then
-                            bestHP = hp; target = p
-                        end
+                        if (SelectedMode == "Max HP" and hp > bestHP) or (SelectedMode == "Min HP" and hp < bestHP) then bestHP = hp; target = p end
                     end
                 end
             end
@@ -149,56 +162,36 @@ task.spawn(function()
                 local dist = (targetPos - currentPos).Magnitude
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
 
-                -- จับเวลาติดกำแพง (Anti-Stuck)
-                if (currentPos - lastPos).Magnitude < 0.3 then 
-                    stuckTimer = stuckTimer + 0.15 
-                else 
-                    stuckTimer = 0 
-                end
+                -- ระบบ Anti-Stuck (เช็คเวลาติดกำแพง)
+                if (currentPos - lastPos).Magnitude < 0.3 then stuckTimer += 0.12 else stuckTimer = 0 end
                 lastPos = currentPos
 
                 if dist > followDistance then
-                    -- 1. ลองเดินตรง (Line of Sight)
                     local moveDir = (targetPos - currentPos).Unit
                     local directRay = workspace:Raycast(currentPos, moveDir * dist, rayParams)
 
+                    -- แผน 1: เดินตรง (Line of Sight)
                     if not directRay then
-                        -- ทางโล่ง วิ่งใส่เลย
-                        isProbing = false
-                        currentWaypoints = {}
+                        isProbing = false; currentWaypoints = {}
                         updateDebug("DirectTrace", currentPos, targetPos, Color3.fromRGB(0, 255, 0))
                         myHuman:MoveTo(targetPos)
                     else
-                        -- 2. ทางตัน/อยู่ในตึก -> ใช้ Pathfinding
-                        if os.clock() - lastComputeTime > 1.0 or (targetPos - lastTargetPos).Magnitude > 8 then
-                            local path = PathfindingService:CreatePath({AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true})
+                        -- แผน 2: ทางสีฟ้า (Pathfinding)
+                        if os.clock() - lastComputeTime > 1.0 or (targetPos - lastTargetPos).Magnitude > 8 or stuckTimer > 1.5 then
+                            local path = PathfindingService:CreatePath({AgentRadius = 3, AgentHeight = 5, AgentCanJump = true})
                             path:ComputeAsync(currentPos, targetPos)
-                            
                             if path.Status == Enum.PathStatus.Success then
-                                isProbing = false
-                                currentWaypoints = path:GetWaypoints()
-                                currentWaypointIndex = 2
-                                lastTargetPos = targetPos
-                                lastComputeTime = os.clock()
-                                if debugEnabled then
-                                    clearVisuals()
-                                    for _, wp in ipairs(currentWaypoints) do
-                                        local p = Instance.new("Part")
-                                        p.Name, p.Size, p.Position = "WP_Debug", Vector3.new(0.8,0.8,0.8), wp.Position
-                                        p.Anchored, p.CanCollide, p.CanQuery, p.Transparency = true, false, false, 0.4
-                                        p.Color, p.Material = Color3.fromRGB(0, 255, 255), Enum.Material.Neon
-                                        p.Parent = workspace.Terrain
-                                    end
-                                end
+                                isProbing = false; currentWaypoints = path:GetWaypoints(); currentWaypointIndex = 2
+                                lastTargetPos = targetPos; lastComputeTime = os.clock()
+                                if debugEnabled then clearVisuals() end
                             else
-                                isProbing = true
-                                currentWaypoints = {}
+                                isProbing = true; currentWaypoints = {}
                             end
                         end
 
-                        -- ** ส่วนตัดสินใจเดิน (แผนซ้อนแผน) **
+                        -- แผน 3: แผนซ้อนแผน (แทรกแซงการเดิน)
                         if isProbing then
-                            -- โหมดสำรวจ: แหย่ไปเรื่อยๆ ตามทิศทางผู้เล่น
+                            -- โหมดแหย่ทาง (Explorer Mode)
                             local probeDir = getProbingDirection(myRoot, targetPos)
                             if probeDir then
                                 updateDebug("ProbeTrace", currentPos, currentPos + (probeDir * 5), Color3.fromRGB(255, 165, 0))
@@ -207,37 +200,28 @@ task.spawn(function()
                                 if wallCheck then forceJump(myHuman) end
                             end
                         elseif #currentWaypoints > 0 then
-                            -- เดินตาม Waypoints แบบมีสมอง (เช็คไหล่ก่อนก้าว)
                             local wp = currentWaypoints[currentWaypointIndex]
                             if wp then
                                 local wpDir = (wp.Position - currentPos).Unit
                                 local hitL, hitR = checkShoulderClearance(myRoot, wpDir)
 
-                                -- ** ขัดคำสั่ง: ถ้าช่องแคบไป หรือติดมุมนาน ให้ฉีกตัวหนี **
+                                -- ถ้าไหล่ติด หรือเดินติดนานเกินไป
                                 if hitL or hitR or stuckTimer > 0.8 then
                                     local detourDir = wpDir
-                                    
-                                    -- วิเคราะห์ทิศหลบ
-                                    if hitL and not hitR then
-                                        detourDir = (CFrame.Angles(0, math.rad(-60), 0) * wpDir).Unit -- หลบขวา
-                                    elseif hitR and not hitL then
-                                        detourDir = (CFrame.Angles(0, math.rad(60), 0) * wpDir).Unit -- หลบซ้าย
-                                    else
-                                        detourDir = (CFrame.Angles(0, math.rad(180), 0) * wpDir).Unit -- ถอยหลังเลย!
-                                    end
+                                    if hitL and not hitR then detourDir = (CFrame.Angles(0, math.rad(-60), 0) * wpDir).Unit
+                                    elseif hitR and not hitL then detourDir = (CFrame.Angles(0, math.rad(60), 0) * wpDir).Unit
+                                    else detourDir = (CFrame.Angles(0, math.rad(180), 0) * wpDir).Unit end
                                     
                                     if stuckTimer > 1.5 then
-                                        -- ถ้าติดนานเกิน ลบแผนปัจจุบันทิ้ง บังคับคำนวณใหม่!
-                                        currentWaypoints = {}
+                                        currentWaypoints = {} -- ล้างทางทิ้งถ้าติดหนัก
                                         myHuman:MoveTo(currentPos + detourDir * 6)
                                         forceJump(myHuman)
                                     else
-                                        -- เดินเบี่ยงและกระโดดเอาตัวรอด
                                         myHuman:MoveTo(currentPos + detourDir * 4)
                                         forceJump(myHuman)
                                     end
                                 else
-                                    -- ทางกว้างพอและปลอดภัย เดินตามเส้นสีฟ้าต่อได้
+                                    -- ทางโล่ง เดินต่อ
                                     myHuman:MoveTo(wp.Position)
                                     if (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude < 3.5 then
                                         currentWaypointIndex = currentWaypointIndex + 1
