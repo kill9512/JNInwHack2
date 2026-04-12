@@ -37,23 +37,26 @@ end
 
 -- --- UI Elements ---
 
--- 1. เลือกโหมดการทำงาน
-Section:NewDropdown("Target Mode", "Choose how to find target", {"Manual", "Max HP", "Min HP", "Off"}, function(mode)
+-- 1. เลือกโหมดการทำงาน (ตั้งชื่อหัวข้อเป็น Manual ไปเลย)
+Section:NewDropdown("Manual", "Choose how to find target", {"Manual", "Max HP", "Min HP", "Off"}, function(mode)
     SelectedMode = mode
 end)
 
--- 2. เลือกชื่อผู้เล่น (Manual)
-local drop = Section:NewDropdown("Select Player", "Manual selection", UpdatePlayerTable(), function(name)
+-- 2. เลือกชื่อผู้เล่น (ตั้งชื่อหัวข้อเป็น None (Off) ไปเลยตามที่ตกลงกัน)
+local drop = Section:NewDropdown("None (Off)", "Manual selection", UpdatePlayerTable(), function(name)
     if name == "None (Off)" then
         SelectedPlayer = nil
     else
         SelectedPlayer = name
     end
 end)
-drop:Refresh(UpdatePlayerTable())
--- 3. ปุ่ม Refresh รายชื่อ
-Section:NewButton("Refresh Players", "Update manual list", function()
-    drop:Refresh(UpdatePlayerTable())
+
+-- 3. ปุ่ม Refresh (แก้แบบที่มึงต้องการ แต่ทำให้ Logic มันสะอาดขึ้น)
+Section:NewButton("Refresh Dropdown", "Update list & Clear selection", function()
+    -- ดึงลิสต์ใหม่จากฟังก์ชัน (ที่มี None และไม่มีชื่อเรา)
+    local newList = UpdatePlayerTable()
+    drop:Refresh(newList)
+    SelectedPlayer = nil 
 end)
 
 -- 4. Toggle ระบบเลือด %
