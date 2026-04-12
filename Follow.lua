@@ -4,13 +4,12 @@ local Tab = Window:NewTab("Main")
 local Section = Tab:NewSection("Smart Follow Player")
 
 -- --- Services ---
-local PathfindingService = game:GetService("PathfindingService")
 local Players = game.Players
 local LocalPlayer = Players.LocalPlayer
 
 -- --- Variables ---
-local SelectedMode = "Manual"
-local SelectedPlayer = nil
+local SelectedMode = "Manual" -- เริ่มต้นที่ Manual
+local SelectedPlayerName = nil -- เก็บชื่อจริงของผู้เล่น (@Name)
 local UsePercentage = false
 local followDistance = 5
 local followEnabled = false
@@ -20,7 +19,22 @@ local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 rayParams.IgnoreWater = true
 
--- --- ฟังก์ชันเสริม (Utility) ---
+-- --- ฟังก์ชันเสริม ---
+
+-- ฟังก์ชันอัปเดตรายชื่อ (แสดงชื่อเล่น + ชื่อจริง)
+local function UpdatePlayerTable()
+    local tbl = {"None (Off)"}
+    for _, plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            -- ฟอร์แมต: ชื่อเล่น (@ชื่อจริง)
+            local entry = plr.DisplayName .. " (@" .. plr.Name .. ")"
+            table.insert(tbl, entry)
+        end
+    end
+    return tbl
+end
+
+-- ฟังก์ชันหาเลือด
 local function getHealth(plr)
     local char = plr.Character
     if char and char:FindFirstChild("Humanoid") then
@@ -30,39 +44,40 @@ local function getHealth(plr)
     return nil
 end
 
-local function UpdatePlayerTable()
-    local tbl = {"None (Off)"}
-    for _, plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer then table.insert(tbl, plr.Name) end
-    end
-    return tbl
-end
-
--- ฟังก์ชันแสกนหาทางเดินอ้อม (กรณีทางตรงตัน)
+-- ฟังก์ชันแสกนทางเดินอ้อม
 local function getScanDirection(myRoot, moveDir)
-    local scanAngles = {30, -30, 60, -60, 90, -90} -- มุมที่ใช้แสกน (องศา)
+    local scanAngles = {30, -30, 60, -60, 90, -90}
     for _, angle in ipairs(scanAngles) do
         local rotatedDir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
         local scanRay = workspace:Raycast(myRoot.Position, rotatedDir * 7, rayParams)
-        if not scanRay then return rotatedDir end -- คืนค่าทิศทางแรกที่ว่าง
+        if not scanRay then return rotatedDir end
     end
     return nil
 end
 
 -- --- UI Elements ---
-Section:NewDropdown("Target Mode", "Choose how to find target", {"Manual", "Max HP", "Min HP", "Off"}, function(mode)
+
+-- 1. Target Mode (ไม่มี Off, Default เป็น Manual)
+Section:NewDropdown("Target Mode", "Choose how to find target", {"Manual", "Max HP", "Min HP"}, function(mode)
     SelectedMode = mode
 end)
 
-local drop = Section:NewDropdown("Select Player", "Manual selection", UpdatePlayerTable(), function(name)
-    SelectedPlayer = (name == "None (Off)") and nil or name
+-- 2. Select Player (แสดงชื่อเล่น, Default เป็น None (Off))
+local drop = Section:NewDropdown("Select Player", "Manual selection", UpdatePlayerTable(), function(selection)
+    if selection == "None (Off)" then
+        SelectedPlayerName = nil
+    else
+        -- ใช้ String Pattern ดึงชื่อภายใต้เครื่องหมาย @ ออกมา
+        local name = selection:match("@([^%)]+)")
+        SelectedPlayerName = name
+    end
 end)
 
 Section:NewButton("Refresh Players", "Update manual list", function()
     drop:Refresh(UpdatePlayerTable())
 end)
 
-Section:NewToggle("Use % Health Logic", "If ON, check health by percentage", function(state)
+Section:NewToggle("Use % Health Logic", "Check health by percentage", function(state)
     UsePercentage = state
 end)
 
@@ -75,16 +90,18 @@ MoveSection:NewSlider("Follow Distance", "Distance from target", 20, 1, function
     followDistance = s
 end)
 
--- --- LOGIC CORE (Smart Engine) ---
+-- --- LOGIC CORE ---
 task.spawn(function()
     while task.wait(0.1) do
-        if not followEnabled or SelectedMode == "Off" then continue end
+        if not followEnabled then continue end
         
         local finalTarget = nil
 
-        -- 1. ค้นหาเป้าหมายตามเงื่อนไข
+        -- ค้นหาเป้าหมาย
         if SelectedMode == "Manual" then
-            finalTarget = Players:FindFirstChild(SelectedPlayer)
+            if SelectedPlayerName then
+                finalTarget = Players:FindFirstChild(SelectedPlayerName)
+            end
         elseif SelectedMode == "Max HP" or SelectedMode == "Min HP" then
             local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
             for _, p in pairs(Players:GetPlayers()) do
@@ -100,7 +117,7 @@ task.spawn(function()
             end
         end
 
-        -- 2. สั่งเดินอัจฉริยะ
+        -- สั่งเดิน
         if finalTarget and finalTarget.Character and finalTarget.Character:FindFirstChild("HumanoidRootPart") then
             local myChar = LocalPlayer.Character
             local myHuman = myChar and myChar:FindFirstChild("Humanoid")
@@ -114,32 +131,21 @@ task.spawn(function()
                     local moveDir = (tRoot.Position - myRoot.Position).Unit
                     rayParams.FilterDescendantsInstances = {myChar, finalTarget.Character}
 
-                    -- เช็คสิ่งกีดขวางข้างหน้า
                     local lowRay = workspace:Raycast(myRoot.Position + Vector3.new(0,-1,0), moveDir * 6, rayParams)
                     local highRay = workspace:Raycast(myRoot.Position + Vector3.new(0,2,0), moveDir * 6, rayParams)
 
                     if lowRay and lowRay.Instance.CanCollide then
-                        -- ถ้าเจอสิ่งกีดขวาง
-                        if not highRay then
-                            -- ของเตี้ย -> ลองกระโดด (ถ้าโดนห้ามโดด จะไปเข้า Logic แสกนต่อ)
-                            myHuman.Jump = true 
-                        end
-                        
-                        -- แสกนหาทางอ้อม (ไม่ว่าจะกระโดดได้หรือไม่ได้ ระบบนี้จะทำงานร่วมกัน)
+                        if not highRay then myHuman.Jump = true end
                         local detour = getScanDirection(myRoot, moveDir)
                         if detour then
                             myHuman:MoveTo(myRoot.Position + (detour * 5))
                         else
-                            -- ตันทุกทาง -> ถอยหลังตั้งหลัก
                             myHuman:MoveTo(myRoot.Position - (moveDir * 5))
                         end
                     else
-                        -- ทางสะดวก เดินไปหาจุดหมาย (หยุดก่อนถึงระยะ Follow)
-                        local destination = tRoot.Position - (moveDir * followDistance)
-                        myHuman:MoveTo(destination)
+                        myHuman:MoveTo(tRoot.Position - (moveDir * followDistance))
                     end
                 else
-                    -- ถึงระยะแล้ว หยุดเดินและหันหน้าหาเป้าหมาย
                     myHuman:MoveTo(myRoot.Position)
                     myRoot.CFrame = CFrame.lookAt(myRoot.Position, Vector3.new(tRoot.Position.X, myRoot.Position.Y, tRoot.Position.Z))
                 end
