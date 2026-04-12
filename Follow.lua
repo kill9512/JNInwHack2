@@ -1,18 +1,16 @@
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
 local Window = Library.CreateLib("KONG GUISUS", "DarkTheme")
-local Tab = Window:NewTab("Main")
-local Section = Tab:NewSection("Smart Follow Player")
 
--- --- Variables ---
+-- --- Variables (ประกาศตัวแปรไว้บนสุด) ---
 local SelectedMode = "Manual"
 local SelectedPlayer = nil
 local UsePercentage = false
 local followDistance = 5
 local followEnabled = false
-local followPower = "Normal" -- โหมดพลังพิเศษ
-local flySpeed = 10 -- ความเร็วในการบิน/วาร์ป
+local followMode = "Normal"
+local flySpeed = 10 -- ปรับความเร็วได้จาก Slider
 
--- ฟังก์ชันหาเลือดผู้เล่น
+-- --- Functions (ฟังก์ชันตัวช่วย) ---
 local function getHealth(plr)
     local char = plr.Character
     if char and char:FindFirstChild("Humanoid") then
@@ -25,7 +23,6 @@ local function getHealth(plr)
     return nil
 end
 
--- ฟังก์ชันอัปเดตรายชื่อ
 local function UpdatePlayerTable()
     local tbl = {"None (Off)"}
     for _, plr in pairs(game.Players:GetPlayers()) do
@@ -36,59 +33,59 @@ local function UpdatePlayerTable()
     return tbl
 end
 
--- --- UI Elements ---
+-- --- UI: Section 1 (Target Selection) ---
+local Tab = Window:NewTab("Main")
+local Section = Tab:NewSection("Smart Follow Player")
 
--- 1. เลือกโหมดการหาเป้าหมาย
 Section:NewDropdown("Target Mode", "Choose how to find target", {"Manual", "Max HP", "Min HP", "Off"}, function(mode)
     SelectedMode = mode
 end)
 
--- 2. เลือกชื่อผู้เล่น (Manual)
 local drop = Section:NewDropdown("Select Player", "Manual selection", UpdatePlayerTable(), function(name)
     SelectedPlayer = (name == "None (Off)") and nil or name
 end)
 
--- 3. ปุ่ม Refresh รายชื่อ
 Section:NewButton("Refresh Players", "Update manual list", function()
     drop:Refresh(UpdatePlayerTable())
 end)
 
--- 4. Toggle ระบบเลือด %
 Section:NewToggle("Use % Health Logic", "Check health by percentage", function(state)
     UsePercentage = state
 end)
 
--- --- UI ส่วนควบคุมการเดิน (Movement Control) ---
+-- --- UI: Section 2 (Movement Control) ---
 local MoveSection = Tab:NewSection("Movement Control")
 
-MoveSection:NewToggle("Enable Follow", "Start following system", function(state)
+MoveSection:NewToggle("Enable Follow", "Start/Stop Movement", function(state)
     followEnabled = state
 end)
 
--- 5. Dropdown พลังพิเศษ
-MoveSection:NewDropdown("Movement Mode", "Select follow style", {"Normal", "Walk (Copy Speed)", "TeleportBehind", "CFrameFly"}, function(v)
-    followPower = v
-    -- คืนค่าความเร็วปกติถ้าสลับโหมด
-    local myHum = game.Players.LocalPlayer.Character:FindFirstChild("Humanoid")
-    if myHum then myHum.WalkSpeed = 16 end
-end)
-
-MoveSection:NewSlider("Follow Distance", "Distance from target", 20, 1, function(s)
+MoveSection:NewSlider("Follow Distance", "Distance to keep", 20, 1, function(s)
     followDistance = s
 end)
 
-MoveSection:NewSlider("Power Speed", "Speed for Fly/Warp", 100, 1, function(s)
+MoveSection:NewDropdown("Follow Mode", "Power Selection", {"Normal", "Walk", "TeleportBehind", "CFrameFly"}, function(mode)
+    followMode = mode
+    if mode == "Normal" then
+        local myChar = game.Players.LocalPlayer.Character
+        if myChar and myChar:FindFirstChild("Humanoid") then
+            myChar.Humanoid.WalkSpeed = 16 
+        end
+    end
+end)
+
+MoveSection:NewSlider("Fly Speed", "Speed for CFrameFly", 100, 1, function(s)
     flySpeed = s
 end)
 
--- --- LOGIC CORE (หัวใจหลักของความเทพ) ---
+-- --- LOGIC CORE (หัวใจหลักที่คุมทุกอย่าง) ---
 task.spawn(function()
-    while task.wait(0.01) do -- ถี่ขึ้นเพื่อความเนียนในโหมด Fly
+    while task.wait(0.01) do -- รันถี่ๆ เพื่อความเนียน
         if not followEnabled then continue end
         
         local finalTarget = nil
 
-        -- 1. Logic ค้นหาเป้าหมาย
+        -- 1. ค้นหาเป้าหมายตามโหมดที่เลือก
         if SelectedMode == "Manual" then
             finalTarget = game.Players:FindFirstChild(SelectedPlayer)
         elseif SelectedMode == "Max HP" then
@@ -109,7 +106,7 @@ task.spawn(function()
             end
         end
 
-        -- 2. Logic การเคลื่อนไหวเหนือธรรมชาติ
+        -- 2. สั่งการเคลื่อนไหวไปหา finalTarget
         if finalTarget and finalTarget.Character and finalTarget.Character:FindFirstChild("HumanoidRootPart") then
             local myChar = game.Players.LocalPlayer.Character
             local myRoot = myChar:FindFirstChild("HumanoidRootPart")
@@ -118,40 +115,33 @@ task.spawn(function()
             
             if myRoot and targetRoot and myHuman then
                 local dist = (myRoot.Position - targetRoot.Position).Magnitude
-                
-                -- --- เช็คโหมดพลังพิเศษ ---
-                
-                if followPower == "Normal" then
-                    -- เดินตามแบบปกติ (Logic เดิม)
+
+                -- โหมด Walk (เดินตาม)
+                if followMode == "Walk" then
+                    local targetHuman = finalTarget.Character:FindFirstChild("Humanoid")
+                    if targetHuman then myHuman.WalkSpeed = targetHuman.WalkSpeed end
                     if dist > followDistance then
                         local dir = (targetRoot.Position - myRoot.Position).Unit
                         myHuman:MoveTo(targetRoot.Position - (dir * followDistance))
-                        -- กระโดดเมื่อติด
+                        
+                        -- กันติด (Raycast Jump)
                         local ray = Ray.new(myRoot.Position, dir * 3)
                         local hit = workspace:FindPartOnRayWithIgnoreList(ray, {myChar})
                         if hit and hit.CanCollide then myHuman.Jump = true end
                     end
 
-                elseif followPower == "Walk (Copy Speed)" then
-                    -- เดินตาม + เลียนแบบความเร็ว
-                    local targetHum = finalTarget.Character:FindFirstChild("Humanoid")
-                    if targetHum then myHuman.WalkSpeed = targetHum.WalkSpeed end
-                    if dist > followDistance then
-                        myHuman:MoveTo(targetRoot.Position - (targetRoot.CFrame.LookVector * followDistance))
-                    end
-
-                elseif followPower == "TeleportBehind" then
-                    -- สิงหลัง (ผีหลอก)
+                -- โหมดผีสิง (Teleport Behind)
+                elseif followMode == "TeleportBehind" then
                     local backPos = targetRoot.CFrame * CFrame.new(0, 0, followDistance)
                     myRoot.CFrame = CFrame.lookAt(backPos.Position, targetRoot.Position)
 
-                elseif followPower == "CFrameFly" then
-                    -- บินไปหา (NoClip Style)
+                -- โหมดลอยไปหา (CFrame Fly)
+                elseif followMode == "CFrameFly" then
                     if dist > followDistance then
-                        local dir = (targetRoot.Position - myRoot.Position).Unit
-                        myRoot.CFrame = myRoot.CFrame + (dir * (flySpeed / 50))
+                        local direction = (targetRoot.Position - myRoot.Position).Unit
+                        myRoot.CFrame = myRoot.CFrame + (direction * (flySpeed / 100))
                         myRoot.CFrame = CFrame.lookAt(myRoot.Position, targetRoot.Position)
-                        myRoot.Velocity = Vector3.new(0, 0, 0) -- กันร่วง
+                        myRoot.Velocity = Vector3.new(0, 0, 0) -- กันตัวสั่น
                     end
                 end
             end
