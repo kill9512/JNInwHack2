@@ -2,72 +2,71 @@ local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHept
 local Window = Library.CreateLib("KONG GUISUS", "DarkTheme")
 local Tab = Window:NewTab("Main")
 local Section = Tab:NewSection("Smart Follow Player")
-local PlayerTable = {}
+
+-- --- Services ---
+local PathfindingService = game:GetService("PathfindingService")
+local Players = game.Players
+local LocalPlayer = Players.LocalPlayer
 
 -- --- Variables ---
-local SelectedMode = "Manual" -- โหมดเริ่มต้น
-local SelectedPlayer = nil -- ชื่อผู้เล่นที่เลือกเอง
-local UsePercentage = false -- Toggle สำหรับ % HP
+local SelectedMode = "Manual"
+local SelectedPlayer = nil
+local UsePercentage = false
+local followDistance = 5
+local followEnabled = false
 
--- ฟังก์ชันหาเลือดผู้เล่น
+-- --- Raycast Settings ---
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
+rayParams.IgnoreWater = true
+
+-- --- ฟังก์ชันเสริม (Utility) ---
 local function getHealth(plr)
     local char = plr.Character
     if char and char:FindFirstChild("Humanoid") then
-        if UsePercentage then
-            -- ส่งคืนค่าเป็น % (เลือดปัจจุบัน / เลือดสูงสุด)
-            return char.Humanoid.Health / char.Humanoid.MaxHealth
-        else
-            -- ส่งคืนค่าเลือดดิบๆ
-            return char.Humanoid.Health
-        end
+        local hum = char.Humanoid
+        return UsePercentage and (hum.Health / hum.MaxHealth) or hum.Health
     end
     return nil
 end
 
--- ฟังก์ชันอัปเดตรายชื่อ (เหมือนเดิม)
 local function UpdatePlayerTable()
-    local tbl = {"None (Off)"} -- เพิ่ม Option พิเศษไว้หัวแถว
-    for _, plr in pairs(game.Players:GetPlayers()) do
-        if plr.Name ~= game.Players.LocalPlayer.Name then
-            table.insert(tbl, plr.Name)
-        end
+    local tbl = {"None (Off)"}
+    for _, plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then table.insert(tbl, plr.Name) end
     end
     return tbl
 end
 
--- --- UI Elements ---
+-- ฟังก์ชันแสกนหาทางเดินอ้อม (กรณีทางตรงตัน)
+local function getScanDirection(myRoot, moveDir)
+    local scanAngles = {30, -30, 60, -60, 90, -90} -- มุมที่ใช้แสกน (องศา)
+    for _, angle in ipairs(scanAngles) do
+        local rotatedDir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
+        local scanRay = workspace:Raycast(myRoot.Position, rotatedDir * 7, rayParams)
+        if not scanRay then return rotatedDir end -- คืนค่าทิศทางแรกที่ว่าง
+    end
+    return nil
+end
 
--- 1. เลือกโหมดการทำงาน
+-- --- UI Elements ---
 Section:NewDropdown("Target Mode", "Choose how to find target", {"Manual", "Max HP", "Min HP", "Off"}, function(mode)
     SelectedMode = mode
 end)
 
--- 2. เลือกชื่อผู้เล่น (Manual)
 local drop = Section:NewDropdown("Select Player", "Manual selection", UpdatePlayerTable(), function(name)
-    if name == "None (Off)" then
-        SelectedPlayer = nil
-    else
-        SelectedPlayer = name
-    end
+    SelectedPlayer = (name == "None (Off)") and nil or name
 end)
 
--- 3. ปุ่ม Refresh รายชื่อ
 Section:NewButton("Refresh Players", "Update manual list", function()
     drop:Refresh(UpdatePlayerTable())
 end)
 
--- 4. Toggle ระบบเลือด %
 Section:NewToggle("Use % Health Logic", "If ON, check health by percentage", function(state)
     UsePercentage = state
 end)
 
--- --- เพิ่มตัวแปรคุมการเดิน ---
-local followDistance = 5
-local followEnabled = false
-
--- --- UI ส่วนควบคุมการเดิน ---
 local MoveSection = Tab:NewSection("Movement Control")
-
 MoveSection:NewToggle("Enable Follow", "Start moving to target", function(state)
     followEnabled = state
 end)
@@ -76,59 +75,73 @@ MoveSection:NewSlider("Follow Distance", "Distance from target", 20, 1, function
     followDistance = s
 end)
 
--- --- LOGIC CORE (ตัวคำนวณและสั่งเดิน) ---
+-- --- LOGIC CORE (Smart Engine) ---
 task.spawn(function()
-    while task.wait(0.1) do -- ความเร็วในการอัปเดตตำแหน่ง
-        if not followEnabled then continue end -- ถ้าปิด Toggle ก็ไม่ต้องทำอะไร
+    while task.wait(0.1) do
+        if not followEnabled or SelectedMode == "Off" then continue end
         
         local finalTarget = nil
 
-        -- 1. เลือกเป้าหมายตามโหมด (Logic เดิมที่เราคุยกัน)
+        -- 1. ค้นหาเป้าหมายตามเงื่อนไข
         if SelectedMode == "Manual" then
-            finalTarget = game.Players:FindFirstChild(SelectedPlayer)
-        elseif SelectedMode == "Max HP" then
-            local highHealth = -1
-            for _, p in pairs(game.Players:GetPlayers()) do
-                if p ~= game.Players.LocalPlayer then
+            finalTarget = Players:FindFirstChild(SelectedPlayer)
+        elseif SelectedMode == "Max HP" or SelectedMode == "Min HP" then
+            local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
+            for _, p in pairs(Players:GetPlayers()) do
+                if p ~= LocalPlayer then
                     local hp = getHealth(p)
-                    if hp and hp > highHealth then highHealth = hp; finalTarget = p end
-                end
-            end
-        elseif SelectedMode == "Min HP" then
-            local lowHealth = math.huge
-            for _, p in pairs(game.Players:GetPlayers()) do
-                if p ~= game.Players.LocalPlayer then
-                    local hp = getHealth(p)
-                    if hp and hp < lowHealth then lowHealth = hp; finalTarget = p end
+                    if hp then
+                        if (SelectedMode == "Max HP" and hp > bestHP) or (SelectedMode == "Min HP" and hp < bestHP) then
+                            bestHP = hp
+                            finalTarget = p
+                        end
+                    end
                 end
             end
         end
 
-        -- 2. สั่งเดินไปหาเป้าหมาย (Logic จากโค้ดที่คุณให้มา)
+        -- 2. สั่งเดินอัจฉริยะ
         if finalTarget and finalTarget.Character and finalTarget.Character:FindFirstChild("HumanoidRootPart") then
-            local myChar = game.Players.LocalPlayer.Character
-            local myHuman = myChar:FindFirstChild("Humanoid")
-            local myRoot = myChar:FindFirstChild("HumanoidRootPart")
-            local targetRoot = finalTarget.Character.HumanoidRootPart
+            local myChar = LocalPlayer.Character
+            local myHuman = myChar and myChar:FindFirstChild("Humanoid")
+            local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            local tRoot = finalTarget.Character.HumanoidRootPart
             
-            if myHuman and myRoot and targetRoot then
-                local distance = (myRoot.Position - targetRoot.Position).Magnitude
+            if myHuman and myRoot then
+                local dist = (myRoot.Position - tRoot.Position).Magnitude
                 
-                -- ถ้าอยู่ไกลเกินระยะที่ตั้งไว้ ให้เดินไปหา
-                if distance > followDistance then
-                    -- คำนวณจุดที่จะเดินไป (หยุดก่อนถึงตัวตามระยะห่าง)
-                    local direction = (targetRoot.Position - myRoot.Position).Unit
-                    local destination = targetRoot.Position - (direction * followDistance)
-                    
-                    -- ใช้ MoveTo เพื่อความลื่นไหล
-                    myHuman:MoveTo(destination)
-                    
-                    -- เช็คสิ่งกีดขวาง (Raycast แบบง่าย)
-                    local ray = Ray.new(myRoot.Position, direction * 3)
-                    local hit = workspace:FindPartOnRayWithIgnoreList(ray, {myChar})
-                    if hit and hit.CanCollide then
-                        myHuman.Jump = true -- ถ้าติดกำแพงให้กระโดด
+                if dist > followDistance then
+                    local moveDir = (tRoot.Position - myRoot.Position).Unit
+                    rayParams.FilterDescendantsInstances = {myChar, finalTarget.Character}
+
+                    -- เช็คสิ่งกีดขวางข้างหน้า
+                    local lowRay = workspace:Raycast(myRoot.Position + Vector3.new(0,-1,0), moveDir * 6, rayParams)
+                    local highRay = workspace:Raycast(myRoot.Position + Vector3.new(0,2,0), moveDir * 6, rayParams)
+
+                    if lowRay and lowRay.Instance.CanCollide then
+                        -- ถ้าเจอสิ่งกีดขวาง
+                        if not highRay then
+                            -- ของเตี้ย -> ลองกระโดด (ถ้าโดนห้ามโดด จะไปเข้า Logic แสกนต่อ)
+                            myHuman.Jump = true 
+                        end
+                        
+                        -- แสกนหาทางอ้อม (ไม่ว่าจะกระโดดได้หรือไม่ได้ ระบบนี้จะทำงานร่วมกัน)
+                        local detour = getScanDirection(myRoot, moveDir)
+                        if detour then
+                            myHuman:MoveTo(myRoot.Position + (detour * 5))
+                        else
+                            -- ตันทุกทาง -> ถอยหลังตั้งหลัก
+                            myHuman:MoveTo(myRoot.Position - (moveDir * 5))
+                        end
+                    else
+                        -- ทางสะดวก เดินไปหาจุดหมาย (หยุดก่อนถึงระยะ Follow)
+                        local destination = tRoot.Position - (moveDir * followDistance)
+                        myHuman:MoveTo(destination)
                     end
+                else
+                    -- ถึงระยะแล้ว หยุดเดินและหันหน้าหาเป้าหมาย
+                    myHuman:MoveTo(myRoot.Position)
+                    myRoot.CFrame = CFrame.lookAt(myRoot.Position, Vector3.new(tRoot.Position.X, myRoot.Position.Y, tRoot.Position.Z))
                 end
             end
         end
