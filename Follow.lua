@@ -79,14 +79,16 @@ MoveSection:NewSlider("Follow Distance", "Distance from target", 20, 1, function
     followDistance = s
 end)
 
--- --- LOGIC CORE (ตัวคำนวณและสั่งเดิน) ---
+-- --- เพิ่ม Service ที่จำเป็นไว้บนสุดของ Script ---
+local PathfindingService = game:GetService("PathfindingService")
+
+-- --- LOGIC CORE (ตัวคำนวณและสั่งเดินแบบฉลาด) ---
 task.spawn(function()
-    while task.wait(0.1) do -- ความเร็วในการอัปเดตตำแหน่ง
-        if not followEnabled then continue end -- ถ้าปิด Toggle ก็ไม่ต้องทำอะไร
+    while task.wait(0.1) do 
+        if not followEnabled then continue end 
         
         local finalTarget = nil
-
-        -- 1. เลือกเป้าหมายตามโหมด (Logic เดิมที่เราคุยกัน)
+        -- [ส่วนเลือกเป้าหมาย SelectedMode เหมือนเดิม...]
         if SelectedMode == "Manual" then
             finalTarget = game.Players:FindFirstChild(SelectedPlayer)
         elseif SelectedMode == "Max HP" then
@@ -107,7 +109,7 @@ task.spawn(function()
             end
         end
 
-        -- 2. สั่งเดินไปหาเป้าหมาย (Logic จากโค้ดที่คุณให้มา)
+        -- --- ส่วนสั่งเดินแบบ Smart Pathfinding ---
         if finalTarget and finalTarget.Character and finalTarget.Character:FindFirstChild("HumanoidRootPart") then
             local myChar = game.Players.LocalPlayer.Character
             local myHuman = myChar:FindFirstChild("Humanoid")
@@ -117,20 +119,34 @@ task.spawn(function()
             if myHuman and myRoot and targetRoot then
                 local distance = (myRoot.Position - targetRoot.Position).Magnitude
                 
-                -- ถ้าอยู่ไกลเกินระยะที่ตั้งไว้ ให้เดินไปหา
+                -- ถ้าอยู่ไกลกว่าระยะที่ตั้งไว้ ให้คำนวณทางเดิน
                 if distance > followDistance then
-                    -- คำนวณจุดที่จะเดินไป (หยุดก่อนถึงตัวตามระยะห่าง)
-                    local direction = (targetRoot.Position - myRoot.Position).Unit
-                    local destination = targetRoot.Position - (direction * followDistance)
+                    -- 1. สร้าง Path
+                    local path = PathfindingService:CreatePath({
+                        AgentCanJump = true, -- อนุญาตให้กระโดดข้ามสิ่งกีดขวาง
+                        AgentWaypointSpacing = 2 -- ระยะห่างของจุดเดิน
+                    })
                     
-                    -- ใช้ MoveTo เพื่อความลื่นไหล
-                    myHuman:MoveTo(destination)
+                    -- 2. คำนวณเส้นทางจาก 'เรา' ไป 'เป้าหมาย'
+                    path:ComputeAsync(myRoot.Position, targetRoot.Position)
                     
-                    -- เช็คสิ่งกีดขวาง (Raycast แบบง่าย)
-                    local ray = Ray.new(myRoot.Position, direction * 3)
-                    local hit = workspace:FindPartOnRayWithIgnoreList(ray, {myChar})
-                    if hit and hit.CanCollide then
-                        myHuman.Jump = true -- ถ้าติดกำแพงให้กระโดด
+                    -- 3. ถ้าคำนวณสำเร็จ ให้เดินตามจุด Waypoints
+                    if path.Status == Enum.PathStatus.Success then
+                        local waypoints = path:GetWaypoints()
+                        
+                        -- เดินไปหาจุดที่ 2 (จุดแรกคือที่ที่เรายืนอยู่)
+                        if waypoints[2] then
+                            local wp = waypoints[2]
+                            myHuman:MoveTo(wp.Position)
+                            
+                            -- ถ้าจุดนั้นบอกให้กระโดด ก็กระโดด
+                            if wp.Action == Enum.PathfindingWaypointAction.Jump then
+                                myHuman.Jump = true
+                            end
+                        end
+                    else
+                        -- ถ้า Pathfinding ล้มเหลว (ทางตัน) ให้เดินตรงๆ ไปก่อนกันนิ่ง
+                        myHuman:MoveTo(targetRoot.Position)
                     end
                 end
             end
