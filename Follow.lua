@@ -11,61 +11,49 @@ local LocalPlayer = Players.LocalPlayer
 -- --- Variables ---
 local SelectedMode = "Manual"
 local SelectedPlayerName = nil
-local UsePercentage = false
 local followDistance = 5
 local followEnabled = false
+
+local lastPos = Vector3.new(0,0,0)
+local stuckTime = 0
 
 -- --- Raycast Settings ---
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 rayParams.IgnoreWater = true
 
--- --- ฟังก์ชันเสริม ---
-
-local function UpdatePlayerTable()
-    local tbl = {"None (Off)"}
-    for _, plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer then
-            table.insert(tbl, plr.DisplayName .. " (@" .. plr.Name .. ")")
-        end
+-- --- ฟังก์ชันแสกนหาทางเดินอ้อม (ปรับให้กว้างขึ้น) ---
+local function getScanDirection(myRoot, moveDir)
+    local scanAngles = {45, -45, 90, -90, 135, -135} 
+    for _, angle in ipairs(scanAngles) do
+        local rotatedDir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
+        local scanRay = workspace:Raycast(myRoot.Position, rotatedDir * 8, rayParams)
+        if not scanRay then return rotatedDir end
     end
-    return tbl
-end
-
--- เช็คว่ามองเห็นเป้าหมายหรือไม่
-local function canSeeTarget(myRoot, targetRoot)
-    rayParams.FilterDescendantsInstances = {LocalPlayer.Character, targetRoot.Parent}
-    local direction = (targetRoot.Position - myRoot.Position)
-    local result = workspace:Raycast(myRoot.Position, direction, rayParams)
-    return result == nil
+    return nil
 end
 
 -- --- UI Elements ---
-Section:NewDropdown("Target Mode", "Choose how to find target", {"Manual", "Max HP", "Min HP"}, function(mode)
-    SelectedMode = mode
-end)
+Section:NewDropdown("Target Mode", "Choose target", {"Manual", "Max HP", "Min HP"}, function(mode) SelectedMode = mode end)
 
-local drop = Section:NewDropdown("Select Player", "Manual selection", UpdatePlayerTable(), function(selection)
+local drop = Section:NewDropdown("Select Player", "Selection", (function()
+    local t = {"None (Off)"}
+    for _, p in pairs(Players:GetPlayers()) do if p ~= LocalPlayer then table.insert(t, p.DisplayName .. " (@" .. p.Name .. ")") end end
+    return t
+end)(), function(selection)
     if selection == "None (Off)" then SelectedPlayerName = nil
     else SelectedPlayerName = selection:match("@([^%)]+)") end
 end)
 
-Section:NewButton("Refresh Players", "Update manual list", function()
-    drop:Refresh(UpdatePlayerTable())
-end)
-
-Section:NewToggle("Use % Health Logic", "Check health by percentage", function(state)
-    UsePercentage = state
-end)
+Section:NewButton("Refresh Players", "Update list", function() drop:Refresh((function()
+    local t = {"None (Off)"}
+    for _, p in pairs(Players:GetPlayers()) do if p ~= LocalPlayer then table.insert(t, p.DisplayName .. " (@" .. p.Name .. ")") end end
+    return t
+end)()) end)
 
 local MoveSection = Tab:NewSection("Movement Control")
-MoveSection:NewToggle("Enable Follow", "Start moving to target", function(state)
-    followEnabled = state
-end)
-
-MoveSection:NewSlider("Follow Distance", "Distance from target", 20, 1, function(s)
-    followDistance = s
-end)
+MoveSection:NewToggle("Enable Follow", "Start following", function(state) followEnabled = state end)
+MoveSection:NewSlider("Follow Distance", "Distance", 20, 1, function(s) followDistance = s end)
 
 -- --- LOGIC CORE ---
 task.spawn(function()
@@ -73,15 +61,15 @@ task.spawn(function()
         if not followEnabled then continue end
         
         local finalTarget = nil
-        -- [ค้นหาเป้าหมาย]
         if SelectedMode == "Manual" then
             if SelectedPlayerName then finalTarget = Players:FindFirstChild(SelectedPlayerName) end
-        elseif SelectedMode == "Max HP" or SelectedMode == "Min HP" then
+        else
+            -- Logic หา Max/Min HP (ย่อเพื่อความกระชับ)
             local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
             for _, p in pairs(Players:GetPlayers()) do
-                if p ~= LocalPlayer then
-                    local hp = p.Character and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health
-                    if hp and ((SelectedMode == "Max HP" and hp > bestHP) or (SelectedMode == "Min HP" and hp < bestHP)) then
+                if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") then
+                    local hp = p.Character.Humanoid.Health
+                    if (SelectedMode == "Max HP" and hp > bestHP) or (SelectedMode == "Min HP" and hp < bestHP) then
                         bestHP = hp; finalTarget = p
                     end
                 end
@@ -95,48 +83,51 @@ task.spawn(function()
             local tRoot = finalTarget.Character.HumanoidRootPart
             
             if myHuman and myRoot then
+                rayParams.FilterDescendantsInstances = {myChar, finalTarget.Character}
                 local dist = (myRoot.Position - tRoot.Position).Magnitude
-                local heightDiff = tRoot.Position.Y - myRoot.Position.Y -- เช็คว่าเขาอยู่สูงกว่าเราไหม
                 
+                -- ตรวจสอบว่าติดมุมหรือไม่ (Stuck Detection)
+                if (myRoot.Position - lastPos).Magnitude < 0.5 and myHuman.MoveDirection.Magnitude > 0 then
+                    stuckTime = stuckTime + 0.1
+                else
+                    stuckTime = 0
+                end
+                lastPos = myRoot.Position
+
                 if dist > followDistance then
-                    -- 1. เช็คว่าควรใช้ Pathfinding หรือไม่ (สูงต่างกัน หรือ มองไม่เห็น)
-                    if math.abs(heightDiff) > 4 or not canSeeTarget(myRoot, tRoot) then
-                        local path = PathfindingService:CreatePath({
-                            AgentCanJump = true, 
-                            AgentRadius = 2.5,
-                            AgentHeight = 5
-                        })
-                        path:ComputeAsync(myRoot.Position, tRoot.Position)
+                    local moveDir = (tRoot.Position - myRoot.Position).Unit
+                    
+                    -- โหมดแก้ปัญหาเมื่อติด (Stuck Recovery)
+                    if stuckTime > 0.5 then
+                        myHuman.Jump = true
+                        local escapeDir = getScanDirection(myRoot, moveDir) or -moveDir
+                        myHuman:MoveTo(myRoot.Position + (escapeDir * 10))
+                        task.wait(0.3) -- ให้เวลามันขยับออกจากมุม
+                        stuckTime = 0
+                        continue
+                    end
+
+                    -- เช็คสิ่งกีดขวางระดับเอวและหัว
+                    local lowRay = workspace:Raycast(myRoot.Position + Vector3.new(0,-1,0), moveDir * 6, rayParams)
+                    local highRay = workspace:Raycast(myRoot.Position + Vector3.new(0,1.5,0), moveDir * 6, rayParams)
+
+                    if lowRay then
+                        -- เจอของขวาง
+                        if not highRay then
+                            myHuman.Jump = true -- ของเตี้ยโดดข้าม
+                        end
                         
-                        if path.Status == Enum.PathStatus.Success then
-                            local waypoints = path:GetWaypoints()
-                            local nextWaypoint = waypoints[2]
-                            
-                            if nextWaypoint then
-                                -- **บังคับกระโดดถ้า Waypoint บอก หรือถ้าเป้าหมายอยู่สูงกว่า**
-                                if nextWaypoint.Action == Enum.PathWaypointAction.Jump or heightDiff > 2 then
-                                    myHuman.Jump = true
-                                end
-                                myHuman:MoveTo(nextWaypoint.Position)
-                            end
+                        -- หาทางเบี่ยง
+                        local detour = getScanDirection(myRoot, moveDir)
+                        if detour then
+                            myHuman:MoveTo(myRoot.Position + (detour * 7))
+                        else
+                            myHuman.Jump = true
+                            myHuman:MoveTo(myRoot.Position - (moveDir * 5)) -- ตันถอยหลัง
                         end
                     else
-                        -- 2. เดินตรงปกติ แต่เพิ่มระบบกันติด (Stuck Detection)
-                        local moveDir = (tRoot.Position - myRoot.Position).Unit
+                        -- ทางสะดวก เดินไปหาเป้าหมาย
                         myHuman:MoveTo(tRoot.Position - (moveDir * followDistance))
-                        
-                        -- ยิง Ray เช็คของขวางระดับเข่า
-                        rayParams.FilterDescendantsInstances = {myChar, finalTarget.Character}
-                        local hitCheck = workspace:Raycast(myRoot.Position + Vector3.new(0, -1, 0), moveDir * 3, rayParams)
-                        
-                        if hitCheck and hitCheck.Instance.CanCollide then
-                            myHuman.Jump = true -- เจอของขวางให้โดดทันที
-                        end
-                    end
-                    
-                    -- 3. ตรวจสอบความเร็ว (ถ้าเดินอยู่แต่ตัวไม่ขยับ = ติดแน่นอน)
-                    if myRoot.Velocity.Magnitude < 1 and myHuman.MoveDirection.Magnitude > 0 then
-                        myHuman.Jump = true
                     end
                 else
                     -- ถึงระยะแล้ว
