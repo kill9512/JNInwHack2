@@ -15,27 +15,23 @@ local followEnabled = false
 
 local lastPos = Vector3.new(0,0,0)
 local stuckTime = 0
+local escapeCooldown = 0 -- ตัวล็อกทิศทาง
+local lockedDir = nil
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
--- --- ฟังก์ชันเช็คว่าเกมนี้กระโดดได้ไหม ---
-local function canJump(hum)
-    -- เช็คทั้งระบบ JumpPower และ JumpHeight รวมถึงดูว่า State Jumping โดนปิดหรือไม่
-    local isEnabled = hum:GetStateEnabled(Enum.HumanoidStateType.Jumping)
-    local hasPower = (hum.UseJumpPower and hum.JumpPower > 0) or (not hum.UseJumpPower and hum.JumpHeight > 0)
-    return isEnabled and hasPower
-end
-
--- --- ฟังก์ชันวิเคราะห์ทางเบี่ยง ---
+-- --- ฟังก์ชันวิเคราะห์ทางเบี่ยง (เพิ่มระบบล็อกเป้าหมาย) ---
 local function getBestEscapeDir(myRoot, moveDir)
-    local scanAngles = {30, -30, 60, -60, 90, -90}
+    local scanAngles = {45, -45, 90, -90, 135, -135}
     local bestDir = nil
     local maxFreeDist = 0
 
     for _, angle in ipairs(scanAngles) do
         local rotatedDir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
-        local result = workspace:Raycast(myRoot.Position, rotatedDir * 8, rayParams)
-        local freeDist = result and result.Distance or 8
+        local result = workspace:Raycast(myRoot.Position, rotatedDir * 10, rayParams)
+        
+        local freeDist = result and result.Distance or 10
+        -- เพิ่มโบนัสเล็กน้อยให้ทิศทางที่สแกนแล้วว่างมากพอ
         if freeDist > maxFreeDist then
             maxFreeDist = freeDist
             bestDir = rotatedDir
@@ -44,7 +40,7 @@ local function getBestEscapeDir(myRoot, moveDir)
     return bestDir
 end
 
--- --- UI Setup ---
+-- --- UI Setup (เหมือนเดิม) ---
 Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP"}, function(m) SelectedMode = m end)
 local drop = Section:NewDropdown("Select Player", "Select Target", {}, function(s) 
     SelectedPlayerName = s:match("@([^%)]+)") 
@@ -70,6 +66,7 @@ task.spawn(function()
         if not followEnabled then continue end
         
         local target = nil
+        -- [ส่วนหาเป้าหมายคงเดิม]
         if SelectedMode == "Manual" then
             target = Players:FindFirstChild(SelectedPlayerName or "")
         else
@@ -94,12 +91,20 @@ task.spawn(function()
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
                 local dist = (myRoot.Position - tRoot.Position).Magnitude
                 local moveDir = (tRoot.Position - myRoot.Position).Unit
-                
-                -- ** ตรวจสอบความสามารถในการกระโดดของเกมนี้ **
-                local jumpable = canJump(myHuman)
+                local jumpable = (myHuman.JumpPower > 0 or myHuman.JumpHeight > 0)
 
-                -- ระบบตรวจจับการติด (Stuck Detection)
-                if (myRoot.Position - lastPos).Magnitude < 0.3 and myHuman.MoveDirection.Magnitude > 0 then
+                -- 1. Stuck & Escape Lock System (ระบบแก้การหันไปมา)
+                if escapeCooldown > 0 then
+                    escapeCooldown = escapeCooldown - 0.1
+                    if lockedDir then
+                        myHuman:MoveTo(myRoot.Position + (lockedDir * 8))
+                        if jumpable then myHuman.Jump = true end
+                        continue -- ข้ามการคำนวณอื่นจนกว่าจะหลุดคูลดาวน์
+                    end
+                end
+
+                -- ตรวจจับการนิ่งค้าง
+                if (myRoot.Position - lastPos).Magnitude < 0.4 and myHuman.MoveDirection.Magnitude > 0 then
                     stuckTime = stuckTime + 0.1
                 else
                     stuckTime = 0
@@ -107,37 +112,28 @@ task.spawn(function()
                 lastPos = myRoot.Position
 
                 if dist > followDistance then
-                    -- 1. แก้ติด: ถ้าหยุดนิ่งเกิน 0.3 วิ
-                    if stuckTime > 0.3 then
-                        if jumpable then myHuman.Jump = true end
-                        local escape = getBestEscapeDir(myRoot, moveDir) or -moveDir
-                        myHuman:MoveTo(myRoot.Position + (escape * 7)) 
-                        task.wait(0.2)
-                        stuckTime = 0
-                        continue
-                    end
+                    -- 2. เมื่อติดมุม หรือ เจอสิ่งกีดขวาง
+                    local footHit = workspace:Raycast(myRoot.Position + Vector3.new(0, -1.5, 0), moveDir * 5, rayParams)
+                    local headHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 2, 0), moveDir * 5, rayParams)
 
-                    -- 2. Predictive Raycast (ยิงเลเซอร์เช็คดักหน้า)
-                    -- ยิงระดับเท้า (-1.5) เพื่อเช็คบันไดหรือของเตี้ย
-                    local footHit = workspace:Raycast(myRoot.Position + Vector3.new(0, -1.5, 0), moveDir * 4, rayParams)
-                    -- ยิงระดับเอว (0) เพื่อเช็คสิ่งกีดขวางทั่วไป
-                    local kneeHit = workspace:Raycast(myRoot.Position, moveDir * 4, rayParams)
-                    -- ยิงระดับหัว (2.5) เพื่อเช็คเพดานหรือกำแพงสูง
-                    local headHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 2.5, 0), moveDir * 4, rayParams)
-
-                    if footHit or kneeHit then
-                        -- ** หัวใจสำคัญ: ถ้าเท้าติดแต่หัวโล่ง และเกมโดดได้ -> กดโดดทันทีไม่ต้องรอติด! **
-                        if jumpable and not headHit then
-                            myHuman.Jump = true
-                        end
-                        
-                        -- หักเลี้ยวควบคู่ไปด้วยเพื่อความลื่นไหล
+                    if stuckTime > 0.3 or footHit then
+                        -- ตัดสินใจเลือกทางเบี่ยง
                         local bestDir = getBestEscapeDir(myRoot, moveDir)
+                        
                         if bestDir then
-                            myHuman:MoveTo(myRoot.Position + (bestDir * 6))
+                            -- ล็อกทิศทางนี้ไว้ 0.7 วินาที เพื่อไม่ให้หันกลับไปกลับมา
+                            lockedDir = bestDir
+                            escapeCooldown = 0.7
+                            
+                            if jumpable and not headHit then
+                                myHuman.Jump = true
+                            end
+                            
+                            myHuman:MoveTo(myRoot.Position + (lockedDir * 8))
+                            stuckTime = 0
                         end
                     else
-                        -- ทางสะดวก เดินปกติ
+                        -- 3. ทางสะดวก เดินปกติ
                         myHuman:MoveTo(tRoot.Position - (moveDir * followDistance))
                     end
                 else
