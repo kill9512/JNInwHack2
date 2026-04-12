@@ -50,7 +50,7 @@ local drop = Section:NewDropdown("Select Player", "Manual selection", UpdatePlay
         SelectedPlayer = name
     end
 end)
-
+drop:Refresh(UpdatePlayerTable())
 -- 3. ปุ่ม Refresh รายชื่อ
 Section:NewButton("Refresh Players", "Update manual list", function()
     drop:Refresh(UpdatePlayerTable())
