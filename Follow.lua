@@ -15,53 +15,35 @@ local followEnabled = false
 
 local lastPos = Vector3.new(0,0,0)
 local stuckTime = 0
+local jumpCooldown = 0
 local detourTimer = 0
 local lockedDir = nil
+local blockedAngles = {} -- จำมุมที่เดินไปไม่ได้ชั่วคราว
+
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
--- --- ฟังก์ชันสั่งกระโดดแบบบังคับ (Force Jump) ---
-local function forceJump(hum)
-    if hum.FloorMaterial ~= Enum.Material.Air then -- กระโดดเฉพาะเมื่ออยู่บนพื้น
-        hum.Jump = true
-        hum:ChangeState(Enum.HumanoidStateType.Jumping)
-    end
-end
-
--- --- ฟังก์ชันวิเคราะห์ทาง 180 องศา (7 Rays Scan) ---
-local function findBestPath(myRoot, moveDir)
-    local scanAngles = {-90, -60, -30, 0, 30, 60, 90}
+-- --- ฟังก์ชันแสกนหาทางเดินที่ไปต่อได้จริงๆ ---
+local function scanSidePaths(myRoot, moveDir)
+    -- แสกนมุมกว้าง 45, 90, 135 องศา ทั้งซ้ายและขวา
+    local scanAngles = {60, -60, 90, -90, 135, -135}
     local bestDir = nil
-    local bestScore = -1
+    local maxDist = 0
 
     for _, angle in ipairs(scanAngles) do
         local rotatedDir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
-        local score = 0
+        local result = workspace:Raycast(myRoot.Position, rotatedDir * 12, rayParams)
         
-        local footHit = workspace:Raycast(myRoot.Position + Vector3.new(0, -1.5, 0), rotatedDir * 8, rayParams)
-        local kneeHit = workspace:Raycast(myRoot.Position, rotatedDir * 8, rayParams)
-        local headHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 2.5, 0), rotatedDir * 8, rayParams)
-
-        if not footHit and not kneeHit then
-            score = 10 
-        elseif footHit and not headHit then
-            score = 7 -- คะแนนสูงสำหรับทางที่กระโดดได้
-        elseif footHit and headHit then
-            score = 1 
-        end
-
-        local dist = (footHit and footHit.Distance) or 8
-        score = score + dist
-
-        if score > bestScore then
-            bestScore = score
+        local freeDist = result and result.Distance or 12
+        if freeDist > maxDist then
+            maxDist = freeDist
             bestDir = rotatedDir
         end
     end
     return bestDir
 end
 
--- --- UI Setup (เหมือนเดิม) ---
+-- --- UI Setup ---
 Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP"}, function(m) SelectedMode = m end)
 local drop = Section:NewDropdown("Select Player", "Target", {}, function(s) 
     SelectedPlayerName = s:match("@([^%)]+)") 
@@ -111,13 +93,9 @@ task.spawn(function()
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
                 local dist = (myRoot.Position - tRoot.Position).Magnitude
                 local moveDir = (tRoot.Position - myRoot.Position).Unit
-                local heightDiff = tRoot.Position.Y - myRoot.Position.Y
                 
-                -- เช็คว่าเกมนี้กระโดดได้ไหม
-                local canJump = myHuman.JumpPower > 0 or myHuman.JumpHeight > 0
-
-                -- Stuck Detection
-                if (myRoot.Position - lastPos).Magnitude < 0.4 and myHuman.MoveDirection.Magnitude > 0 then
+                -- ตรวจสอบการติด (Stuck)
+                if (myRoot.Position - lastPos).Magnitude < 0.3 and myHuman.MoveDirection.Magnitude > 0 then
                     stuckTime = stuckTime + 0.1
                 else
                     stuckTime = 0
@@ -125,37 +103,41 @@ task.spawn(function()
                 lastPos = myRoot.Position
 
                 if dist > followDistance then
-                    -- 1. ระบบล็อกทิศทางเลี่ยง
+                    -- ** 1. ระบบจัดการเมื่อติดมุม (Stuck Recovery) **
                     if detourTimer > 0 then
                         detourTimer = detourTimer - 0.1
-                        if lockedDir then
-                            myHuman:MoveTo(myRoot.Position + (lockedDir * 5))
-                            -- ถ้าเป้าหมายอยู่สูงกว่า หรือติดมุม ให้กระโดด
-                            if canJump and (heightDiff > 2 or stuckTime > 0.2) then
-                                forceJump(myHuman)
-                            end
-                        end
+                        myHuman:MoveTo(myRoot.Position + (lockedDir * 7))
                         continue
                     end
 
-                    -- 2. วิเคราะห์สิ่งกีดขวางข้างหน้า
+                    -- ตรวจสอบสิ่งกีดขวางข้างหน้า
                     local frontHit = workspace:Raycast(myRoot.Position, moveDir * 5, rayParams)
-                    local headHit = workspace:Raycast(myRoot.Position + Vector3.new(0, 2.5, 0), moveDir * 5, rayParams)
 
-                    if stuckTime > 0.3 or frontHit or heightDiff > 3 then
-                        local best = findBestPath(myRoot, moveDir)
-                        if best then
-                            lockedDir = best
-                            detourTimer = 0.8 
-                            if canJump and not headHit then forceJump(myHuman) end
-                            myHuman:MoveTo(myRoot.Position + (lockedDir * 5))
+                    if stuckTime > 0.4 or frontHit then
+                        -- ** ลองกระโดดเช็คก่อน 1 ครั้ง (Trial Jump) **
+                        if jumpCooldown <= 0 then
+                            myHuman.Jump = true
+                            jumpCooldown = 10 -- คูลดาวน์โดด 1 วินาที (ป้องกันโดดไม่หยุด)
+                            task.wait(0.2) -- รอดูผลลัพธ์การโดด
+                        end
+                        
+                        -- ถ้ากระโดดแล้วยังติด (พิกัดไม่เปลี่ยน) ให้หักเลี้ยวทันที
+                        if stuckTime > 0.5 then
+                            local escape = scanSidePaths(myRoot, moveDir)
+                            if escape then
+                                lockedDir = escape
+                                detourTimer = 1.2 -- ล็อกทางเบี่ยงไว้ 1.2 วินาที เพื่อให้พ้นมุม
+                                myHuman:MoveTo(myRoot.Position + (lockedDir * 7))
+                                stuckTime = 0
+                            end
                         end
                     else
-                        -- ทางสะดวก เดินไปหาเป้าหมาย
+                        -- ทางสะดวก เดินไปหาเป้าหมายปกติ
                         myHuman:MoveTo(tRoot.Position)
-                        -- ถ้าต้องขึ้นบันได (เป้าหมายสูงกว่า) ให้กระโดดดักหน้า
-                        if heightDiff > 1.5 and canJump then forceJump(myHuman) end
                     end
+                    
+                    -- ลดคูลดาวน์กระโดด
+                    if jumpCooldown > 0 then jumpCooldown = jumpCooldown - 1 end
                 else
                     -- ถึงระยะแล้ว
                     myHuman:MoveTo(myRoot.Position)
