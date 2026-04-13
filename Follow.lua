@@ -42,7 +42,6 @@ local function drawPath(waypoints)
         p.Anchored, p.CanCollide, p.CanQuery = true, false, false
         p.Material, p.Transparency = Enum.Material.Neon, 0.3
         
-        -- ถ้าเป็นจุดที่ต้องกระโดด ให้เป็นสีแดง
         if wp.Action == Enum.PathWaypointAction.Jump then
             p.Color = Color3.fromRGB(255, 0, 0)
         else
@@ -88,7 +87,7 @@ MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s e
 -- --- MAIN LOOP ---
 task.spawn(function()
     while true do
-        task.wait(0.1) -- ลด delay ลงเพื่อให้เดินสมูทขึ้น
+        task.wait(0.1)
         if not followEnabled then continue end
         
         pcall(function()
@@ -121,20 +120,17 @@ task.spawn(function()
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
 
                 if dist > followDistance then
-                    -- เช็คทางตรง (ลบเรื่องแกน Y ออก เพื่อให้มันเช็คทางโล่งได้แม่นขึ้น)
                     local moveDir = (targetPos - currentPos).Unit
                     local directRay = workspace:Raycast(currentPos, moveDir * dist, rayParams)
 
-                    -- คำนวณหา Path ใหม่ เมื่อเป้าหมายขยับเกิน 8 Studs หรือไม่ได้คำนวณมานานกว่า 1 วินาที
                     if os.clock() - lastComputeTime > 1.0 or (targetPos - lastTargetPos).Magnitude > 8 then
-                        -- ** ปรับแต่ง AI สำหรับบันไดและบล็อคลอย **
                         local path = PathfindingService:CreatePath({
-                            AgentRadius = 1.5,     -- ทำตัวให้ผอมลง จะได้เดินบนบล็อคแคบๆ ได้
+                            AgentRadius = 1.5,
                             AgentHeight = 5, 
                             AgentCanJump = true,
-                            AgentMaxJumpHeight = 15, -- ยอมให้กระโดดได้สูงขึ้นเพื่อข้ามบล็อคลอย
-                            AgentMaxSlope = 50,    -- เดินทางลาดชันได้ดีขึ้น
-                            WaypointSpacing = 3    -- วางจุดถี่ขึ้น ทำให้ไม่หล่นเวลาเดินบนบล็อค
+                            AgentMaxJumpHeight = 15,
+                            AgentMaxSlope = 50,
+                            WaypointSpacing = 3
                         })
                         
                         path:ComputeAsync(currentPos, targetPos)
@@ -146,37 +142,65 @@ task.spawn(function()
                             lastComputeTime = os.clock()
                             drawPath(currentWaypoints)
                         else
-                            -- ถ้าหาทางไม่ได้จริงๆ (อยู่ใต้เพดานตันๆ) ให้เคลียร์ทางทิ้ง
                             currentWaypoints = {}
                         end
                     end
 
-                    -- ** ระบบเดินตาม Waypoint (แบบคลาสสิกและเสถียรสุด) **
                     if #currentWaypoints > 0 and currentWaypointIndex <= #currentWaypoints then
+                        -- ** HYBRID MODE: ยิงเรดาร์เช็คเพดานสูง 15 Studs **
+                        local ceilingHit = workspace:Raycast(currentPos, Vector3.new(0, 15, 0), rayParams)
+                        local isOutdoors = (ceilingHit == nil) -- ถ้าไม่โดนอะไรเลย = กลางแจ้ง
+
+                        -- ถ้อยู่กลางแจ้ง ให้เปิดโหมดลัดจุด (Lightweight Smoothing)
+                        if isOutdoors then
+                            -- มองล่วงหน้าแค่ 4 จุด (กันค้าง) ทำงานย้อนกลับจากไกลมาใกล้
+                            local maxLookAhead = math.min(currentWaypointIndex + 4, #currentWaypoints)
+                            local targetIndex = currentWaypointIndex
+                            
+                            for i = maxLookAhead, currentWaypointIndex + 1, -1 do
+                                local checkWp = currentWaypoints[i]
+                                
+                                -- ห้ามข้ามจุดกระโดด หรือ จุดที่ความสูงต่างกันเกินไป
+                                if checkWp.Action == Enum.PathWaypointAction.Jump or math.abs(checkWp.Position.Y - currentPos.Y) > 2 then
+                                    continue
+                                end
+                                
+                                -- เช็คทางลัดทะลุ (ยิงระดับอก Y+3)
+                                local startRay = currentPos + Vector3.new(0, 3, 0)
+                                local endRay = checkWp.Position + Vector3.new(0, 3, 0)
+                                local hit = workspace:Raycast(startRay, endRay - startRay, rayParams)
+                                
+                                if not hit then
+                                    targetIndex = i -- ทางโล่ง อัพเดทเป้าหมายลัดแล้วหยุดลูป
+                                    break
+                                end
+                            end
+                            currentWaypointIndex = targetIndex
+                        end
+
+                        -- เดินไปยังจุดเป้าหมาย (ที่อาจจะโดนลัดมาแล้ว)
                         local wp = currentWaypoints[currentWaypointIndex]
                         myHuman:MoveTo(wp.Position)
                         
-                        -- เช็คระยะห่างระหว่างบอทกับจุด Waypoint
                         local distXZ = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude
                         local distY = wp.Position.Y - currentPos.Y
 
-                        -- 1. ถ้าจุดหมายอยู่สูงกว่าตัวเรา หรือเป็นจุดที่ต้องกระโดด ให้กระโดดทันที
+                        -- โหมดกระโดด
                         if wp.Action == Enum.PathWaypointAction.Jump or distY > 1.5 then
                             forceJump(myHuman)
                         end
 
-                        -- 2. ถ้าเดินมาถึงจุดแล้ว (ให้ระยะคลาดเคลื่อนได้ 3 Studs) ให้ขยับไปจุดถัดไป
-                        if distXZ < 3 then
+                        -- ขยับไปจุดถัดไป: ถ้าอยู่กลางแจ้งยอมให้เดินห่างเป้าได้ (4 Studs) แต่ถ้าในตึกบังคับเหยียบเป๊ะๆ (2.5 Studs)
+                        local passDist = isOutdoors and 4 or 2.5
+                        if distXZ < passDist then
                             currentWaypointIndex = currentWaypointIndex + 1
                         end
                     else
-                        -- ถ้าไม่มี Waypoint (ทางตัน หรือเดินถึงจุดสุดท้ายแล้วแต่ยังไม่ถึงเป้า) 
-                        -- ลองเดินตรงเข้าไปหาเป้าหมายเลย ถ้าติดกำแพงให้กระโดดรัวๆ (แก้บัคติดใต้ผู้เล่น)
+                        -- ไม่มีทางเดิน -> เดินใส่เป้าหมายตรงๆ ถ้าติดกำแพงให้กระโดด
                         myHuman:MoveTo(targetPos)
                         if directRay then forceJump(myHuman) end
                     end
                 else
-                    -- ถึงเป้าหมายแล้ว หยุดเดิน
                     myHuman:MoveTo(currentPos)
                 end
             end
