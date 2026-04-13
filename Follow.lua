@@ -55,20 +55,31 @@ local function forceJump(hum)
     end
 end
 
-local function findNearestLadder(myPos)
-    local nearest = nil
-    local minDist = 80 
+-- [อัปเดตใหม่!] ระบบหาบันไดที่ "ดีที่สุด" ไม่ใช่แค่ "ใกล้ที่สุด"
+local function findBestLadder(myPos, targetPos)
+    local bestLadder = nil
+    local bestScore = math.huge
+    local searchRadius = 150 -- ขยายรัศมีการมองหาเผื่อบ้านต้นไม้ใหญ่มาก
     
     for _, v in pairs(workspace:GetDescendants()) do
         if (v:IsA("TrussPart") or v.Name:lower():find("ladder") or v.Name:lower():find("stair")) and v:IsA("BasePart") then
-            local d = (v.Position - myPos).Magnitude
-            if d < minDist then
-                minDist = d
-                nearest = v
+            local distFromMe = (v.Position - myPos).Magnitude
+            if distFromMe < searchRadius then
+                -- วัดระยะห่างจาก 'บันได' ไปหา 'เป้าหมาย' (คิดแค่แนวราบ X, Z)
+                local distToTargetXZ = (Vector3.new(v.Position.X, 0, v.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
+                
+                -- สูตรคำนวณคะแนน: ให้ความสำคัญกับบันไดที่อยู่ "ใต้ตีนเป้าหมาย" มากที่สุด (distToTargetXZ น้อยๆ)
+                -- และบวกระยะทางบอทไปนิดหน่อย (distFromMe * 0.2) เพื่อไม่ให้มันวิ่งไปบันไดที่ไกลเกินความจำเป็น
+                local score = distToTargetXZ + (distFromMe * 0.2)
+                
+                if score < bestScore then
+                    bestScore = score
+                    bestLadder = v
+                end
             end
         end
     end
-    return nearest
+    return bestLadder
 end
 
 local function getProbingDirection(myRoot, targetPos)
@@ -257,24 +268,21 @@ task.spawn(function()
 
                         if isProbing then
                             if vDist > 10 then 
-                                local targetLadder = findNearestLadder(currentPos)
+                                -- [แก้ไข] เรียกใช้ findBestLadder พร้อมส่งเป้าหมายให้มันไปคำนวณด้วย
+                                local targetLadder = findBestLadder(currentPos, targetPos)
+                                
                                 if targetLadder then
                                     updateDebug("ProbeTrace", currentPos, targetLadder.Position, Color3.fromRGB(255, 0, 255))
                                     
-                                    -- [อัปเดตแก้ปัญหาบันไดลอย] 
-                                    -- หาเวกเตอร์แนวราบเพื่อดันทุรังไถเข้าหาแกนบันได
                                     local flatDir = (Vector3.new(targetLadder.Position.X, 0, targetLadder.Position.Z) - Vector3.new(currentPos.X, 0, currentPos.Z))
                                     local dist2DToLadder = flatDir.Magnitude
                                     
                                     if dist2DToLadder > 0.1 then
-                                        -- เดินทะลุแกนบันไดไปนิดนึงเพื่อสร้างแรงบี้กำแพง
                                         myHuman:MoveTo(targetLadder.Position + (flatDir.Unit * 2))
                                     else
                                         myHuman:MoveTo(targetLadder.Position)
                                     end
                                     
-                                    -- ถ้าระยะแนวราบ (X, Z) มาถึงใต้บันไดแล้ว (น้อยกว่า 4 สตัดส์)
-                                    -- ให้กระโดดรัวๆ เพื่อคว้าบันไดที่ลอยอยู่ข้างบนหัว
                                     if dist2DToLadder < 4 then
                                         forceJump(myHuman)
                                     end
