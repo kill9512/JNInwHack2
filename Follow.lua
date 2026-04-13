@@ -22,6 +22,11 @@ local lastTargetPos = Vector3.new()
 local isProbing = false
 local isFollowingCustomPath = false 
 
+-- [ตัวแปรใหม่สำหรับโหมดหนี]
+local isEscaping = false
+local escapeEndTime = 0
+local escapeTarget = Vector3.new()
+
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
@@ -77,7 +82,6 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- [ปรับปรุง] เรดาร์พุ่งขึ้นฟ้า ให้มองหาบล็อกสูงๆ และหลบเลี่ยงเพดานแต่แรก
 local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
     local customWaypoints = {}
     local currentScanPos = startPos
@@ -94,7 +98,6 @@ local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
         local bestNextPos = nil
         local bestScore = math.huge
         
-        -- สแกนหากล่องหรือพื้นที่เหยียบได้ สูงขึ้นไปถึง 15 สตั๊ด
         local searchCenter = currentScanPos + Vector3.new(0, 10, 0) 
         local partsNearby = workspace:GetPartBoundsInRadius(searchCenter, 10, params)
         
@@ -107,10 +110,7 @@ local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
                     local hitPos = downRay.Position
                     local heightDiff = hitPos.Y - currentScanPos.Y
                     
-                    -- [กุญแจสำคัญ] ต้องมี Headroom โล่งจริงๆ ถึงจะพิจารณา
                     if heightDiff > 0.5 and heightDiff <= 12.0 and hasHeadroom(hitPos) then
-                        
-                        -- ตรวจสอบเพดานระหว่างจุดกระโดด
                         local jumpPathClear = true
                         local jumpRayDir = hitPos - currentScanPos
                         local jumpRay = workspace:Raycast(currentScanPos, jumpRayDir, rayParams)
@@ -137,7 +137,6 @@ local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
             end
         end
         
-        -- ถ้าหาบล็อกลอยไม่เจอ ลองยิงหา "กำแพงแบบตรงๆ"
         if not bestNextPos then
             local baseDir = (Vector3.new(targetPos.X, 0, targetPos.Z) - Vector3.new(currentScanPos.X, 0, currentScanPos.Z)).Unit
             if baseDir.Magnitude == baseDir.Magnitude then
@@ -214,6 +213,7 @@ MoveSection:NewToggle("Enable Follow", "Start Logic", function(s)
         clearVisuals()
         isProbing = false
         isFollowingCustomPath = false 
+        isEscaping = false
     end
 end)
 MoveSection:NewToggle("Show Path", "Visuals", function(s) debugEnabled = s end)
@@ -271,7 +271,24 @@ task.spawn(function()
                 local isClimbingState = (myHuman:GetState() == Enum.HumanoidStateType.Climbing)
 
                 -- =======================================================
-                -- [ระบบล็อคสถานะขั้นเด็ดขาด + Timeout ถอดใจ]
+                -- [1. ระบบล็อคสถานะหนี (Escape Lock)]
+                -- ป้องกันการโดนแย่งการควบคุมตอนที่บอทกำลังพยายามเดินออกจากใต้หลังคา
+                -- =======================================================
+                if isEscaping then
+                    if os.clock() < escapeEndTime then
+                        -- ยังอยู่ในช่วงเวลาหนี ให้บังคับเดินไปที่จุดหนีเท่านั้น!
+                        updateDebug("DirectTrace", currentPos, escapeTarget, Color3.fromRGB(255, 0, 255)) -- เส้นสีม่วงคือบอทกำลังหนี
+                        myHuman:MoveTo(escapeTarget)
+                        return -- ข้ามลอจิกเดินตามเป้าหมายไปเลย จนกว่าจะหมดเวลาหนี!
+                    else
+                        -- หมดเวลาหนีแล้ว ปลดล็อค
+                        isEscaping = false
+                        lastMoveTick = os.clock() -- รีเซ็ตเวลาเพื่อไม่ให้มันสุ่มหนีซ้ำทันที
+                    end
+                end
+
+                -- =======================================================
+                -- [2. ระบบล็อคสถานะปีนป่าย (Climb Lock)]
                 -- =======================================================
                 if isFollowingCustomPath and #currentWaypoints > 0 then
                     if os.clock() - lastMoveTick > 2.5 then
@@ -307,22 +324,28 @@ task.spawn(function()
                 end
                 -- =======================================================
 
-                -- [ปรับปรุง] เช็คการติดขัด (Stuck) โหมดปกติ + ถอยออกจากเพดาน
+                -- [ปรับปรุง] เช็คการติดขัด (Stuck) โหมดปกติ + เปิดโหมดหนี
                 if (currentPos - lastPosition).Magnitude < 0.5 then
                     if os.clock() - lastMoveTick > 1.5 then 
                         currentWaypoints = {} 
                         lastMoveTick = os.clock()
                         
-                        -- ถ้ารู้สึกตัวว่าติดขัด ให้เดินถอยหลังหรือเฉียงๆ ออกมาเพื่อหาพื้นที่ใหม่
-                        local randomEscapeAngle = math.rad(math.random(90, 270))
+                        -- เปิดโหมดหนี (Escape Lock) ให้เวลา 1.5 วินาที
+                        isEscaping = true
+                        escapeEndTime = os.clock() + 1.5
+                        
+                        -- สุ่มทิศทางหนีออกด้านหลังหรือเฉียงๆ
+                        local randomEscapeAngle = math.rad(math.random(110, 250))
                         local moveDir = (targetPos - currentPos).Unit
                         local escapeDir = (CFrame.Angles(0, randomEscapeAngle, 0) * moveDir).Unit
-                        myHuman:MoveTo(currentPos + (escapeDir * 15))
-                        return -- ข้ามลอจิกอื่นๆ ไปเลยเพื่อให้มันเดินหนีออกจากมุมอับก่อน
+                        escapeTarget = currentPos + (escapeDir * 15)
+                        
+                        myHuman:MoveTo(escapeTarget)
+                        return -- เริ่มเดินหนี
                     end
                 else
                     lastPosition = currentPos
-                    if not isFollowingCustomPath then lastMoveTick = os.clock() end
+                    if not isFollowingCustomPath and not isEscaping then lastMoveTick = os.clock() end
                 end
 
                 if hDist > followDistance or math.abs(vDist) > 5 then
