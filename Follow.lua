@@ -144,7 +144,13 @@ task.spawn(function()
                     else
                         -- 2. ทางตัน/อยู่ในตึก -> ใช้ Pathfinding
                         if os.clock() - lastComputeTime > 1.0 or (targetPos - lastTargetPos).Magnitude > 8 then
-                            local path = PathfindingService:CreatePath({AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true})
+                            -- แก้ไข 1: ลด AgentRadius ลงเหลือ 2 เพื่อให้เดินขึ้นบันไดแคบได้ และเพิ่ม WaypointSpacing
+                            local path = PathfindingService:CreatePath({
+                                AgentRadius = 2, 
+                                AgentHeight = 5, 
+                                AgentCanJump = true,
+                                WaypointSpacing = 4 
+                            })
                             path:ComputeAsync(currentPos, targetPos)
                             
                             if path.Status == Enum.PathStatus.Success then
@@ -189,19 +195,20 @@ task.spawn(function()
                             for i = currentWaypointIndex, #currentWaypoints do
                                 local checkWp = currentWaypoints[i]
                                 
-                                -- ถ้าจุดข้างหน้าบังคับกระโดด ห้ามข้ามเด็ดขาด (เดี๋ยวติดเนิน)
                                 if checkWp.Action == Enum.PathWaypointAction.Jump then
                                     targetIndex = i
                                     break
                                 end
 
-                                local dir = (checkWp.Position - currentPos)
+                                -- แก้ไข 2: ยกจุดปลายทาง Raycast ขึ้นมาระดับอก (Y+3) เพื่อหลบขอบขั้นบันได
+                                local rayTargetPos = checkWp.Position + Vector3.new(0, 3, 0)
+                                local dir = rayTargetPos - currentPos
                                 local hit = workspace:Raycast(currentPos, dir, rayParams)
                                 
                                 if not hit then
                                     targetIndex = i -- ทางโล่ง อัพเดทให้ลัดมาจุดนี้เลย
                                 else
-                                    break -- ติดกำแพง แปลว่าข้ามไกลกว่านี้ไม่ได้แล้ว หักเลี้ยวตรงนี้
+                                    break -- ติดกำแพง/บันได แปลว่าต้องหักเลี้ยวตรงนี้
                                 end
                             end
                             
@@ -211,13 +218,14 @@ task.spawn(function()
                             if wp then
                                 myHuman:MoveTo(wp.Position)
                                 
-                                -- ถ้าระยะห่างถึงจุดหมายน้อยกว่า 3.5 ให้ขยับไปจุดถัดไป
-                                if (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude < 3.5 then
+                                -- แก้ไข 3: ใช้ระยะ 3 มิติ (Magnitude) เช็คแกน Y ด้วย บอทจะได้ไม่ข้ามจุดเวลาอยู่ใต้บันได
+                                local distToWp = (currentPos - wp.Position).Magnitude
+                                if distToWp < 4.5 then
                                     currentWaypointIndex = currentWaypointIndex + 1
                                 end
                                 
                                 -- เช็คกระโดด
-                                if wp.Action == Enum.PathWaypointAction.Jump or wp.Position.Y > currentPos.Y + 2 then
+                                if wp.Action == Enum.PathWaypointAction.Jump or wp.Position.Y > currentPos.Y + 2.5 then
                                     forceJump(myHuman)
                                 end
                             end
