@@ -27,6 +27,9 @@ rayParams.FilterType = Enum.RaycastFilterType.Exclude
 local lastPosition = Vector3.new()
 local lastMoveTick = os.clock()
 
+-- [ใหม่] ตัวแปรสำหรับจำเป้าหมายที่โดนสุ่ม จะได้ไม่เปลี่ยนเป้ารัวๆ
+local randomTarget = nil 
+
 -- --- Debug Visualization ---
 local function updateDebug(name, startPos, endPos, color)
     if not debugEnabled then 
@@ -76,39 +79,25 @@ local function getProbingDirection(myRoot, targetPos)
 end
 
 -- --- UI ---
--- [เพิ่ม] โหมด Random
+-- [แก้] เพิ่มโหมด "Random" เข้าไปใน Dropdown
 Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP", "Random"}, function(m) 
     SelectedMode = m 
+    if m == "Random" then randomTarget = nil end -- รีเซ็ตการสุ่มใหม่เมื่อกดเลือก
 end)
 
--- [เพิ่ม] ช่องพิมพ์ค้นหาชื่อ (TextBox) ค้นหาจากบางส่วนของชื่อได้
-Section:NewTextBox("Type Name (Search)", "Type exact or partial name", function(txt)
-    if txt ~= "" then
-        SelectedMode = "Manual" -- ถ้าพิมพ์ชื่อให้เปลี่ยนโหมดเป็น Manual ทันที
-        local foundName = nil
-        local lowerTxt = string.lower(txt)
-        
-        -- วนหาว่ามีใครชื่อคล้ายๆ ที่พิมพ์มาไหม
-        for _, p in pairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer and (string.find(string.lower(p.Name), lowerTxt) or string.find(string.lower(p.DisplayName), lowerTxt)) then
-                foundName = p.Name
-                break
-            end
-        end
-        
-        if foundName then
-            SelectedPlayerName = foundName
-            print("Target locked to: " .. foundName)
-        else
-            print("Player not found!")
+-- [ใหม่] ช่องกรอกชื่อสำหรับค้นหา
+Section:NewTextBox("Search Player", "พิมพ์ชื่อ หรือ Display Name", function(txt)
+    local lowerTxt = txt:lower()
+    for _, p in pairs(Players:GetPlayers()) do 
+        if p ~= LocalPlayer and (p.Name:lower():find(lowerTxt) or p.DisplayName:lower():find(lowerTxt)) then
+            SelectedPlayerName = p.Name
+            SelectedMode = "Manual" -- บังคับเปลี่ยนเป็นโหมด Manual อัตโนมัติเมื่อค้นหาเจอ
+            break
         end
     end
 end)
 
-local drop = Section:NewDropdown("Select Target (List)", "User", {}, function(s) 
-    SelectedMode = "Manual" -- ถ้ากดจากลิสต์ให้เปลี่ยนเป็น Manual
-    SelectedPlayerName = s:match("@([^%)]+)") 
-end)
+local drop = Section:NewDropdown("Select Target", "User", {}, function(s) SelectedPlayerName = s:match("@([^%)]+)") end)
 
 local function refreshList()
     local t = {"None (Off)"}
@@ -131,37 +120,30 @@ MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s e
 -- --- MAIN LOOP ---
 task.spawn(function()
     while true do
-        task.wait(0.05) 
+        task.wait(0.05)
         if not followEnabled then continue end
         
         pcall(function()
             local target = nil
             
-            -- [แก้ไข] ระบบจัดการเป้าหมายตามโหมด
+            -- [แก้] เพิ่มระบบประมวลผลการสุ่ม และการหาเป้าหมาย
             if SelectedMode == "Manual" then
                 target = Players:FindFirstChild(SelectedPlayerName or "")
             elseif SelectedMode == "Random" then
-                -- สุ่มเป้าหมายใหม่ (ถ้ายังไม่มีเป้าหมาย หรือเป้าหมายเดิมตาย/ออกเกม)
-                if not SelectedPlayerName or not Players:FindFirstChild(SelectedPlayerName) then
-                    local allPlayers = Players:GetPlayers()
+                -- ถ้ายังไม่มีเป้าหมาย หรือ เป้าหมายตาย/ออกเกม ให้ทำการสุ่มใหม่
+                if not randomTarget or not randomTarget.Parent or not randomTarget.Character or not randomTarget.Character:FindFirstChild("Humanoid") or randomTarget.Character.Humanoid.Health <= 0 then
                     local validPlayers = {}
-                    
-                    for _, p in pairs(allPlayers) do
-                        if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                    for _, p in pairs(Players:GetPlayers()) do
+                        if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health > 0 then
                             table.insert(validPlayers, p)
                         end
                     end
-                    
                     if #validPlayers > 0 then
-                        local randPlayer = validPlayers[math.random(1, #validPlayers)]
-                        SelectedPlayerName = randPlayer.Name
-                        target = randPlayer
+                        randomTarget = validPlayers[math.random(1, #validPlayers)]
                     end
-                else
-                    target = Players:FindFirstChild(SelectedPlayerName)
                 end
+                target = randomTarget
             else
-                -- โหมด HP
                 local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
                 for _, p in pairs(Players:GetPlayers()) do
                     if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") then
@@ -171,14 +153,9 @@ task.spawn(function()
                         end
                     end
                 end
-                if target then SelectedPlayerName = target.Name end
             end
 
-            if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then 
-                -- ถ้าระบบ Random หาผู้เล่นไม่เจอให้รีเซ็ตชื่อรอสุ่มรอบหน้า
-                if SelectedMode == "Random" then SelectedPlayerName = nil end
-                return 
-            end
+            if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then return end
 
             local myChar = LocalPlayer.Character
             local myHuman = myChar:FindFirstChildOfClass("Humanoid")
@@ -317,11 +294,6 @@ task.spawn(function()
                 else
                     currentWaypoints = {}
                     myHuman:MoveTo(currentPos)
-                    
-                    -- ถ้าระบบ Random เดินมาจนถึงเป้าหมายแล้ว ให้มันรีเซ็ตเพื่อหาเหยื่อรายต่อไปขำๆ
-                    if SelectedMode == "Random" and (os.clock() - lastComputeTime > 5.0) then
-                        SelectedPlayerName = nil
-                    end
                 end
             end
         end)
