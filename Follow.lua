@@ -59,21 +59,75 @@ local function getProbingDirection(myRoot, targetPos)
     local currentPos = myRoot.Position
     local baseDir = (targetPos - currentPos).Unit
     local scanAngles = {0, 30, -30, 60, -60, 90, -90, 135, -135} 
-    
     local bestDir = nil
     local maxDist = 0
-    
     for _, angle in ipairs(scanAngles) do
         local dir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(baseDir.X, 0, baseDir.Z)).Unit
         local ray = workspace:Raycast(currentPos, dir * 15, rayParams)
         local d = ray and ray.Distance or 15
-        
-        if d > maxDist then
-            maxDist = d
-            bestDir = dir
-        end
+        if d > maxDist then maxDist = d; bestDir = dir end
     end
     return bestDir
+end
+
+-- [ใหม่ล่าสุด] ฟังก์ชันหา "ตัวนำกระแส" คำนวณล่วงหน้าเป็นขั้นบันได
+local function computeLadderPath(startPos, targetPos, myChar, tChar)
+    local customWaypoints = {}
+    local currentScanPos = startPos
+    local maxJumps = 20 -- ลิมิตการสแกน เพื่อไม่ให้เกมแลค
+    local jumpRadius = 15 -- รัศมีการหาบล็อกรอบตัว (แนวนอน)
+    local jumpHeight = 7  -- ระยะปีน/กระโดด (แนวตั้ง)
+
+    local params = OverlapParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {myChar, tChar, workspace.Terrain} 
+
+    for i = 1, maxJumps do
+        -- จุดศูนย์กลางเรดาร์ ยกสูงขึ้นเพื่อหาของที่อยู่เหนือหัวนิดนึง
+        local searchCenter = currentScanPos + Vector3.new(0, jumpHeight/2, 0)
+        local partsNearby = workspace:GetPartBoundsInRadius(searchCenter, jumpRadius, params)
+        
+        local bestPart = nil
+        local bestScore = math.huge
+        local bestTopPos = nil
+        
+        for _, part in ipairs(partsNearby) do
+            -- ต้องเป็น Part ที่มี Collision
+            if part:IsA("BasePart") and part.CanCollide and part.Transparency < 1 then
+                -- หาจุดกึ่งกลางด้านบนสุดของ Part
+                local topPos = part.Position + Vector3.new(0, (part.Size.Y/2) + 1, 0)
+                local heightDiff = topPos.Y - currentScanPos.Y
+                
+                -- เงื่อนไข: ต้องสูงกว่าจุดที่เราอยู่ (ปีนขึ้น) แต่ต้องไม่สูงเกินไปจนโดดไม่ถึง
+                if heightDiff > 0.5 and heightDiff <= jumpHeight then
+                    -- คำนวณคะแนน: ยิ่งพาเราไปใกล้เป้าหมายยิ่งดี
+                    local distToTarget = (topPos - targetPos).Magnitude
+                    if distToTarget < bestScore then
+                        bestScore = distToTarget
+                        bestPart = part
+                        bestTopPos = topPos
+                    end
+                end
+            end
+        end
+        
+        -- ถ้าเจอบล็อกที่ใช่ มาร์คเป็น Waypoint ปลอมซะเลย!
+        if bestPart and bestTopPos then
+            table.insert(customWaypoints, {
+                Position = bestTopPos,
+                Action = Enum.PathWaypointAction.Jump -- บังคับให้กระโดด/ปีนทุกครั้งที่เจอจุดนี้
+            })
+            currentScanPos = bestTopPos -- ย้ายจุดสแกนไปอยู่บนบล็อกที่เพิ่งเจอ
+            
+            -- ถ้ามาถึงใกล้เป้าหมายแล้ว ก็หยุดสแกน
+            if (currentScanPos - targetPos).Magnitude < 10 then break end
+        else
+            -- ถ้าสแกนไม่เจอบล็อกไปต่อ (ทางตัน) ให้หยุด
+            break
+        end
+    end
+    
+    return customWaypoints
 end
 
 -- --- UI ---
@@ -219,36 +273,63 @@ task.spawn(function()
                     else
                         -- ถ้าระยะไกล หรือสิ่งกีดขวางสูงท่วมหัว ถึงจะเรียกใช้ Pathfinding
                         if os.clock() - lastComputeTime > 0.5 or (targetPos - lastTargetPos).Magnitude > 5 then
-                            local path = PathfindingService:CreatePath({
-                                AgentRadius = 2.5, 
-                                AgentHeight = 5, 
-                                AgentCanJump = true,
-                                WaypointSpacing = 3 
-                            })
-                            path:ComputeAsync(currentPos, targetPos)
+                            currentWaypoints = {} -- ล้างของเก่าก่อน
+                            isProbing = false
                             
-                            if path.Status == Enum.PathStatus.Success then
-                                isProbing = false
-                                currentWaypoints = path:GetWaypoints()
-                                currentWaypointIndex = 2
+                            -- [แทรกสมองล่วงหน้า] ตรวจสอบว่าเป้าหมายอยู่สูง และมีแนวโน้มต้องปีนบันได/บล็อกไหม
+                            if targetPos.Y > currentPos.Y + 5 and hDist < 40 then
+                                currentWaypoints = computeLadderPath(currentPos, targetPos, myChar, target.Character)
+                            end
+                            
+                            -- ถ้าฟังก์ชันสแกนบันไดทำงานสำเร็จ เราจะได้ Waypoints ปลอมมาใช้ข้าม Pathfinding ได้เลย!
+                            if #currentWaypoints > 0 then
+                                currentWaypointIndex = 1
                                 lastTargetPos = targetPos
                                 lastComputeTime = os.clock()
+                                
+                                -- สร้างเส้นทาง Debug สีเหลืองสำหรับบันได/บล็อกลอย
                                 if debugEnabled then
                                     clearVisuals()
                                     for _, wp in ipairs(currentWaypoints) do
                                         local p = Instance.new("Part")
-                                        p.Name, p.Size, p.Position = "WP_Debug", Vector3.new(0.8,0.8,0.8), wp.Position
+                                        p.Name, p.Size, p.Position = "WP_Debug", Vector3.new(1.5, 1.5, 1.5), wp.Position
                                         p.Anchored, p.CanCollide, p.CanQuery, p.Transparency = true, false, false, 0.4
-                                        p.Color, p.Material = Color3.fromRGB(0, 255, 255), Enum.Material.Neon
+                                        p.Color, p.Material = Color3.fromRGB(255, 255, 0), Enum.Material.Neon
                                         p.Parent = workspace.Terrain
                                     end
                                 end
                             else
-                                isProbing = true
-                                currentWaypoints = {}
+                                -- ถ้าสแกนบันไดไม่เจอ (หรือเป้าหมายไม่ได้อยู่สูง) ค่อยใช้ Pathfinding ของ Roblox ปกติ
+                                local path = PathfindingService:CreatePath({
+                                    AgentRadius = 2.5, 
+                                    AgentHeight = 5, 
+                                    AgentCanJump = true,
+                                    WaypointSpacing = 3 
+                                })
+                                path:ComputeAsync(currentPos, targetPos)
+                                
+                                if path.Status == Enum.PathStatus.Success then
+                                    currentWaypoints = path:GetWaypoints()
+                                    currentWaypointIndex = 2
+                                    lastTargetPos = targetPos
+                                    lastComputeTime = os.clock()
+                                    
+                                    if debugEnabled then
+                                        clearVisuals()
+                                        for _, wp in ipairs(currentWaypoints) do
+                                            local p = Instance.new("Part")
+                                            p.Name, p.Size, p.Position = "WP_Debug", Vector3.new(0.8,0.8,0.8), wp.Position
+                                            p.Anchored, p.CanCollide, p.CanQuery, p.Transparency = true, false, false, 0.4
+                                            p.Color, p.Material = Color3.fromRGB(0, 255, 255), Enum.Material.Neon
+                                            p.Parent = workspace.Terrain
+                                        end
+                                    end
+                                else
+                                    isProbing = true
+                                    currentWaypoints = {}
+                                end
                             end
                         end
-
                         if isProbing then
                             local probeDir = getProbingDirection(myRoot, targetPos)
                             if probeDir then
