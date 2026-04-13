@@ -19,7 +19,7 @@ local currentWaypoints = {}
 local currentWaypointIndex = 1
 local lastComputeTime = 0
 local lastTargetPos = Vector3.new()
-local isProbing = false
+local isProbing = false -- โหมดแหย่ทางเมื่อ Pathfinding ล้มเหลว
 
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -33,7 +33,7 @@ local function updateDebug(name, startPos, endPos, color)
     local line = workspace.Terrain:FindFirstChild(name) or Instance.new("LineHandleAdornment")
     line.Name, line.Thickness, line.Transparency = name, 3, 0.4
     line.Adornee, line.AlwaysOnTop = workspace.Terrain, true
-    line.Color3, line.Length = color, (startPos - endPos).Magnitude
+    line.Color3, line.Length = (startPos - endPos).Magnitude
     line.CFrame, line.Parent = CFrame.lookAt(startPos, endPos), workspace.Terrain
 end
 
@@ -51,25 +51,26 @@ local function forceJump(hum)
     end
 end
 
--- ปรับปรุงการ Probe ให้ฉลาดขึ้นเวลาอยู่ใต้เท้าเป้าหมาย
+-- ฟังก์ชันหาทางเดิน "แหย่" เมื่อติดในตึก
 local function getProbingDirection(myRoot, targetPos)
     local currentPos = myRoot.Position
     local baseDirXZ = Vector3.new(targetPos.X - currentPos.X, 0, targetPos.Z - currentPos.Z)
     
-    -- ถ้าอยู่ใต้เท้าเป้าหมายเป๊ะๆ ให้พยายามเดินไปข้างหน้าและกระโดด
-    if baseDirXZ.Magnitude < 2 then
-        return myRoot.CFrame.LookVector
+    if baseDirXZ.Magnitude < 0.1 then
+        baseDirXZ = myRoot.CFrame.LookVector 
+    else
+        baseDirXZ = baseDirXZ.Unit
     end
     
-    local baseDir = baseDirXZ.Unit
-    local scanAngles = {0, 45, -45, 90, -90, 180}
+    local scanAngles = {0, 30, -30, 60, -60, 90, -90, 135, -135}
     local bestDir = nil
     local maxDist = 0
     
     for _, angle in ipairs(scanAngles) do
-        local dir = (CFrame.Angles(0, math.rad(angle), 0) * baseDir).Unit
-        local ray = workspace:Raycast(currentPos, dir * 10, rayParams)
-        local d = ray and ray.Distance or 10
+        local dir = (CFrame.Angles(0, math.rad(angle), 0) * baseDirXZ).Unit
+        local ray = workspace:Raycast(currentPos, dir * 15, rayParams)
+        local d = ray and ray.Distance or 15
+        
         if d > maxDist then
             maxDist = d
             bestDir = dir
@@ -103,7 +104,7 @@ MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s e
 -- --- MAIN LOOP ---
 task.spawn(function()
     while true do
-        task.wait(0.1) -- ปรับให้ไวขึ้นเล็กน้อยเพื่อการตอบสนอง
+        task.wait(0.15)
         if not followEnabled then continue end
         
         pcall(function()
@@ -133,27 +134,28 @@ task.spawn(function()
                 local currentPos = myRoot.Position
                 local targetPos = tRoot.Position
                 local dist = (targetPos - currentPos).Magnitude
-                local distXZ = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(targetPos.X, targetPos.Z)).Magnitude
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
 
                 if dist > followDistance then
-                    local yDiff = targetPos.Y - currentPos.Y
+                    local yDiff = math.abs(targetPos.Y - currentPos.Y)
                     local moveDir = (targetPos - currentPos).Unit
                     local directRay = workspace:Raycast(currentPos, moveDir * dist, rayParams)
 
-                    -- 1. ลองเดินตรง (ถ้าไม่มีอะไรบัง และความสูงไม่ต่างกันมาก)
-                    if not directRay and math.abs(yDiff) < 4 then
+                    -- 1. ลองเดินตรง
+                    if not directRay and yDiff < 5 then
                         isProbing = false
                         currentWaypoints = {}
+                        updateDebug("DirectTrace", currentPos, targetPos, Color3.fromRGB(0, 255, 0))
                         myHuman:MoveTo(targetPos)
                     else
-                        -- 2. ต้องใช้ Pathfinding หรือติดบล็อกลอย
-                        if os.clock() - lastComputeTime > 0.8 or (targetPos - lastTargetPos).Magnitude > 5 then
+                        -- 2. ทางตัน / อยู่ในตึก / คนละชั้น -> ใช้ Pathfinding
+                        if os.clock() - lastComputeTime > 1.0 or (targetPos - lastTargetPos).Magnitude > 8 then
                             local path = PathfindingService:CreatePath({
-                                AgentRadius = 2.0, -- ลดขนาดตัวลงเพื่อให้เบียดบล็อกได้ดีขึ้น
+                                AgentRadius = 2, 
                                 AgentHeight = 5, 
                                 AgentCanJump = true,
-                                WaypointSpacing = 3 -- จุดถี่ขึ้นเพื่อบันไดลอย
+                                AgentMaxJumpHeight = 10, -- เพิ่มค่านี้เพื่อให้ Roblox ยอมคำนวณบล็อคลอยแยกๆ กัน
+                                WaypointSpacing = 3 -- บีบระยะห่าง Waypoint ให้ถี่ขึ้นเพื่อกันตกร่อง
                             })
                             path:ComputeAsync(currentPos, targetPos)
                             
@@ -163,41 +165,82 @@ task.spawn(function()
                                 currentWaypointIndex = 2
                                 lastTargetPos = targetPos
                                 lastComputeTime = os.clock()
+                                if debugEnabled then
+                                    clearVisuals()
+                                    for _, wp in ipairs(currentWaypoints) do
+                                        local p = Instance.new("Part")
+                                        p.Name, p.Size, p.Position = "WP_Debug", Vector3.new(0.8,0.8,0.8), wp.Position
+                                        p.Anchored, p.CanCollide, p.CanQuery, p.Transparency = true, false, false, 0.4
+                                        p.Color, p.Material = Color3.fromRGB(0, 255, 255), Enum.Material.Neon
+                                        p.Parent = workspace.Terrain
+                                    end
+                                end
                             else
-                                -- **กรณี Path ล้มเหลว (มักเกิดกับบล็อกลอย)**
                                 isProbing = true
                                 currentWaypoints = {}
                             end
                         end
 
                         if isProbing then
-                            -- แก้ไข: ถ้าเป้าหมายอยู่ข้างบน และเราอยู่ข้างล่างในระยะใกล้ (ติดใต้บันได)
-                            if yDiff > 3 and distXZ < 6 then
-                                myHuman:MoveTo(targetPos) -- พยายามเดินพุ่งไปหาจุด XZ ของเป้าหมาย
-                                forceJump(myHuman) -- บังคับกระโดดไถขึ้นไปเรื่อยๆ
-                            else
-                                local probeDir = getProbingDirection(myRoot, targetPos)
-                                if probeDir then
-                                    myHuman:MoveTo(currentPos + (probeDir * 5))
-                                    if yDiff > 2 then forceJump(myHuman) end
-                                end
+                            local probeDir = getProbingDirection(myRoot, targetPos)
+                            if probeDir then
+                                updateDebug("ProbeTrace", currentPos, currentPos + (probeDir * 5), Color3.fromRGB(255, 165, 0))
+                                myHuman:MoveTo(currentPos + (probeDir * 8))
+                                local wallCheck = workspace:Raycast(currentPos, probeDir * 4, rayParams)
+                                if wallCheck then forceJump(myHuman) end
                             end
                         elseif #currentWaypoints > 0 then
-                            -- เดินตาม Waypoint ปกติพร้อม Smoothing
+                            local targetIndex = currentWaypointIndex
+                            
+                            for i = currentWaypointIndex, #currentWaypoints do
+                                local checkWp = currentWaypoints[i]
+                                
+                                if checkWp.Action == Enum.PathWaypointAction.Jump then
+                                    targetIndex = i
+                                    break
+                                end
+
+                                -- แก้ไขให้เข้มงวดขึ้น: ถ้าความสูงต่างกันแค่ 2 Studs ก็ห้ามข้ามจุดแล้ว (เพื่อบังคับให้ไต่บล็อคลอย)
+                                if math.abs(checkWp.Position.Y - currentPos.Y) > 2 then
+                                    break
+                                end
+
+                                local rayTargetPos = checkWp.Position + Vector3.new(0, 3, 0)
+                                local dir = rayTargetPos - currentPos
+                                local hit = workspace:Raycast(currentPos, dir, rayParams)
+                                
+                                if not hit then
+                                    targetIndex = i 
+                                else
+                                    break 
+                                end
+                            end
+                            
+                            currentWaypointIndex = targetIndex
                             local wp = currentWaypoints[currentWaypointIndex]
+                            
                             if wp then
                                 myHuman:MoveTo(wp.Position)
                                 
-                                -- เช็คกระโดด: ถ้าจุดถัดไปสูงกว่าเรา ให้โดดเลยไม่ต้องรอคำสั่ง Action
-                                if wp.Action == Enum.PathWaypointAction.Jump or wp.Position.Y > currentPos.Y + 1.5 then
+                                local distXZ = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude
+                                local distY = wp.Position.Y - currentPos.Y -- เอาแกน Y เป้าหมาย ลบ ปัจจุบัน
+
+                                -- ** ระบบบังคับกระโดดไต่บล็อคลอย **
+                                -- ถ้าจุดหมายอยู่สูงกว่าตัวเรา และเราเดินมาประชิดจุดนั้นในแกนราบแล้ว (ใต้บล็อค) -> ให้กระโดดเลย
+                                if distY > 1.2 and distXZ < 4 then
                                     forceJump(myHuman)
                                 end
 
-                                if (currentPos - wp.Position).Magnitude < 4 then
+                                if distXZ < 3.5 and math.abs(distY) < 5 then
                                     currentWaypointIndex = currentWaypointIndex + 1
+                                end
+                                
+                                if wp.Action == Enum.PathWaypointAction.Jump or wp.Position.Y > currentPos.Y + 2.5 then
+                                    forceJump(myHuman)
                                 end
                             end
                         end
+                        updateDebug("DirectTrace", currentPos, directRay and directRay.Position or targetPos, Color3.fromRGB(255, 0, 0))
                     end
                 else
                     myHuman:MoveTo(currentPos)
