@@ -200,30 +200,40 @@ task.spawn(function()
                                 if wallCheck then forceJump(myHuman) end
                             end
                         elseif #currentWaypoints > 0 then
-                            -- [เพิ่มใหม่] ระบบ Path Smoothing (เดินตัดมุม / ดึงเชือก)
+                            -- [แก้ไขใหม่] ระบบ Path Smoothing แบบเซฟตี้ (แก้บัคตกบันได)
                             local lookAheadIndex = currentWaypointIndex
-                            local maxLookAhead = math.min(currentWaypointIndex + 8, #currentWaypoints)
+                            local maxLookAhead = math.min(currentWaypointIndex + 6, #currentWaypoints) -- ลดระยะมองลงนิดนึงเพื่อความชัวร์
                             
-                            for i = maxLookAhead, currentWaypointIndex, -1 do
+                            for i = maxLookAhead, currentWaypointIndex + 1, -1 do
                                 local testWp = currentWaypoints[i]
                                 
-                                local hasJump = false
+                                -- 1. [ระบบใหม่] ตรวจเช็คความปลอดภัยของความสูง (ป้องกันหล่นบันได)
+                                local isHeightSafe = true
                                 for j = currentWaypointIndex, i do
-                                    if currentWaypoints[j].Action == Enum.PathWaypointAction.Jump then
-                                        hasJump = true; break
+                                    -- ตรวจสอบว่า Waypoint ระหว่างทาง มีจุดไหนที่สูง/ต่ำกว่าเราเกิน 1.5 สตัดส์ไหม (ระยะความสูงของบันได)
+                                    if math.abs(currentWaypoints[j].Position.Y - currentPos.Y) > 1.5 then
+                                        isHeightSafe = false
+                                        break
                                     end
                                 end
                                 
-                                if not hasJump then
-                                    local heightDiff = math.abs(testWp.Position.Y - currentPos.Y)
-                                    if heightDiff < 3 then
+                                -- ถ้าทุกจุดเป็นพื้นราบ (isHeightSafe = true) ถึงจะยอมให้ลากเส้นตรงตัดมุม
+                                if isHeightSafe then
+                                    local hasJump = false
+                                    for j = currentWaypointIndex, i do
+                                        if currentWaypoints[j].Action == Enum.PathWaypointAction.Jump then
+                                            hasJump = true; break
+                                        end
+                                    end
+                                    
+                                    if not hasJump then
                                         local rayOrigin = currentPos + Vector3.new(0, 2, 0) 
                                         local targetOrigin = testWp.Position + Vector3.new(0, 2, 0)
                                         local hit = workspace:Raycast(rayOrigin, targetOrigin - rayOrigin, rayParams)
                                         
                                         if not hit then
                                             lookAheadIndex = i
-                                            break
+                                            break -- เจอทางตรงที่ไม่มีอะไรกั้นและเป็นพื้นราบ ข้ามไปจุดนี้เลย!
                                         end
                                     end
                                 end
@@ -242,7 +252,6 @@ task.spawn(function()
                                 myHuman:MoveTo(wp.Position)
                                 
                                 local distToWp = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude
-                                -- [ปรับแก้] ขยายระยะตัดมุม ทำให้บอทไม่ต้องเหยียบจุดเป๊ะๆ ก็ไปต่อได้
                                 if distToWp < 4.5 then
                                     currentWaypointIndex = currentWaypointIndex + 1
                                 end
