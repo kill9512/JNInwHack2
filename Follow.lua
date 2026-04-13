@@ -55,33 +55,6 @@ local function forceJump(hum)
     end
 end
 
--- [อัปเดตใหม่!] ระบบหาบันไดที่ "ดีที่สุด" ไม่ใช่แค่ "ใกล้ที่สุด"
-local function findBestLadder(myPos, targetPos)
-    local bestLadder = nil
-    local bestScore = math.huge
-    local searchRadius = 150 -- ขยายรัศมีการมองหาเผื่อบ้านต้นไม้ใหญ่มาก
-    
-    for _, v in pairs(workspace:GetDescendants()) do
-        if (v:IsA("TrussPart") or v.Name:lower():find("ladder") or v.Name:lower():find("stair")) and v:IsA("BasePart") then
-            local distFromMe = (v.Position - myPos).Magnitude
-            if distFromMe < searchRadius then
-                -- วัดระยะห่างจาก 'บันได' ไปหา 'เป้าหมาย' (คิดแค่แนวราบ X, Z)
-                local distToTargetXZ = (Vector3.new(v.Position.X, 0, v.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
-                
-                -- สูตรคำนวณคะแนน: ให้ความสำคัญกับบันไดที่อยู่ "ใต้ตีนเป้าหมาย" มากที่สุด (distToTargetXZ น้อยๆ)
-                -- และบวกระยะทางบอทไปนิดหน่อย (distFromMe * 0.2) เพื่อไม่ให้มันวิ่งไปบันไดที่ไกลเกินความจำเป็น
-                local score = distToTargetXZ + (distFromMe * 0.2)
-                
-                if score < bestScore then
-                    bestScore = score
-                    bestLadder = v
-                end
-            end
-        end
-    end
-    return bestLadder
-end
-
 local function getProbingDirection(myRoot, targetPos)
     local currentPos = myRoot.Position
     local baseDir = (targetPos - currentPos).Unit
@@ -207,37 +180,47 @@ task.spawn(function()
                     local moveDir = (targetPos - currentPos).Unit
                     local directRay = workspace:Raycast(currentPos, moveDir * trueDist, rayParams)
 
+                    -- [ใหม่] ระบบวิเคราะห์สิ่งกีดขวางระดับหัว (Head-Level Raycast)
                     local headPos = currentPos + Vector3.new(0, 2.5, 0)
                     local targetHeadPos = targetPos + Vector3.new(0, 2.5, 0)
                     local headRay = workspace:Raycast(headPos, (targetHeadPos - headPos).Unit * trueDist, rayParams)
 
                     local isParkour = false
+                    -- ถ้าระยะใกล้พอที่จะกระโดดได้ (hDist < 14) และเป้าหมายอยู่สูงกว่าไม่มาก (vDist < 8)
                     if hDist < 14 and (targetPos.Y > currentPos.Y - 2) and vDist < 8 then
                         if directRay and not headRay then
+                            -- ชนข้างล่าง แต่ข้างบนโล่ง = สิ่งกีดขวางเตี้ยๆ (กล่อง, ราวระเบียง) -> ควรกระโดดข้าม!
                             isParkour = true
                         elseif not directRay and vDist >= 5 then
+                            -- ไม่ชนอะไรเลย แต่อยู่คนละชั้น (เช่น ขอบเหว หรือเป้าหมายอยู่บนกล่อง) -> ควรกระโดดขึ้น!
                             isParkour = true
                         end
                     end
 
+                    -- [แก้] เปลี่ยนเงื่อนไขวิ่งตรง ให้รวมระบบ Parkour เข้าไปด้วย
                     if (not directRay and vDist < 5) or isParkour then
                         isProbing = false
                         currentWaypoints = {}
+                        -- แสดงเส้นสีเหลืองถ้าอยู่ในโหมด Parkour
                         updateDebug("DirectTrace", currentPos, targetPos, isParkour and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 255, 0))
                         myHuman:MoveTo(targetPos)
                         
+                        -- ถ้าเป็นโหมด Parkour ให้เช็คระยะเพื่อกดกระโดด
                         if isParkour then
                             if directRay then
+                                -- ถ้ามีกำแพงเตี้ยกั้น (ราวระเบียง) ให้เดินเข้าไปใกล้ๆ แล้วค่อยโดด
                                 local distToWall = (directRay.Position - currentPos).Magnitude
                                 if distToWall < 3.5 then forceJump(myHuman) end
                             else
+                                -- ถ้าเป้าหมายอยู่บนขอบลอยๆ พอเดินเข้าใกล้แล้วให้โดดขึ้น
                                 if hDist < 4 then forceJump(myHuman) end
                             end
                         end
                     else
+                        -- ถ้าระยะไกล หรือสิ่งกีดขวางสูงท่วมหัว ถึงจะเรียกใช้ Pathfinding
                         if os.clock() - lastComputeTime > 0.5 or (targetPos - lastTargetPos).Magnitude > 5 then
                             local path = PathfindingService:CreatePath({
-                                AgentRadius = 2.0, 
+                                AgentRadius = 2.5, 
                                 AgentHeight = 5, 
                                 AgentCanJump = true,
                                 WaypointSpacing = 3 
@@ -267,44 +250,13 @@ task.spawn(function()
                         end
 
                         if isProbing then
-                            if vDist > 10 then 
-                                -- [แก้ไข] เรียกใช้ findBestLadder พร้อมส่งเป้าหมายให้มันไปคำนวณด้วย
-                                local targetLadder = findBestLadder(currentPos, targetPos)
-                                
-                                if targetLadder then
-                                    updateDebug("ProbeTrace", currentPos, targetLadder.Position, Color3.fromRGB(255, 0, 255))
-                                    
-                                    local flatDir = (Vector3.new(targetLadder.Position.X, 0, targetLadder.Position.Z) - Vector3.new(currentPos.X, 0, currentPos.Z))
-                                    local dist2DToLadder = flatDir.Magnitude
-                                    
-                                    if dist2DToLadder > 0.1 then
-                                        myHuman:MoveTo(targetLadder.Position + (flatDir.Unit * 2))
-                                    else
-                                        myHuman:MoveTo(targetLadder.Position)
-                                    end
-                                    
-                                    if dist2DToLadder < 4 then
-                                        forceJump(myHuman)
-                                    end
-                                else
-                                    local probeDir = getProbingDirection(myRoot, targetPos)
-                                    if probeDir then
-                                        updateDebug("ProbeTrace", currentPos, currentPos + (probeDir * 5), Color3.fromRGB(255, 165, 0))
-                                        myHuman:MoveTo(currentPos + (probeDir * 8))
-                                        local wallCheck = workspace:Raycast(currentPos, probeDir * 4, rayParams)
-                                        if wallCheck then forceJump(myHuman) end
-                                    end
-                                end
-                            else
-                                local probeDir = getProbingDirection(myRoot, targetPos)
-                                if probeDir then
-                                    updateDebug("ProbeTrace", currentPos, currentPos + (probeDir * 5), Color3.fromRGB(255, 165, 0))
-                                    myHuman:MoveTo(currentPos + (probeDir * 8))
-                                    local wallCheck = workspace:Raycast(currentPos, probeDir * 4, rayParams)
-                                    if wallCheck then forceJump(myHuman) end
-                                end
+                            local probeDir = getProbingDirection(myRoot, targetPos)
+                            if probeDir then
+                                updateDebug("ProbeTrace", currentPos, currentPos + (probeDir * 5), Color3.fromRGB(255, 165, 0))
+                                myHuman:MoveTo(currentPos + (probeDir * 8))
+                                local wallCheck = workspace:Raycast(currentPos, probeDir * 4, rayParams)
+                                if wallCheck then forceJump(myHuman) end
                             end
-                            
                         elseif #currentWaypoints > 0 then
                             local lookAheadIndex = currentWaypointIndex
                             local maxLookAhead = math.min(currentWaypointIndex + 6, #currentWaypoints) 
