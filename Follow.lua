@@ -33,7 +33,7 @@ local function updateDebug(name, startPos, endPos, color)
     local line = workspace.Terrain:FindFirstChild(name) or Instance.new("LineHandleAdornment")
     line.Name, line.Thickness, line.Transparency = name, 3, 0.4
     line.Adornee, line.AlwaysOnTop = workspace.Terrain, true
-    line.Color3, line.Length = color, (startPos - endPos).Magnitude
+    line.Color3, line.Length = (startPos - endPos).Magnitude
     line.CFrame, line.Parent = CFrame.lookAt(startPos, endPos), workspace.Terrain
 end
 
@@ -51,17 +51,24 @@ local function forceJump(hum)
     end
 end
 
--- ฟังก์ชันหาทางเดิน "แหย่" เมื่อติดในตึก
+-- ฟังก์ชันหาทางเดิน "แหย่" เมื่อติดในตึก (อัพเดทแก้บัคยืนใต้ผู้เล่น)
 local function getProbingDirection(myRoot, targetPos)
     local currentPos = myRoot.Position
-    local baseDir = (targetPos - currentPos).Unit
-    local scanAngles = {0, 30, -30, 60, -60, 90, -90, 135, -135} -- กวาดเกือบรอบตัว
+    -- หาแกน 2D ป้องกันบัคเวลาเป้าหมายอยู่ข้างบนหัวตรงๆ
+    local baseDirXZ = Vector3.new(targetPos.X - currentPos.X, 0, targetPos.Z - currentPos.Z)
     
+    if baseDirXZ.Magnitude < 0.1 then
+        baseDirXZ = myRoot.CFrame.LookVector -- ถ้าอยู่ตรงหัวเป๊ะๆ ให้กวาดจากด้านหน้าของตัวละครแทน
+    else
+        baseDirXZ = baseDirXZ.Unit
+    end
+    
+    local scanAngles = {0, 30, -30, 60, -60, 90, -90, 135, -135}
     local bestDir = nil
     local maxDist = 0
     
     for _, angle in ipairs(scanAngles) do
-        local dir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(baseDir.X, 0, baseDir.Z)).Unit
+        local dir = (CFrame.Angles(0, math.rad(angle), 0) * baseDirXZ).Unit
         local ray = workspace:Raycast(currentPos, dir * 15, rayParams)
         local d = ray and ray.Distance or 15
         
@@ -131,20 +138,20 @@ task.spawn(function()
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
 
                 if dist > followDistance then
-                    -- 1. ลองเดินตรง (Line of Sight)
+                    -- เช็คความต่างของระดับความสูง (Y) ป้องกันการเดินทะลุเพดาน
+                    local yDiff = math.abs(targetPos.Y - currentPos.Y)
                     local moveDir = (targetPos - currentPos).Unit
                     local directRay = workspace:Raycast(currentPos, moveDir * dist, rayParams)
 
-                    if not directRay then
-                        -- ทางโล่ง วิ่งใส่เลย
+                    -- 1. ลองเดินตรง (ถ้าไม่มีอะไรบัง AND ไม่ได้อยู่คนละชั้นกัน)
+                    if not directRay and yDiff < 5 then
                         isProbing = false
                         currentWaypoints = {}
                         updateDebug("DirectTrace", currentPos, targetPos, Color3.fromRGB(0, 255, 0))
                         myHuman:MoveTo(targetPos)
                     else
-                        -- 2. ทางตัน/อยู่ในตึก -> ใช้ Pathfinding
+                        -- 2. ทางตัน / อยู่ในตึก / คนละชั้น -> ใช้ Pathfinding
                         if os.clock() - lastComputeTime > 1.0 or (targetPos - lastTargetPos).Magnitude > 8 then
-                            -- แก้ไข 1: ลด AgentRadius ลงเหลือ 2 เพื่อให้เดินขึ้นบันไดแคบได้ และเพิ่ม WaypointSpacing
                             local path = PathfindingService:CreatePath({
                                 AgentRadius = 2, 
                                 AgentHeight = 5, 
@@ -170,7 +177,7 @@ task.spawn(function()
                                     end
                                 end
                             else
-                                -- ** พิกัดล้มเหลว (Compute Fail) -> เข้าสู่ Explorer Mode **
+                                -- พิกัดล้มเหลว (Compute Fail) -> เข้าสู่ Explorer Mode
                                 isProbing = true
                                 currentWaypoints = {}
                             end
@@ -183,7 +190,6 @@ task.spawn(function()
                             if probeDir then
                                 updateDebug("ProbeTrace", currentPos, currentPos + (probeDir * 5), Color3.fromRGB(255, 165, 0))
                                 myHuman:MoveTo(currentPos + (probeDir * 8))
-                                -- ถ้าติดกำแพงให้โดดไถไป
                                 local wallCheck = workspace:Raycast(currentPos, probeDir * 4, rayParams)
                                 if wallCheck then forceJump(myHuman) end
                             end
@@ -191,7 +197,6 @@ task.spawn(function()
                             -- โหมด Path Smoothing: ข้าม Waypoint ที่ไม่จำเป็น
                             local targetIndex = currentWaypointIndex
                             
-                            -- ลูปเช็คจุด Waypoint ล่วงหน้า
                             for i = currentWaypointIndex, #currentWaypoints do
                                 local checkWp = currentWaypoints[i]
                                 
@@ -200,15 +205,20 @@ task.spawn(function()
                                     break
                                 end
 
-                                -- แก้ไข 2: ยกจุดปลายทาง Raycast ขึ้นมาระดับอก (Y+3) เพื่อหลบขอบขั้นบันได
+                                -- ป้องกันบัคขึ้นบันได: ถ้า Waypoint มีความสูงต่างจากบอทเกิน 3.5 ห้ามข้ามจุด!
+                                if math.abs(checkWp.Position.Y - currentPos.Y) > 3.5 then
+                                    break
+                                end
+
+                                -- ยกจุดปลายทาง Raycast ขึ้นมาระดับอก (Y+3) เพื่อหลบขอบขั้นบันได
                                 local rayTargetPos = checkWp.Position + Vector3.new(0, 3, 0)
                                 local dir = rayTargetPos - currentPos
                                 local hit = workspace:Raycast(currentPos, dir, rayParams)
                                 
                                 if not hit then
-                                    targetIndex = i -- ทางโล่ง อัพเดทให้ลัดมาจุดนี้เลย
+                                    targetIndex = i 
                                 else
-                                    break -- ติดกำแพง/บันได แปลว่าต้องหักเลี้ยวตรงนี้
+                                    break 
                                 end
                             end
                             
@@ -218,19 +228,20 @@ task.spawn(function()
                             if wp then
                                 myHuman:MoveTo(wp.Position)
                                 
-                                -- แก้ไข 3: ใช้ระยะ 3 มิติ (Magnitude) เช็คแกน Y ด้วย บอทจะได้ไม่ข้ามจุดเวลาอยู่ใต้บันได
-                                local distToWp = (currentPos - wp.Position).Magnitude
-                                if distToWp < 4.5 then
+                                -- แยกเช็คระยะแกนราบ (XZ) และความสูง (Y) ป้องกันบอทยืนติดใต้บันได
+                                local distXZ = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude
+                                local distY = math.abs(currentPos.Y - wp.Position.Y)
+
+                                if distXZ < 3.5 and distY < 5 then
                                     currentWaypointIndex = currentWaypointIndex + 1
                                 end
                                 
-                                -- เช็คกระโดด
                                 if wp.Action == Enum.PathWaypointAction.Jump or wp.Position.Y > currentPos.Y + 2.5 then
                                     forceJump(myHuman)
                                 end
                             end
                         end
-                        updateDebug("DirectTrace", currentPos, directRay.Position, Color3.fromRGB(255, 0, 0))
+                        updateDebug("DirectTrace", currentPos, directRay and directRay.Position or targetPos, Color3.fromRGB(255, 0, 0))
                     end
                 else
                     myHuman:MoveTo(currentPos)
