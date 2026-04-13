@@ -26,7 +26,6 @@ rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
 local lastPosition = Vector3.new()
 local lastMoveTick = os.clock()
-
 local randomTarget = nil 
 
 -- --- Debug Visualization ---
@@ -272,22 +271,42 @@ task.spawn(function()
                                     return 
                                 end
 
-                                myHuman:MoveTo(wp.Position)
+                                -- [ใหม่] 1. เช็คสถานะการปีนป่าย และ ความสูง
+                                local isClimbing = myHuman:GetState() == Enum.HumanoidStateType.Climbing
+                                local isGoingUp = (wp.Position.Y > currentPos.Y + 2.5) -- จุดหมายอยู่สูงกว่าหัว
+
+                                -- [ใหม่] 2. ระบบดันเข้าบันได (Ladder Push)
+                                if isGoingUp and not isClimbing then
+                                    -- ถ้าต้องปีนแต่ยังไม่เกาะกำแพง ให้ดันตัวไถไปข้างหน้าทะลุจุด Waypoint ไปเลย
+                                    local flatDir = (Vector3.new(wp.Position.X, 0, wp.Position.Z) - Vector3.new(currentPos.X, 0, currentPos.Z))
+                                    if flatDir.Magnitude > 0.1 then
+                                        myHuman:MoveTo(wp.Position + (flatDir.Unit * 1.5)) -- ดันเข้าไป 1.5 สตัดส์
+                                    else
+                                        myHuman:MoveTo(wp.Position)
+                                    end
+                                else
+                                    myHuman:MoveTo(wp.Position)
+                                end
                                 
-                                -- [อัปเดตแก้บัคบันได] 1. เอาความสูงมาคิดด้วยเวลาเลื่อนจุด
                                 local dist2D = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude
                                 local distY = math.abs(currentPos.Y - wp.Position.Y)
                                 
-                                -- ต้องใกล้ทั้งระยะทางปกติ และความสูง (เพื่อไม่ให้มันสคิปจุดเวลาปีนบันได)
-                                if dist2D < 4.5 and distY < 3.5 then
-                                    currentWaypointIndex = currentWaypointIndex + 1
+                                -- [ใหม่] 3. ตัดสินใจเปลี่ยนจุด
+                                if isClimbing then
+                                    -- ถ้าปีนอยู่ ให้สนใจแค่ว่าไต่ถึงความสูงของจุดนั้นหรือยัง ถ้าถึงแล้วไปจุดต่อไปเลยไม่ต้องห่วง X,Z
+                                    if currentPos.Y >= wp.Position.Y - 1 or (dist2D < 5 and distY < 3.5) then
+                                        currentWaypointIndex = currentWaypointIndex + 1
+                                    end
+                                else
+                                    if dist2D < 4.5 and distY < 3.5 then
+                                        currentWaypointIndex = currentWaypointIndex + 1
+                                    end
                                 end
                                 
-                                -- [อัปเดตแก้บัคบันได] 2. เช็คว่ากำลังปีนอยู่ไหม ถ้าปีนอยู่ห้ามกระโดดเด็ดขาด!
-                                local isClimbing = myHuman:GetState() == Enum.HumanoidStateType.Climbing
-                                
+                                -- [ใหม่] 4. บังคับกระโดดเกาะบันได (ถ้าเดินดันแล้วยังไม่ยอมเกาะ)
                                 if not isClimbing then
-                                    if wp.Action == Enum.PathWaypointAction.Jump or wp.Position.Y > currentPos.Y + 2.5 then
+                                    -- ถ้ายืนบี้กำแพงแล้ว (dist2D < 2) จุดหมายอยู่ข้างบน แต่ยังไม่ปีน ให้กระโดดคว้าบันไดเลย
+                                    if wp.Action == Enum.PathWaypointAction.Jump or (isGoingUp and dist2D < 2) then
                                         forceJump(myHuman)
                                     end
                                 end
