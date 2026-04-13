@@ -101,7 +101,7 @@ MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s e
 -- --- MAIN LOOP ---
 task.spawn(function()
     while true do
-        task.wait(0.15)
+        task.wait(0.05) -- [ปรับแก้] คิดเร็วขึ้นจาก 0.15 เป็น 0.05 วินาที
         if not followEnabled then continue end
         
         pcall(function()
@@ -131,17 +131,17 @@ task.spawn(function()
                 local currentPos = myRoot.Position
                 local targetPos = tRoot.Position
                 
-                -- [ใหม่] คำนวณระยะห่างแยกแกนแนวนอนและแนวตั้ง
+                -- คำนวณระยะห่างแยกแกนแนวนอนและแนวตั้ง
                 local trueDist = (targetPos - currentPos).Magnitude
                 local hDist = (Vector3.new(targetPos.X, 0, targetPos.Z) - Vector3.new(currentPos.X, 0, currentPos.Z)).Magnitude
                 local vDist = math.abs(targetPos.Y - currentPos.Y)
                 
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
 
-                -- [ใหม่] ระบบ Stuck Detection ตรวจสอบว่าเดินติดกำแพงหรือไม่
+                -- ระบบ Stuck Detection
                 if (currentPos - lastPosition).Magnitude < 0.5 then
                     if os.clock() - lastMoveTick > 0.7 then 
-                        currentWaypoints = {} -- ถ้าไม่ขยับเกิน 0.7 วินาที ล้างเส้นทางเพื่อหาทางใหม่
+                        currentWaypoints = {} 
                         lastMoveTick = os.clock()
                     end
                 else
@@ -149,7 +149,7 @@ task.spawn(function()
                     lastMoveTick = os.clock()
                 end
 
-                -- [ใหม่] จะเดินก็ต่อเมื่อแนวนอนห่าง หรือ อยู่คนละชั้นกันเกินไป
+                -- จะเดินก็ต่อเมื่อแนวนอนห่าง หรือ อยู่คนละชั้นกันเกินไป
                 if hDist > followDistance or vDist > 5 then
                     local moveDir = (targetPos - currentPos).Unit
                     local directRay = workspace:Raycast(currentPos, moveDir * trueDist, rayParams)
@@ -165,7 +165,7 @@ task.spawn(function()
                                 AgentRadius = 2.5, 
                                 AgentHeight = 5, 
                                 AgentCanJump = true,
-                                WaypointSpacing = 4 
+                                WaypointSpacing = 3 -- [ปรับแก้] จุดถี่ขึ้น (ลดจาก 4 เป็น 3)
                             })
                             path:ComputeAsync(currentPos, targetPos)
                             
@@ -200,20 +200,50 @@ task.spawn(function()
                                 if wallCheck then forceJump(myHuman) end
                             end
                         elseif #currentWaypoints > 0 then
+                            -- [เพิ่มใหม่] ระบบ Path Smoothing (เดินตัดมุม / ดึงเชือก)
+                            local lookAheadIndex = currentWaypointIndex
+                            local maxLookAhead = math.min(currentWaypointIndex + 8, #currentWaypoints)
+                            
+                            for i = maxLookAhead, currentWaypointIndex, -1 do
+                                local testWp = currentWaypoints[i]
+                                
+                                local hasJump = false
+                                for j = currentWaypointIndex, i do
+                                    if currentWaypoints[j].Action == Enum.PathWaypointAction.Jump then
+                                        hasJump = true; break
+                                    end
+                                end
+                                
+                                if not hasJump then
+                                    local heightDiff = math.abs(testWp.Position.Y - currentPos.Y)
+                                    if heightDiff < 3 then
+                                        local rayOrigin = currentPos + Vector3.new(0, 2, 0) 
+                                        local targetOrigin = testWp.Position + Vector3.new(0, 2, 0)
+                                        local hit = workspace:Raycast(rayOrigin, targetOrigin - rayOrigin, rayParams)
+                                        
+                                        if not hit then
+                                            lookAheadIndex = i
+                                            break
+                                        end
+                                    end
+                                end
+                            end
+                            
+                            currentWaypointIndex = lookAheadIndex
                             local wp = currentWaypoints[currentWaypointIndex]
+
                             if wp then
-                                -- [ใหม่] Y-Axis Validation ตรวจสอบความสูงเวลาตกหลุม
                                 local wpHeightDiff = math.abs(currentPos.Y - wp.Position.Y)
                                 if wpHeightDiff > 6 then
-                                    currentWaypoints = {} -- ล้างทางเดินทิ้ง เพื่อให้ Loop ถัดไปหาทางใหม่
+                                    currentWaypoints = {} 
                                     return 
                                 end
 
                                 myHuman:MoveTo(wp.Position)
                                 
-                                -- [ใหม่] เปลี่ยนมาเช็คระยะ Waypoint แบบ 2D กันปัญหาเดินวนใต้จุด
                                 local distToWp = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude
-                                if distToWp < 3.5 then
+                                -- [ปรับแก้] ขยายระยะตัดมุม ทำให้บอทไม่ต้องเหยียบจุดเป๊ะๆ ก็ไปต่อได้
+                                if distToWp < 4.5 then
                                     currentWaypointIndex = currentWaypointIndex + 1
                                 end
                                 
@@ -225,7 +255,6 @@ task.spawn(function()
                         updateDebug("DirectTrace", currentPos, directRay and directRay.Position or targetPos, Color3.fromRGB(255, 0, 0))
                     end
                 else
-                    -- ถึงตัวผู้เล่นจริงๆ แล้ว (ทั้ง X, Z และ Y) สั่งหยุดเดินและล้างทางเดินทิ้ง
                     currentWaypoints = {}
                     myHuman:MoveTo(currentPos)
                 end
