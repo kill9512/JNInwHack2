@@ -296,13 +296,9 @@ task.spawn(function()
                             currentWaypointIndex = lookAheadIndex
                             local wp = currentWaypoints[currentWaypointIndex]
 
-if wp then
-                                -- 1. แก้ไขปัญหายืนหน้าเหว (แยกความสูงขาขึ้น-ขาลง)
-                                local wpHeightDiff = wp.Position.Y - currentPos.Y 
-                                
-                                -- ถ้าระบบคำนวณให้ปีนขึ้นรวดเดียวสูงเกิน 8 สตั๊ด ถือว่าแปลก ให้หาทางใหม่
-                                -- แต่ถ้าเป็นค่าติดลบ (โดดลงเหว) จะไม่โดนบล็อคและยอมให้เดินตก/กระโดดลงไปเลย!
-                                if wpHeightDiff > 8 then
+                            if wp then
+                                local wpHeightDiff = math.abs(currentPos.Y - wp.Position.Y)
+                                if wpHeightDiff > 6 then
                                     currentWaypoints = {} 
                                     return 
                                 end
@@ -310,19 +306,12 @@ if wp then
                                 local isClimbing = myHuman:GetState() == Enum.HumanoidStateType.Climbing
                                 local isGoingUp = (wp.Position.Y > currentPos.Y + 2.5) 
 
-                                -- 2. แก้ปัญหาไม่ยอมปีนบันได (บังคับเดินอัดกำแพง/กระโดดเกาะ)
                                 if isGoingUp and not isClimbing then
                                     local flatDir = (Vector3.new(wp.Position.X, 0, wp.Position.Z) - Vector3.new(currentPos.X, 0, currentPos.Z))
                                     if flatDir.Magnitude > 0.1 then
-                                        -- ดันตัวละครให้พุ่งเข้าบันไดลึกขึ้น (เพิ่มระยะจาก 1.5 เป็น 2.5) เพื่อบังคับสถานะ Climbing
-                                        myHuman:MoveTo(wp.Position + (flatDir.Unit * 2.5)) 
+                                        myHuman:MoveTo(wp.Position + (flatDir.Unit * 1.5)) 
                                     else
                                         myHuman:MoveTo(wp.Position)
-                                    end
-                                    
-                                    -- ถ้าเดินมาถึงใกล้บันไดแล้วแต่ตัวละครยังไม่ยอมปีน ให้กระโดดเกาะเลย
-                                    if flatDir.Magnitude < 3.5 and wpHeightDiff > 2 then
-                                        forceJump(myHuman)
                                     end
                                 else
                                     myHuman:MoveTo(wp.Position)
@@ -331,24 +320,18 @@ if wp then
                                 local dist2D = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude
                                 local distY = math.abs(currentPos.Y - wp.Position.Y)
                                 
-                                -- 3. แก้บั๊กติดแหง็กเวลา Waypoint ลอยอยู่กลางอากาศตอนกระโดดลงเหว
                                 if isClimbing then
                                     if currentPos.Y >= wp.Position.Y - 1 or (dist2D < 5 and distY < 3.5) then
                                         currentWaypointIndex = currentWaypointIndex + 1
                                     end
                                 else
-                                    -- ถ้าระยะแนวนอนใกล้ถึงแล้ว และ (ความสูงใกล้เคียง หรือ กำลังกระโดด/ร่วงลงเหวผ่าน Waypoint นั้นไปแล้ว)
-                                    if dist2D < 4.5 and (distY < 3.5 or (wpHeightDiff < 0 and currentPos.Y <= wp.Position.Y + 4)) then
+                                    if dist2D < 4.5 and distY < 3.5 then
                                         currentWaypointIndex = currentWaypointIndex + 1
                                     end
                                 end
                                 
                                 if not isClimbing then
-                                    if wp.Action == Enum.PathWaypointAction.Jump or (isGoingUp and dist2D < 2.5) then
-                                        forceJump(myHuman)
-                                    end
-                                    -- บังคับกระโดดทิ้งตัวลงเหว ถ้าเป้าหมายอยู่ต่ำกว่ามากๆและเราเดินมาถึงขอบแล้ว
-                                    if wpHeightDiff < -5 and dist2D < 3 then
+                                    if wp.Action == Enum.PathWaypointAction.Jump or (isGoingUp and dist2D < 2) then
                                         forceJump(myHuman)
                                     end
                                 end
