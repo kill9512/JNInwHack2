@@ -176,49 +176,110 @@ task.spawn(function()
                     lastMoveTick = os.clock()
                 end
 
-                if hDist > followDistance or vDist > 5 then
+if hDist > followDistance or vDist > 5 then
                     local moveDir = (targetPos - currentPos).Unit
                     local directRay = workspace:Raycast(currentPos, moveDir * trueDist, rayParams)
 
-                    -- [ใหม่] ระบบวิเคราะห์สิ่งกีดขวางระดับหัว (Head-Level Raycast)
+                    -- วิเคราะห์สิ่งกีดขวางระดับหัว
                     local headPos = currentPos + Vector3.new(0, 2.5, 0)
                     local targetHeadPos = targetPos + Vector3.new(0, 2.5, 0)
                     local headRay = workspace:Raycast(headPos, (targetHeadPos - headPos).Unit * trueDist, rayParams)
 
                     local isParkour = false
-                    -- ถ้าระยะใกล้พอที่จะกระโดดได้ (hDist < 14) และเป้าหมายอยู่สูงกว่าไม่มาก (vDist < 8)
+                    local manualLadderPos = nil
+
+                    -- [⭐ ระบบแสกนหาบันไดฉุกเฉิน (ทะลุข้อจำกัดบันไดขาดตอน)]
+                    -- ถ้าเป้าหมายอยู่ด้านบนเหนือหัวเรา (ระยะราบแคบ แต่ระยะดิ่งสูง)
+                    if vDist > 5 and hDist < 30 and targetPos.Y > currentPos.Y then
+                        local overlap = OverlapParams.new()
+                        overlap.FilterType = Enum.RaycastFilterType.Exclude
+                        overlap.FilterDescendantsInstances = {myChar}
+                        
+                        -- สร้างกล่องค้นหาขนาด 30x40x30 ทรงสี่เหลี่ยมเหนือหัวเรา
+                        local searchBox = CFrame.new(currentPos + Vector3.new(0, 15, 0))
+                        local parts = workspace:GetPartBoundsInBox(searchBox, Vector3.new(30, 40, 30), overlap)
+                        
+                        local minDist = math.huge
+-- [⭐ เปลี่ยนจาก minDist เป็นระบบ bestScore]
+                        local bestScore = math.huge
+                        for _, p in ipairs(parts) do
+                            -- กรองหาพาร์ทที่ปีนได้ (Truss หรือชื่อมีคำว่า ladder)
+                            if p:IsA("TrussPart") or (p.Name:lower():find("ladder") and p.CanCollide) then
+                                
+                                -- 1. ระยะจากตัวบอท ไปหา บันได
+                                local distFromMe = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(p.Position.X, p.Position.Z)).Magnitude
+                                
+                                -- 2. ระยะจาก บันได ไปหา เป้าหมาย
+                                local distToTarget = (Vector2.new(targetPos.X, targetPos.Z) - Vector2.new(p.Position.X, p.Position.Z)).Magnitude
+                                
+                                -- 3. คำนวณคะแนนความน่าจะเป็น (ค่าน้อย = ดีที่สุด)
+                                -- คูณ 2 ที่ distToTarget เพื่อบังคับให้บอทให้น้ำหนักกับ "บันไดที่ใกล้เป้าหมาย" มากกว่าบันไดที่อยู่ใกล้ตัวมันเอง
+                                local score = distFromMe + (distToTarget * 2)
+
+                                if score < bestScore then
+                                    bestScore = score
+                                    manualLadderPos = p.Position
+                                end
+                            end
+                        end
+                    end
+
+                    -- เช็ค Parkour (โดดข้ามกำแพงเตี้ย/ปีนกล่อง)
                     if hDist < 14 and (targetPos.Y > currentPos.Y - 2) and vDist < 8 then
                         if directRay and not headRay then
-                            -- ชนข้างล่าง แต่ข้างบนโล่ง = สิ่งกีดขวางเตี้ยๆ (กล่อง, ราวระเบียง) -> ควรกระโดดข้าม!
                             isParkour = true
                         elseif not directRay and vDist >= 5 then
-                            -- ไม่ชนอะไรเลย แต่อยู่คนละชั้น (เช่น ขอบเหว หรือเป้าหมายอยู่บนกล่อง) -> ควรกระโดดขึ้น!
                             isParkour = true
                         end
                     end
 
-                    -- [แก้] เปลี่ยนเงื่อนไขวิ่งตรง ให้รวมระบบ Parkour เข้าไปด้วย
-                    if (not directRay and vDist < 5) or isParkour then
+                    -- [ตัดสินใจเลือกโหมดการเดิน]
+                    if manualLadderPos then
+                        -- โหมด: บังคับปีน/กระโดดต่อบันได (ทิ้ง Pathfinding ไปก่อน)
                         isProbing = false
                         currentWaypoints = {}
-                        -- แสดงเส้นสีเหลืองถ้าอยู่ในโหมด Parkour
+                        
+                        local ladderFlatPos = Vector3.new(manualLadderPos.X, currentPos.Y, manualLadderPos.Z)
+                        local distToLadder = (ladderFlatPos - currentPos).Magnitude
+                        
+                        -- วาดเส้น Debug สีม่วง เพื่อให้รู้ว่ากำลังใช้โหมดต่อบันได
+                        updateDebug("DirectTrace", currentPos, ladderFlatPos, Color3.fromRGB(255, 0, 255)) 
+                        
+                        local state = myHuman:GetState()
+                        
+                        -- ดันตัวอัดเข้าบันได
+                        if distToLadder > 2.5 then
+                            local dir = (ladderFlatPos - currentPos).Unit
+                            myHuman:MoveTo(ladderFlatPos + (dir * 3))
+                        else
+                            -- ถ้าตัวติดบันไดแล้ว ให้หันพุ่งหาเป้าหมาย(ที่อยู่ข้างบน) เพื่อรักษาสถานะ Climbing
+                            myHuman:MoveTo(targetPos)
+                        end
+                        
+                        -- ถ้ากำลังร่วงกลางอากาศ (บันไดขาด) หรืออยู่ใกล้ฐาน ให้กดกระโดดพุ่งเกาะชิ้นต่อไปรัวๆ
+                        if distToLadder < 4 or state == Enum.HumanoidStateType.Freefall then
+                            forceJump(myHuman)
+                        end
+
+                    elseif (not directRay and vDist < 5) or isParkour then
+                        -- โหมด: วิ่งตรง / Parkour
+                        isProbing = false
+                        currentWaypoints = {}
                         updateDebug("DirectTrace", currentPos, targetPos, isParkour and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 255, 0))
                         myHuman:MoveTo(targetPos)
                         
-                        -- ถ้าเป็นโหมด Parkour ให้เช็คระยะเพื่อกดกระโดด
                         if isParkour then
                             if directRay then
-                                -- ถ้ามีกำแพงเตี้ยกั้น (ราวระเบียง) ให้เดินเข้าไปใกล้ๆ แล้วค่อยโดด
                                 local distToWall = (directRay.Position - currentPos).Magnitude
                                 if distToWall < 3.5 then forceJump(myHuman) end
                             else
-                                -- ถ้าเป้าหมายอยู่บนขอบลอยๆ พอเดินเข้าใกล้แล้วให้โดดขึ้น
                                 if hDist < 4 then forceJump(myHuman) end
                             end
                         end
                     else
-                        -- ถ้าระยะไกล หรือสิ่งกีดขวางสูงท่วมหัว ถึงจะเรียกใช้ Pathfinding
+                        -- โหมด: ใช้ Pathfinding ปกติ (กรณีเป้าหมายอยู่ไกลและไม่ได้อยู่เหนือหัว)
                         if os.clock() - lastComputeTime > 0.5 or (targetPos - lastTargetPos).Magnitude > 5 then
+                            -- ... (โค้ดสร้าง Path ของคุณตามปกติ) ...
                             local path = PathfindingService:CreatePath({
                                 AgentRadius = 2.5, 
                                 AgentHeight = 5, 
