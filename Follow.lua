@@ -163,10 +163,11 @@ task.spawn(function()
                         -- 2. ต้องใช้ Pathfinding (อยู่ในตึก หรือ อยู่คนละชั้น)
                         if os.clock() - lastComputeTime > 1.0 or (targetPos - lastTargetPos).Magnitude > 8 then
                             local path = PathfindingService:CreatePath({
-                                AgentRadius = 1.5, -- ผอมลงเพื่อแทรกบันได
-                                AgentHeight = 5, 
+                                AgentRadius = 1,        -- แก้ให้ผอมสุดๆ (จาก 1.5 เหลือ 1) จะได้แทรกบันไดแคบได้
+                                AgentHeight = 3.5,      -- แก้ให้เตี้ยลง (จาก 5 เหลือ 3.5) จะได้ไม่ติดเพดานเตี้ยๆ ของบ้านต้นไม้
                                 AgentCanJump = true,
-                                AgentMaxJumpHeight = 15, -- ปีนบล็อคลอยได้
+                                AgentMaxJumpHeight = 15,
+                                AgentMaxSlope = 75,     -- เพิ่มความสามารถในการปีนทางชัน (สำคัญมากสำหรับบันไดใน Roblox)
                                 WaypointSpacing = 3
                             })
                             path:ComputeAsync(currentPos, targetPos)
@@ -179,6 +180,7 @@ task.spawn(function()
                                 lastComputeTime = os.clock()
                                 drawPath(currentWaypoints)
                             else
+                                -- ถ้าหาไม่ได้จริงๆ ค่อยเดินมั่ว (เส้นแดง)
                                 isProbing = true
                                 currentWaypoints = {}
                             end
