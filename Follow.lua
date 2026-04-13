@@ -55,13 +55,11 @@ local function forceJump(hum)
     end
 end
 
--- [ใหม่] ฟังก์ชันค้นหาบันไดที่ใกล้ที่สุดเมื่อหลงทาง
 local function findNearestLadder(myPos)
     local nearest = nil
-    local minDist = 80 -- รัศมีการมองหาบันได 80 สตัดส์ (ครอบคลุมบ้านต้นไม้)
+    local minDist = 80 
     
     for _, v in pairs(workspace:GetDescendants()) do
-        -- หา Part ที่เป็น Truss (บันไดลิง) หรือมีคำว่า Ladder/Stair ในชื่อ
         if (v:IsA("TrussPart") or v.Name:lower():find("ladder") or v.Name:lower():find("stair")) and v:IsA("BasePart") then
             local d = (v.Position - myPos).Magnitude
             if d < minDist then
@@ -198,7 +196,6 @@ task.spawn(function()
                     local moveDir = (targetPos - currentPos).Unit
                     local directRay = workspace:Raycast(currentPos, moveDir * trueDist, rayParams)
 
-                    -- ระบบวิเคราะห์สิ่งกีดขวางระดับหัว
                     local headPos = currentPos + Vector3.new(0, 2.5, 0)
                     local targetHeadPos = targetPos + Vector3.new(0, 2.5, 0)
                     local headRay = workspace:Raycast(headPos, (targetHeadPos - headPos).Unit * trueDist, rayParams)
@@ -229,7 +226,7 @@ task.spawn(function()
                     else
                         if os.clock() - lastComputeTime > 0.5 or (targetPos - lastTargetPos).Magnitude > 5 then
                             local path = PathfindingService:CreatePath({
-                                AgentRadius = 2.0, -- [ปรับแก้] ลดขนาดบอทลง เพื่อให้มุดช่องแคบๆ ได้ง่ายขึ้น
+                                AgentRadius = 2.0, 
                                 AgentHeight = 5, 
                                 AgentCanJump = true,
                                 WaypointSpacing = 3 
@@ -259,20 +256,29 @@ task.spawn(function()
                         end
 
                         if isProbing then
-                            -- [ใหม่] ลอจิกเมื่อ Pathfinding หาทางไม่เจอ
                             if vDist > 10 then 
-                                -- ถ้าเป้าหมายอยู่สูงมาก (เช่น บนบ้านต้นไม้) ให้ค้นหาบันไดที่ใกล้ที่สุดแทน
                                 local targetLadder = findNearestLadder(currentPos)
                                 if targetLadder then
-                                    updateDebug("ProbeTrace", currentPos, targetLadder.Position, Color3.fromRGB(255, 0, 255)) -- เส้นสีม่วงชี้ไปที่บันได
-                                    myHuman:MoveTo(targetLadder.Position)
+                                    updateDebug("ProbeTrace", currentPos, targetLadder.Position, Color3.fromRGB(255, 0, 255))
                                     
-                                    -- ถ้าเดินไปใกล้บันไดแล้ว ให้กระโดดเกาะ
-                                    if (targetLadder.Position - currentPos).Magnitude < 4 then
+                                    -- [อัปเดตแก้ปัญหาบันไดลอย] 
+                                    -- หาเวกเตอร์แนวราบเพื่อดันทุรังไถเข้าหาแกนบันได
+                                    local flatDir = (Vector3.new(targetLadder.Position.X, 0, targetLadder.Position.Z) - Vector3.new(currentPos.X, 0, currentPos.Z))
+                                    local dist2DToLadder = flatDir.Magnitude
+                                    
+                                    if dist2DToLadder > 0.1 then
+                                        -- เดินทะลุแกนบันไดไปนิดนึงเพื่อสร้างแรงบี้กำแพง
+                                        myHuman:MoveTo(targetLadder.Position + (flatDir.Unit * 2))
+                                    else
+                                        myHuman:MoveTo(targetLadder.Position)
+                                    end
+                                    
+                                    -- ถ้าระยะแนวราบ (X, Z) มาถึงใต้บันไดแล้ว (น้อยกว่า 4 สตัดส์)
+                                    -- ให้กระโดดรัวๆ เพื่อคว้าบันไดที่ลอยอยู่ข้างบนหัว
+                                    if dist2DToLadder < 4 then
                                         forceJump(myHuman)
                                     end
                                 else
-                                    -- ถ้าหาบันไดไม่เจอจริงๆ ค่อยใช้ Probe แบบเดิม
                                     local probeDir = getProbingDirection(myRoot, targetPos)
                                     if probeDir then
                                         updateDebug("ProbeTrace", currentPos, currentPos + (probeDir * 5), Color3.fromRGB(255, 165, 0))
@@ -282,7 +288,6 @@ task.spawn(function()
                                     end
                                 end
                             else
-                                -- ถ้าอยู่ระดับเดียวกัน แต่หาทางไม่ได้ (เช่น ติดกำแพงใหญ่)
                                 local probeDir = getProbingDirection(myRoot, targetPos)
                                 if probeDir then
                                     updateDebug("ProbeTrace", currentPos, currentPos + (probeDir * 5), Color3.fromRGB(255, 165, 0))
