@@ -112,67 +112,7 @@ MoveSection:NewToggle("Enable Follow", "Start Logic", function(s)
 end)
 MoveSection:NewToggle("Show Path", "Visuals", function(s) debugEnabled = s end)
 MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
--- ===== PARKOUR SYSTEM =====
 
-local function detectDrop(currentPos, targetPos)
-    if targetPos.Y >= currentPos.Y then return false end
-    
-    local dir = (targetPos - currentPos).Unit
-    local checkPos = currentPos + dir * 4
-    
-    local downRay = workspace:Raycast(checkPos, Vector3.new(0, -60, 0), rayParams)
-    
-    if downRay then
-        local dropHeight = currentPos.Y - downRay.Position.Y
-        
-        if dropHeight < 35 then
-            return true, downRay.Position
-        end
-    end
-    
-    return false
-end
-
-local function detectClimbable(currentPos, dir)
-    local stepHeight = 4
-    local maxSteps = 6
-    
-    local pos = currentPos
-    
-    for i = 1, maxSteps do
-        local forward = pos + dir * 2
-        local up = forward + Vector3.new(0, stepHeight, 0)
-        
-        local downRay = workspace:Raycast(up, Vector3.new(0, -stepHeight*2, 0), rayParams)
-        
-        if not downRay then return false end
-        
-        local diff = downRay.Position.Y - pos.Y
-        if diff > stepHeight then return false end
-        
-        pos = downRay.Position
-    end
-    
-    return true, pos
-end
-
-local function findJumpTarget(currentPos, dir)
-    for d = 4, 12, 2 do
-        local checkPos = currentPos + dir * d + Vector3.new(0, 5, 0)
-        
-        local downRay = workspace:Raycast(checkPos, Vector3.new(0, -10, 0), rayParams)
-        
-        if downRay then
-            local diff = downRay.Position.Y - currentPos.Y
-            
-            if diff < 6 then
-                return downRay.Position
-            end
-        end
-    end
-    
-    return nil
-end
 -- --- MAIN LOOP ---
 task.spawn(function()
     while true do
@@ -239,57 +179,8 @@ task.spawn(function()
                 if hDist > followDistance or vDist > 5 then
                     local moveDir = (targetPos - currentPos).Unit
                     local directRay = workspace:Raycast(currentPos, moveDir * trueDist, rayParams)
-                
-                    -- ===== SMART PARKOUR TRIGGER =====
-                    local shouldParkour = false
-                
-                    if directRay or vDist > 4 then
-                        shouldParkour = true
-                    end
-                
-                    if shouldParkour then
-                
-                        -- 1. DROP
-                        local canDrop, dropPos = detectDrop(currentPos, targetPos)
-                        if canDrop and targetPos.Y < currentPos.Y then
-                            currentWaypoints = {}
-                            isProbing = false
-                
-                            updateDebug("DirectTrace", currentPos, dropPos, Color3.fromRGB(255,100,100))
-                            myHuman:MoveTo(dropPos)
-                            return
-                        end
-                
-                        -- 2. CLIMB
-                        local canClimb, climbPos = detectClimbable(currentPos, moveDir)
-                        if canClimb and vDist > 3 then
-                            currentWaypoints = {}
-                            isProbing = false
-                
-                            updateDebug("DirectTrace", currentPos, climbPos, Color3.fromRGB(100,255,100))
-                            myHuman:MoveTo(climbPos)
-                            forceJump(myHuman)
-                            return
-                        end
-                
-                        -- 3. JUMP GAP (ต้องมี gap จริง)
-                        if directRay then
-                            local jumpTarget = findJumpTarget(currentPos, moveDir)
-                            if jumpTarget then
-                                currentWaypoints = {}
-                                isProbing = false
-                
-                                updateDebug("DirectTrace", currentPos, jumpTarget, Color3.fromRGB(255,255,0))
-                                myHuman:MoveTo(jumpTarget)
-                
-                                if (jumpTarget - currentPos).Magnitude < 6 then
-                                    forceJump(myHuman)
-                                end
-                
-                                return
-                            end
-                        end
-                    end
+
+                    -- [ใหม่] ระบบวิเคราะห์สิ่งกีดขวางระดับหัว (Head-Level Raycast)
                     local headPos = currentPos + Vector3.new(0, 2.5, 0)
                     local targetHeadPos = targetPos + Vector3.new(0, 2.5, 0)
                     local headRay = workspace:Raycast(headPos, (targetHeadPos - headPos).Unit * trueDist, rayParams)
