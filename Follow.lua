@@ -188,32 +188,34 @@ if hDist > followDistance or vDist > 5 then
                     local isParkour = false
                     local manualLadderPos = nil
 
-                    -- [⭐ ระบบแสกนหาบันไดฉุกเฉิน (ทะลุข้อจำกัดบันไดขาดตอน)]
-                    -- ถ้าเป้าหมายอยู่ด้านบนเหนือหัวเรา (ระยะราบแคบ แต่ระยะดิ่งสูง)
-                    if vDist > 5 and hDist < 30 and targetPos.Y > currentPos.Y then
+-- [⭐ ระบบแสกนหาบันไดฉุกเฉิน (ทะลุข้อจำกัดบันไดขาดตอน)]
+                    -- ขยายระยะ hDist เป็น 50 เพื่อให้เรดาร์ทำงานไกลขึ้น
+                    if vDist > 5 and hDist < 50 and targetPos.Y > currentPos.Y then
                         local overlap = OverlapParams.new()
                         overlap.FilterType = Enum.RaycastFilterType.Exclude
                         overlap.FilterDescendantsInstances = {myChar}
                         
-                        -- สร้างกล่องค้นหาขนาด 30x40x30 ทรงสี่เหลี่ยมเหนือหัวเรา
-                        local searchBox = CFrame.new(currentPos + Vector3.new(0, 15, 0))
-                        local parts = workspace:GetPartBoundsInBox(searchBox, Vector3.new(30, 40, 30), overlap)
+                        -- 1. ย้ายจุดศูนย์กลางกล่องเรดาร์ ไปไว้ "ตรงกลาง" ระหว่างตัวบอทกับเป้าหมาย
+                        local centerPos = (currentPos + targetPos) / 2
+                        local searchBox = CFrame.new(centerPos)
                         
-                        local minDist = math.huge
--- [⭐ เปลี่ยนจาก minDist เป็นระบบ bestScore]
+                        -- 2. ขยายขนาดกล่องให้ใหญ่คลุมทั้งพื้นที่ (กว้างสุดตามระยะห่าง + เผื่อ 30 สตั๊ด)
+                        local boxSize = Vector3.new(math.max(hDist + 30, 40), vDist + 30, math.max(hDist + 30, 40))
+                        local parts = workspace:GetPartBoundsInBox(searchBox, boxSize, overlap)
+                        
                         local bestScore = math.huge
                         for _, p in ipairs(parts) do
-                            -- กรองหาพาร์ทที่ปีนได้ (Truss หรือชื่อมีคำว่า ladder)
-                            if p:IsA("TrussPart") or (p.Name:lower():find("ladder") and p.CanCollide) then
+                            local n = p.Name:lower()
+                            -- ตรวจสอบชื่อของ Model/Group ที่คลุม Part นี้อยู่ด้วย (สำคัญมากสำหรับแมพที่สร้างบันไดเอง)
+                            local pName = p.Parent and p.Parent.Name:lower() or ""
+                            
+                            -- 3. เพิ่มคีย์เวิร์ดที่นักสร้างแมพชอบใช้ (ladder, truss, climb, step) ทั้งในตัว Part และใน Model
+                            if p:IsA("TrussPart") or n:find("ladder") or n:find("truss") or n:find("climb") or n:find("step") or
+                               pName:find("ladder") or pName:find("truss") or pName:find("climb") or pName:find("step") then
                                 
-                                -- 1. ระยะจากตัวบอท ไปหา บันได
                                 local distFromMe = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(p.Position.X, p.Position.Z)).Magnitude
-                                
-                                -- 2. ระยะจาก บันได ไปหา เป้าหมาย
                                 local distToTarget = (Vector2.new(targetPos.X, targetPos.Z) - Vector2.new(p.Position.X, p.Position.Z)).Magnitude
                                 
-                                -- 3. คำนวณคะแนนความน่าจะเป็น (ค่าน้อย = ดีที่สุด)
-                                -- คูณ 2 ที่ distToTarget เพื่อบังคับให้บอทให้น้ำหนักกับ "บันไดที่ใกล้เป้าหมาย" มากกว่าบันไดที่อยู่ใกล้ตัวมันเอง
                                 local score = distFromMe + (distToTarget * 2)
 
                                 if score < bestScore then
