@@ -24,7 +24,6 @@ local isProbing = false
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
--- ตัวแปรใหม่สำหรับตรวจจับการเดินติด (Stuck Detection)
 local lastPosition = Vector3.new()
 local lastMoveTick = os.clock()
 
@@ -77,8 +76,39 @@ local function getProbingDirection(myRoot, targetPos)
 end
 
 -- --- UI ---
-Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP"}, function(m) SelectedMode = m end)
-local drop = Section:NewDropdown("Select Target", "User", {}, function(s) SelectedPlayerName = s:match("@([^%)]+)") end)
+-- [เพิ่ม] โหมด Random
+Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP", "Random"}, function(m) 
+    SelectedMode = m 
+end)
+
+-- [เพิ่ม] ช่องพิมพ์ค้นหาชื่อ (TextBox) ค้นหาจากบางส่วนของชื่อได้
+Section:NewTextBox("Type Name (Search)", "Type exact or partial name", function(txt)
+    if txt ~= "" then
+        SelectedMode = "Manual" -- ถ้าพิมพ์ชื่อให้เปลี่ยนโหมดเป็น Manual ทันที
+        local foundName = nil
+        local lowerTxt = string.lower(txt)
+        
+        -- วนหาว่ามีใครชื่อคล้ายๆ ที่พิมพ์มาไหม
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer and (string.find(string.lower(p.Name), lowerTxt) or string.find(string.lower(p.DisplayName), lowerTxt)) then
+                foundName = p.Name
+                break
+            end
+        end
+        
+        if foundName then
+            SelectedPlayerName = foundName
+            print("Target locked to: " .. foundName)
+        else
+            print("Player not found!")
+        end
+    end
+end)
+
+local drop = Section:NewDropdown("Select Target (List)", "User", {}, function(s) 
+    SelectedMode = "Manual" -- ถ้ากดจากลิสต์ให้เปลี่ยนเป็น Manual
+    SelectedPlayerName = s:match("@([^%)]+)") 
+end)
 
 local function refreshList()
     local t = {"None (Off)"}
@@ -101,14 +131,37 @@ MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s e
 -- --- MAIN LOOP ---
 task.spawn(function()
     while true do
-        task.wait(0.05) -- [ปรับแก้] คิดเร็วขึ้นจาก 0.15 เป็น 0.05 วินาที
+        task.wait(0.05) 
         if not followEnabled then continue end
         
         pcall(function()
             local target = nil
+            
+            -- [แก้ไข] ระบบจัดการเป้าหมายตามโหมด
             if SelectedMode == "Manual" then
                 target = Players:FindFirstChild(SelectedPlayerName or "")
+            elseif SelectedMode == "Random" then
+                -- สุ่มเป้าหมายใหม่ (ถ้ายังไม่มีเป้าหมาย หรือเป้าหมายเดิมตาย/ออกเกม)
+                if not SelectedPlayerName or not Players:FindFirstChild(SelectedPlayerName) then
+                    local allPlayers = Players:GetPlayers()
+                    local validPlayers = {}
+                    
+                    for _, p in pairs(allPlayers) do
+                        if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                            table.insert(validPlayers, p)
+                        end
+                    end
+                    
+                    if #validPlayers > 0 then
+                        local randPlayer = validPlayers[math.random(1, #validPlayers)]
+                        SelectedPlayerName = randPlayer.Name
+                        target = randPlayer
+                    end
+                else
+                    target = Players:FindFirstChild(SelectedPlayerName)
+                end
             else
+                -- โหมด HP
                 local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
                 for _, p in pairs(Players:GetPlayers()) do
                     if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") then
@@ -118,9 +171,14 @@ task.spawn(function()
                         end
                     end
                 end
+                if target then SelectedPlayerName = target.Name end
             end
 
-            if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then return end
+            if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then 
+                -- ถ้าระบบ Random หาผู้เล่นไม่เจอให้รีเซ็ตชื่อรอสุ่มรอบหน้า
+                if SelectedMode == "Random" then SelectedPlayerName = nil end
+                return 
+            end
 
             local myChar = LocalPlayer.Character
             local myHuman = myChar:FindFirstChildOfClass("Humanoid")
@@ -131,14 +189,12 @@ task.spawn(function()
                 local currentPos = myRoot.Position
                 local targetPos = tRoot.Position
                 
-                -- คำนวณระยะห่างแยกแกนแนวนอนและแนวตั้ง
                 local trueDist = (targetPos - currentPos).Magnitude
                 local hDist = (Vector3.new(targetPos.X, 0, targetPos.Z) - Vector3.new(currentPos.X, 0, currentPos.Z)).Magnitude
                 local vDist = math.abs(targetPos.Y - currentPos.Y)
                 
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
 
-                -- ระบบ Stuck Detection
                 if (currentPos - lastPosition).Magnitude < 0.5 then
                     if os.clock() - lastMoveTick > 0.7 then 
                         currentWaypoints = {} 
@@ -149,7 +205,6 @@ task.spawn(function()
                     lastMoveTick = os.clock()
                 end
 
-                -- จะเดินก็ต่อเมื่อแนวนอนห่าง หรือ อยู่คนละชั้นกันเกินไป
                 if hDist > followDistance or vDist > 5 then
                     local moveDir = (targetPos - currentPos).Unit
                     local directRay = workspace:Raycast(currentPos, moveDir * trueDist, rayParams)
@@ -165,7 +220,7 @@ task.spawn(function()
                                 AgentRadius = 2.5, 
                                 AgentHeight = 5, 
                                 AgentCanJump = true,
-                                WaypointSpacing = 3 -- [ปรับแก้] จุดถี่ขึ้น (ลดจาก 4 เป็น 3)
+                                WaypointSpacing = 3 
                             })
                             path:ComputeAsync(currentPos, targetPos)
                             
@@ -200,24 +255,20 @@ task.spawn(function()
                                 if wallCheck then forceJump(myHuman) end
                             end
                         elseif #currentWaypoints > 0 then
-                            -- [แก้ไขใหม่] ระบบ Path Smoothing แบบเซฟตี้ (แก้บัคตกบันได)
                             local lookAheadIndex = currentWaypointIndex
-                            local maxLookAhead = math.min(currentWaypointIndex + 6, #currentWaypoints) -- ลดระยะมองลงนิดนึงเพื่อความชัวร์
+                            local maxLookAhead = math.min(currentWaypointIndex + 6, #currentWaypoints) 
                             
                             for i = maxLookAhead, currentWaypointIndex + 1, -1 do
                                 local testWp = currentWaypoints[i]
                                 
-                                -- 1. [ระบบใหม่] ตรวจเช็คความปลอดภัยของความสูง (ป้องกันหล่นบันได)
                                 local isHeightSafe = true
                                 for j = currentWaypointIndex, i do
-                                    -- ตรวจสอบว่า Waypoint ระหว่างทาง มีจุดไหนที่สูง/ต่ำกว่าเราเกิน 1.5 สตัดส์ไหม (ระยะความสูงของบันได)
                                     if math.abs(currentWaypoints[j].Position.Y - currentPos.Y) > 1.5 then
                                         isHeightSafe = false
                                         break
                                     end
                                 end
                                 
-                                -- ถ้าทุกจุดเป็นพื้นราบ (isHeightSafe = true) ถึงจะยอมให้ลากเส้นตรงตัดมุม
                                 if isHeightSafe then
                                     local hasJump = false
                                     for j = currentWaypointIndex, i do
@@ -233,7 +284,7 @@ task.spawn(function()
                                         
                                         if not hit then
                                             lookAheadIndex = i
-                                            break -- เจอทางตรงที่ไม่มีอะไรกั้นและเป็นพื้นราบ ข้ามไปจุดนี้เลย!
+                                            break 
                                         end
                                     end
                                 end
@@ -266,6 +317,11 @@ task.spawn(function()
                 else
                     currentWaypoints = {}
                     myHuman:MoveTo(currentPos)
+                    
+                    -- ถ้าระบบ Random เดินมาจนถึงเป้าหมายแล้ว ให้มันรีเซ็ตเพื่อหาเหยื่อรายต่อไปขำๆ
+                    if SelectedMode == "Random" and (os.clock() - lastComputeTime > 5.0) then
+                        SelectedPlayerName = nil
+                    end
                 end
             end
         end)
