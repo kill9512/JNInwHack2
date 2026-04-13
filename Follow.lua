@@ -131,20 +131,31 @@ task.spawn(function()
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
 
                 if dist > followDistance then
+                    -- 0. เช็คระยะห่างของความสูง (Y-Axis) ระหว่างเรากับเป้าหมาย
+                    local heightDiff = math.abs(targetPos.Y - currentPos.Y)
+
                     -- 1. ลองเดินตรง (Line of Sight)
                     local moveDir = (targetPos - currentPos).Unit
                     local directRay = workspace:Raycast(currentPos, moveDir * dist, rayParams)
 
-                    if not directRay then
-                        -- ทางโล่ง วิ่งใส่เลย
+                    -- [จุดที่แก้] จะวิ่งตรงได้ก็ต่อเมื่อ "ไม่มีสิ่งกีดขวาง" และ "ความสูงอยู่ระดับเดียวกัน (ต่างไม่เกิน 5 studs)"
+                    if not directRay and heightDiff < 5 then
+                        -- ทางโล่ง และอยู่ชั้นเดียวกัน วิ่งใส่เลย
                         isProbing = false
                         currentWaypoints = {}
                         updateDebug("DirectTrace", currentPos, targetPos, Color3.fromRGB(0, 255, 0))
                         myHuman:MoveTo(targetPos)
                     else
-                        -- 2. ทางตัน/อยู่ในตึก -> ใช้ Pathfinding
-                        if os.clock() - lastComputeTime > 1.0 or (targetPos - lastTargetPos).Magnitude > 8 then
-                            local path = PathfindingService:CreatePath({AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true})
+                        -- 2. ทางตัน/อยู่ในตึก หรือ "อยู่คนละชั้น" -> บังคับใช้ Pathfinding หาบันได/ทางอ้อม
+                        
+                        -- รีเฟรช Pathfinding ให้ไวขึ้นเป็น 0.5 วิ (จากเดิม 1.0) เพื่อให้ตามเป้าหมายที่ปีนตึกได้ไวขึ้น
+                        if os.clock() - lastComputeTime > 0.5 or (targetPos - lastTargetPos).Magnitude > 5 then
+                            local path = PathfindingService:CreatePath({
+                                AgentRadius = 2.5, 
+                                AgentHeight = 5, 
+                                AgentCanJump = true,
+                                WaypointSpacing = 4 -- [เพิ่ม] ทำให้จุดเดินถี่ขึ้น บอทจะเดินขึ้นบันไดหรือเลี้ยวตามมุมได้เนียนขึ้น
+                            })
                             path:ComputeAsync(currentPos, targetPos)
                             
                             if path.Status == Enum.PathStatus.Success then
@@ -164,25 +175,24 @@ task.spawn(function()
                                     end
                                 end
                             else
-                                -- ** พิกัดล้มเหลว (Compute Fail) -> เข้าสู่ Explorer Mode **
+                                -- พิกัดล้มเหลว (Compute Fail) -> เข้าสู่โหมดแหย่
                                 isProbing = true
                                 currentWaypoints = {}
                             end
                         end
 
-                        -- ** ส่วนตัดสินใจเดิน **
+                        -- ** ส่วนตัดสินใจเดินตาม Pathfinding **
                         if isProbing then
-                            -- โหมดสำรวจ: แหย่ไปเรื่อยๆ ตามทิศทางผู้เล่น
+                            -- โหมดสำรวจ
                             local probeDir = getProbingDirection(myRoot, targetPos)
                             if probeDir then
                                 updateDebug("ProbeTrace", currentPos, currentPos + (probeDir * 5), Color3.fromRGB(255, 165, 0))
                                 myHuman:MoveTo(currentPos + (probeDir * 8))
-                                -- ถ้าติดกำแพงให้โดดไถไป
                                 local wallCheck = workspace:Raycast(currentPos, probeDir * 4, rayParams)
                                 if wallCheck then forceJump(myHuman) end
                             end
                         elseif #currentWaypoints > 0 then
-                            -- เดินตาม Waypoints ปกติ
+                            -- เดินตาม Waypoints ที่หาทางเดินมาได้
                             local wp = currentWaypoints[currentWaypointIndex]
                             if wp then
                                 myHuman:MoveTo(wp.Position)
@@ -194,7 +204,8 @@ task.spawn(function()
                                 end
                             end
                         end
-                        updateDebug("DirectTrace", currentPos, directRay.Position, Color3.fromRGB(255, 0, 0))
+                        -- แสดงเส้นสีแดงบ่งบอกว่าเจออุปสรรค หรืออยู่คนละความสูง
+                        updateDebug("DirectTrace", currentPos, directRay and directRay.Position or targetPos, Color3.fromRGB(255, 0, 0))
                     end
                 else
                     myHuman:MoveTo(currentPos)
