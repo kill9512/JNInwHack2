@@ -27,7 +27,6 @@ rayParams.FilterType = Enum.RaycastFilterType.Exclude
 local lastPosition = Vector3.new()
 local lastMoveTick = os.clock()
 
--- [ใหม่] ตัวแปรสำหรับจำเป้าหมายที่โดนสุ่ม จะได้ไม่เปลี่ยนเป้ารัวๆ
 local randomTarget = nil 
 
 -- --- Debug Visualization ---
@@ -79,19 +78,17 @@ local function getProbingDirection(myRoot, targetPos)
 end
 
 -- --- UI ---
--- [แก้] เพิ่มโหมด "Random" เข้าไปใน Dropdown
 Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP", "Random"}, function(m) 
     SelectedMode = m 
-    if m == "Random" then randomTarget = nil end -- รีเซ็ตการสุ่มใหม่เมื่อกดเลือก
+    if m == "Random" then randomTarget = nil end 
 end)
 
--- [ใหม่] ช่องกรอกชื่อสำหรับค้นหา
 Section:NewTextBox("Search Player", "พิมพ์ชื่อ หรือ Display Name", function(txt)
     local lowerTxt = txt:lower()
     for _, p in pairs(Players:GetPlayers()) do 
         if p ~= LocalPlayer and (p.Name:lower():find(lowerTxt) or p.DisplayName:lower():find(lowerTxt)) then
             SelectedPlayerName = p.Name
-            SelectedMode = "Manual" -- บังคับเปลี่ยนเป็นโหมด Manual อัตโนมัติเมื่อค้นหาเจอ
+            SelectedMode = "Manual" 
             break
         end
     end
@@ -126,11 +123,9 @@ task.spawn(function()
         pcall(function()
             local target = nil
             
-            -- [แก้] เพิ่มระบบประมวลผลการสุ่ม และการหาเป้าหมาย
             if SelectedMode == "Manual" then
                 target = Players:FindFirstChild(SelectedPlayerName or "")
             elseif SelectedMode == "Random" then
-                -- ถ้ายังไม่มีเป้าหมาย หรือ เป้าหมายตาย/ออกเกม ให้ทำการสุ่มใหม่
                 if not randomTarget or not randomTarget.Parent or not randomTarget.Character or not randomTarget.Character:FindFirstChild("Humanoid") or randomTarget.Character.Humanoid.Health <= 0 then
                     local validPlayers = {}
                     for _, p in pairs(Players:GetPlayers()) do
@@ -279,13 +274,22 @@ task.spawn(function()
 
                                 myHuman:MoveTo(wp.Position)
                                 
-                                local distToWp = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude
-                                if distToWp < 4.5 then
+                                -- [อัปเดตแก้บัคบันได] 1. เอาความสูงมาคิดด้วยเวลาเลื่อนจุด
+                                local dist2D = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude
+                                local distY = math.abs(currentPos.Y - wp.Position.Y)
+                                
+                                -- ต้องใกล้ทั้งระยะทางปกติ และความสูง (เพื่อไม่ให้มันสคิปจุดเวลาปีนบันได)
+                                if dist2D < 4.5 and distY < 3.5 then
                                     currentWaypointIndex = currentWaypointIndex + 1
                                 end
                                 
-                                if wp.Action == Enum.PathWaypointAction.Jump or wp.Position.Y > currentPos.Y + 2 then
-                                    forceJump(myHuman)
+                                -- [อัปเดตแก้บัคบันได] 2. เช็คว่ากำลังปีนอยู่ไหม ถ้าปีนอยู่ห้ามกระโดดเด็ดขาด!
+                                local isClimbing = myHuman:GetState() == Enum.HumanoidStateType.Climbing
+                                
+                                if not isClimbing then
+                                    if wp.Action == Enum.PathWaypointAction.Jump or wp.Position.Y > currentPos.Y + 2.5 then
+                                        forceJump(myHuman)
+                                    end
                                 end
                             end
                         end
