@@ -26,6 +26,7 @@ rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
 local lastPosition = Vector3.new()
 local lastMoveTick = os.clock()
+local radarCooldownTick = 0 -- [ใหม่!] ตัวจับเวลาปิดเรดาร์เมื่อบอทเดินชนกำแพง
 local randomTarget = nil 
 
 -- --- Debug Visualization ---
@@ -70,27 +71,24 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- [ใหม่!] สมองส่วนเรดาร์ 360 องศา ทะลวง Local Maxima (หาบันไดรอบบ้านต้นไม้)
+-- [อัปเกรด!] สมองส่วนเรดาร์ คัดกรองกำแพงปลอม
 local function computeLadderPath(startPos, targetPos)
     local customWaypoints = {}
     local currentScanPos = startPos
     local maxJumps = 15 
-    local visitedPositions = {} -- จดจำจุดที่เดินไปแล้ว จะได้ไม่เดินวนที่ก้อนหินเดิม
+    local visitedPositions = {} 
     
     for i = 1, maxJumps do
         local bestNextPos = nil
-        local bestScore = math.huge -- ยิ่งน้อยยิ่งดี
+        local bestScore = math.huge 
         
-        -- กวาดเรดาร์ 360 องศารอบตัว ไม่ได้มองแค่ตรงไปหาเป้าหมายแล้ว!
         local scanAngles = {0, 45, -45, 90, -90, 135, -135, 180}
         
         for _, angle in ipairs(scanAngles) do
-            -- สร้างทิศทางแผ่ออกรอบตัว
             local baseDir = (Vector3.new(targetPos.X, 0, targetPos.Z) - Vector3.new(currentScanPos.X, 0, currentScanPos.Z)).Unit
             if baseDir.Magnitude ~= baseDir.Magnitude then baseDir = Vector3.new(1,0,0) end
             local scanDir = (CFrame.Angles(0, math.rad(angle), 0) * baseDir).Unit
             
-            -- ขยายรัศมีหาบันไดให้ไกลขึ้น (ทะลุ 24 stud เพื่อหาบันไดรอบนอกต้นไม้)
             for forwardDist = 4, 24, 4 do
                 local dropOrigin = currentScanPos + (scanDir * forwardDist) + Vector3.new(0, 12, 0)
                 local dropRay = workspace:Raycast(dropOrigin, Vector3.new(0, -15, 0), rayParams)
@@ -99,9 +97,7 @@ local function computeLadderPath(startPos, targetPos)
                     local hitPos = dropRay.Position
                     local heightDiff = hitPos.Y - currentScanPos.Y
                     
-                    -- ถ้ายกระดับสูงขึ้นได้ (บันได, บล็อก, ขอบบ้าน)
                     if heightDiff > 0.5 and heightDiff <= 8.5 then
-                        -- เช็คว่าเคยมาตรงนี้หรือยัง
                         local isVisited = false
                         for _, vPos in ipairs(visitedPositions) do
                             if (vPos - hitPos).Magnitude < 3 then isVisited = true; break end
@@ -109,9 +105,6 @@ local function computeLadderPath(startPos, targetPos)
                         
                         if not isVisited then
                             local horizontalDistToTarget = (Vector3.new(hitPos.X, 0, hitPos.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
-                            
-                            -- [กุญแจสำคัญ!] สมการคะแนนใหม่: หิวความสูง ยอมเดินอ้อมไกลๆ เพื่อบันได
-                            -- คูณ 8 ให้ความสูง (Height) มีน้ำหนักเอาชนะระยะห่างแนวนอนได้
                             local score = horizontalDistToTarget - (heightDiff * 8)
                             
                             if score < bestScore then
@@ -122,23 +115,42 @@ local function computeLadderPath(startPos, targetPos)
                     end
                 end
                 
-                -- เช็คกำแพง/Truss ที่อาจจะปีนได้
+                -- [แก้บั๊กวิ่งชนกำแพง] ตรวจสอบว่าเป็น Truss หรือมีหลังคาให้ยืนไหม
                 local wallRay = workspace:Raycast(currentScanPos + Vector3.new(0, 2, 0), scanDir * forwardDist, rayParams)
-                if wallRay then
-                    local climbPos = wallRay.Position + Vector3.new(0, 7, 0) - (scanDir * 1.5)
-                    local isVisited = false
-                    for _, vPos in ipairs(visitedPositions) do
-                        if (vPos - climbPos).Magnitude < 3 then isVisited = true; break end
+                if wallRay and wallRay.Instance.CanCollide then
+                    local isClimbable = false
+                    local climbPos = nil
+
+                    -- 1. ถ้าเป็นบันไดปีนได้ชัวร์ๆ (Truss)
+                    if wallRay.Instance:IsA("TrussPart") then
+                        isClimbable = true
+                        climbPos = wallRay.Position + Vector3.new(0, 7, 0) + (wallRay.Normal * 1.5)
+                    else
+                        -- 2. ถ้าไม่ใช่บันได เช็คว่าบนกำแพงนั้นมี "ขอบ" ให้โดดขึ้นไปยืนได้ไหม
+                        local ledgeOrigin = wallRay.Position + (scanDir * 1.5) + Vector3.new(0, 9, 0)
+                        local ledgeRay = workspace:Raycast(ledgeOrigin, Vector3.new(0, -10, 0), rayParams)
+                        if ledgeRay and (ledgeRay.Position.Y - currentScanPos.Y) <= 8.5 then
+                            isClimbable = true
+                            climbPos = ledgeRay.Position
+                        end
                     end
-                    
-                    if not isVisited then
-                        local heightDiff = climbPos.Y - currentScanPos.Y
-                        local horizontalDistToTarget = (Vector3.new(climbPos.X, 0, climbPos.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
-                        local score = horizontalDistToTarget - (heightDiff * 8) + 5 -- บวก 5 เป็นการลงโทษนิดหน่อย เพื่อให้พยายามหาพื้นที่ยืนได้ก่อนจะปีนกำแพง
+
+                    -- ถ้ามั่นใจว่าปีนได้ หรือมีขอบให้เหยียบ ค่อยสร้าง Waypoint
+                    if isClimbable and climbPos then
+                        local isVisited = false
+                        for _, vPos in ipairs(visitedPositions) do
+                            if (vPos - climbPos).Magnitude < 3 then isVisited = true; break end
+                        end
                         
-                        if score < bestScore then
-                            bestScore = score
-                            bestNextPos = climbPos
+                        if not isVisited then
+                            local heightDiff = climbPos.Y - currentScanPos.Y
+                            local horizontalDistToTarget = (Vector3.new(climbPos.X, 0, climbPos.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
+                            local score = horizontalDistToTarget - (heightDiff * 8) + 5
+                            
+                            if score < bestScore then
+                                bestScore = score
+                                bestNextPos = climbPos
+                            end
                         end
                     end
                 end
@@ -153,12 +165,11 @@ local function computeLadderPath(startPos, targetPos)
             table.insert(visitedPositions, bestNextPos)
             currentScanPos = bestNextPos
             
-            -- ถ้าความสูงไปถึงเป้าหมายแล้ว ก็หยุดหา
             if currentScanPos.Y >= targetPos.Y - 2 or (currentScanPos - targetPos).Magnitude < 6 then 
                 break 
             end
         else
-            break -- ทางตัน ไปต่อไม่ได้
+            break 
         end
     end
     return customWaypoints
@@ -252,10 +263,13 @@ task.spawn(function()
                 
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
 
+                -- [แก้ปัญหาบอทลืม Pathfinding ดั้งเดิม]
                 if (currentPos - lastPosition).Magnitude < 0.5 then
                     if os.clock() - lastMoveTick > 0.7 then 
                         currentWaypoints = {} 
                         lastMoveTick = os.clock()
+                        -- ถ้าบอทติดกำแพง ให้ปิดการคำนวณบันได(สมองล่วงหน้า) 2.5 วินาที เพื่อบังคับใช้ Pathfinding ดั้งเดิมอ้อมกำแพง!
+                        radarCooldownTick = os.clock() + 2.5 
                     end
                 else
                     lastPosition = currentPos
@@ -298,8 +312,8 @@ task.spawn(function()
                             currentWaypoints = {} 
                             isProbing = false
                             
-                            -- [แทรกสมองล่วงหน้า] เมื่อเป้าหมายอยู่สูงเกิน 4 stud 
-                            if targetPos.Y > currentPos.Y + 4 and hDist < 60 then
+                            -- [เงื่อนไขใหม่] จะใช้เรดาร์หาบันได ก็ต่อเมื่อไม่ได้ติด Cooldown จากการเดินชนกำแพง
+                            if targetPos.Y > currentPos.Y + 4 and hDist < 60 and os.clock() > radarCooldownTick then
                                 currentWaypoints = computeLadderPath(currentPos, targetPos)
                             end
                             
@@ -319,6 +333,7 @@ task.spawn(function()
                                     end
                                 end
                             else
+                                -- ถ้าเรดาร์หาบันไดไม่เจอ หรือ ติด Cooldown อยู่ จะใช้ Pathfinding แบบดั้งเดิม
                                 local path = PathfindingService:CreatePath({
                                     AgentRadius = 2.5, 
                                     AgentHeight = 5, 
