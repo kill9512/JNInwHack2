@@ -70,63 +70,77 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- [ใหม่ล่าสุด] ฟังก์ชันหา "ตัวนำกระแส" คำนวณล่วงหน้าเป็นขั้นบันได
-local function computeLadderPath(startPos, targetPos, myChar, tChar)
+-- [อัปเกรด] ฟังก์ชันหา "ตัวนำกระแส" ด้วยเรดาร์ Lidar สานต่อเป็นทางเดินขึ้น
+local function computeLadderPath(startPos, targetPos)
     local customWaypoints = {}
     local currentScanPos = startPos
-    local maxJumps = 20 -- ลิมิตการสแกน เพื่อไม่ให้เกมแลค
-    local jumpRadius = 15 -- รัศมีการหาบล็อกรอบตัว (แนวนอน)
-    local jumpHeight = 7  -- ระยะปีน/กระโดด (แนวตั้ง)
-
-    local params = OverlapParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {myChar, tChar, workspace.Terrain} 
-
+    local maxJumps = 15 -- จำนวนจุดนำกระแสสูงสุด
+    
     for i = 1, maxJumps do
-        -- จุดศูนย์กลางเรดาร์ ยกสูงขึ้นเพื่อหาของที่อยู่เหนือหัวนิดนึง
-        local searchCenter = currentScanPos + Vector3.new(0, jumpHeight/2, 0)
-        local partsNearby = workspace:GetPartBoundsInRadius(searchCenter, jumpRadius, params)
+        local dirToTarget = (Vector3.new(targetPos.X, 0, targetPos.Z) - Vector3.new(currentScanPos.X, 0, currentScanPos.Z)).Unit
+        if dirToTarget.Magnitude ~= dirToTarget.Magnitude then dirToTarget = Vector3.new(1,0,0) end
         
-        local bestPart = nil
+        local bestNextPos = nil
         local bestScore = math.huge
-        local bestTopPos = nil
         
-        for _, part in ipairs(partsNearby) do
-            -- ต้องเป็น Part ที่มี Collision
-            if part:IsA("BasePart") and part.CanCollide and part.Transparency < 1 then
-                -- หาจุดกึ่งกลางด้านบนสุดของ Part
-                local topPos = part.Position + Vector3.new(0, (part.Size.Y/2) + 1, 0)
-                local heightDiff = topPos.Y - currentScanPos.Y
+        -- สแกน 5 ทิศทางด้านหน้า เพื่อหาทางเชื่อม (Node)
+        local angles = {0, 20, -20, 45, -45}
+        for _, angle in ipairs(angles) do
+            local scanDir = (CFrame.Angles(0, math.rad(angle), 0) * dirToTarget).Unit
+            
+            -- 1. ยิงเรดาร์หา "บล็อกลอย/ขั้นบันได"
+            for forwardDist = 4, 12, 4 do
+                local dropOrigin = currentScanPos + (scanDir * forwardDist) + Vector3.new(0, 9, 0)
+                local dropRay = workspace:Raycast(dropOrigin, Vector3.new(0, -11, 0), rayParams)
                 
-                -- เงื่อนไข: ต้องสูงกว่าจุดที่เราอยู่ (ปีนขึ้น) แต่ต้องไม่สูงเกินไปจนโดดไม่ถึง
-                if heightDiff > 0.5 and heightDiff <= jumpHeight then
-                    -- คำนวณคะแนน: ยิ่งพาเราไปใกล้เป้าหมายยิ่งดี
-                    local distToTarget = (topPos - targetPos).Magnitude
-                    if distToTarget < bestScore then
-                        bestScore = distToTarget
-                        bestPart = part
-                        bestTopPos = topPos
+                if dropRay then
+                    local hitPos = dropRay.Position
+                    local heightDiff = hitPos.Y - currentScanPos.Y
+                    
+                    -- ถ้าระดับความสูงเป็นขั้นบันได (สูงกว่านิดหน่อยแต่กระโดดถึง)
+                    if heightDiff > 0.5 and heightDiff <= 7.5 then
+                        local score = (hitPos - targetPos).Magnitude
+                        if score < bestScore then
+                            bestScore = score
+                            bestNextPos = hitPos
+                        end
                     end
+                end
+            end
+            
+            -- 2. ยิงเรดาร์แนวราบหา "กำแพง/Truss" ที่ขวางอยู่และน่าจะปีนได้
+            local wallRay = workspace:Raycast(currentScanPos + Vector3.new(0, 2, 0), scanDir * 6, rayParams)
+            if wallRay then
+                -- จำลองจุดกระโดดให้ลอยขึ้นไปบนกำแพง บังคับให้บอทกระโดดยัดตัวเข้ากำแพงเพื่อปีน
+                local climbPos = wallRay.Position + Vector3.new(0, 7, 0) - (scanDir * 1.5)
+                local score = (climbPos - targetPos).Magnitude + 2 -- ลบแต้มเผื่อมีบล็อกให้เหยียบจะได้เลือกบล็อกก่อน
+                if score < bestScore then
+                    bestScore = score
+                    bestNextPos = climbPos
                 end
             end
         end
         
-        -- ถ้าเจอบล็อกที่ใช่ มาร์คเป็น Waypoint ปลอมซะเลย!
-        if bestPart and bestTopPos then
-            table.insert(customWaypoints, {
-                Position = bestTopPos,
-                Action = Enum.PathWaypointAction.Jump -- บังคับให้กระโดด/ปีนทุกครั้งที่เจอจุดนี้
-            })
-            currentScanPos = bestTopPos -- ย้ายจุดสแกนไปอยู่บนบล็อกที่เพิ่งเจอ
-            
-            -- ถ้ามาถึงใกล้เป้าหมายแล้ว ก็หยุดสแกน
-            if (currentScanPos - targetPos).Magnitude < 10 then break end
+        if bestNextPos then
+            -- ป้องกันบั๊กเดินวนที่เดิม
+            if (bestNextPos - currentScanPos).Magnitude > 1.5 then
+                table.insert(customWaypoints, {
+                    Position = bestNextPos,
+                    Action = Enum.PathWaypointAction.Jump
+                })
+                currentScanPos = bestNextPos
+                
+                -- ถ้า Node ไปถึงใกล้เป้าหมายแล้ว ให้หยุดสร้างเส้นทาง
+                if (currentScanPos - targetPos).Magnitude < 8 or currentScanPos.Y >= targetPos.Y then 
+                    break 
+                end
+            else
+                break
+            end
         else
-            -- ถ้าสแกนไม่เจอบล็อกไปต่อ (ทางตัน) ให้หยุด
-            break
+            break -- ทางตันสุดแค่นี้
         end
     end
-    
     return customWaypoints
 end
 
@@ -234,60 +248,48 @@ task.spawn(function()
                     local moveDir = (targetPos - currentPos).Unit
                     local directRay = workspace:Raycast(currentPos, moveDir * trueDist, rayParams)
 
-                    -- [ใหม่] ระบบวิเคราะห์สิ่งกีดขวางระดับหัว (Head-Level Raycast)
                     local headPos = currentPos + Vector3.new(0, 2.5, 0)
                     local targetHeadPos = targetPos + Vector3.new(0, 2.5, 0)
                     local headRay = workspace:Raycast(headPos, (targetHeadPos - headPos).Unit * trueDist, rayParams)
 
                     local isParkour = false
-                    -- ถ้าระยะใกล้พอที่จะกระโดดได้ (hDist < 14) และเป้าหมายอยู่สูงกว่าไม่มาก (vDist < 8)
                     if hDist < 14 and (targetPos.Y > currentPos.Y - 2) and vDist < 8 then
                         if directRay and not headRay then
-                            -- ชนข้างล่าง แต่ข้างบนโล่ง = สิ่งกีดขวางเตี้ยๆ (กล่อง, ราวระเบียง) -> ควรกระโดดข้าม!
                             isParkour = true
                         elseif not directRay and vDist >= 5 then
-                            -- ไม่ชนอะไรเลย แต่อยู่คนละชั้น (เช่น ขอบเหว หรือเป้าหมายอยู่บนกล่อง) -> ควรกระโดดขึ้น!
                             isParkour = true
                         end
                     end
 
-                    -- [แก้] เปลี่ยนเงื่อนไขวิ่งตรง ให้รวมระบบ Parkour เข้าไปด้วย
                     if (not directRay and vDist < 5) or isParkour then
                         isProbing = false
                         currentWaypoints = {}
-                        -- แสดงเส้นสีเหลืองถ้าอยู่ในโหมด Parkour
                         updateDebug("DirectTrace", currentPos, targetPos, isParkour and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 255, 0))
                         myHuman:MoveTo(targetPos)
                         
-                        -- ถ้าเป็นโหมด Parkour ให้เช็คระยะเพื่อกดกระโดด
                         if isParkour then
                             if directRay then
-                                -- ถ้ามีกำแพงเตี้ยกั้น (ราวระเบียง) ให้เดินเข้าไปใกล้ๆ แล้วค่อยโดด
                                 local distToWall = (directRay.Position - currentPos).Magnitude
                                 if distToWall < 3.5 then forceJump(myHuman) end
                             else
-                                -- ถ้าเป้าหมายอยู่บนขอบลอยๆ พอเดินเข้าใกล้แล้วให้โดดขึ้น
                                 if hDist < 4 then forceJump(myHuman) end
                             end
                         end
                     else
-                        -- ถ้าระยะไกล หรือสิ่งกีดขวางสูงท่วมหัว ถึงจะเรียกใช้ Pathfinding
                         if os.clock() - lastComputeTime > 0.5 or (targetPos - lastTargetPos).Magnitude > 5 then
-                            currentWaypoints = {} -- ล้างของเก่าก่อน
+                            currentWaypoints = {} 
                             isProbing = false
                             
-                            -- [แทรกสมองล่วงหน้า] ตรวจสอบว่าเป้าหมายอยู่สูง และมีแนวโน้มต้องปีนบันได/บล็อกไหม
-                            if targetPos.Y > currentPos.Y + 5 and hDist < 40 then
-                                currentWaypoints = computeLadderPath(currentPos, targetPos, myChar, target.Character)
+                            -- [แทรกสมองล่วงหน้า]
+                            if targetPos.Y > currentPos.Y + 4 and hDist < 50 then
+                                currentWaypoints = computeLadderPath(currentPos, targetPos)
                             end
                             
-                            -- ถ้าฟังก์ชันสแกนบันไดทำงานสำเร็จ เราจะได้ Waypoints ปลอมมาใช้ข้าม Pathfinding ได้เลย!
                             if #currentWaypoints > 0 then
                                 currentWaypointIndex = 1
                                 lastTargetPos = targetPos
                                 lastComputeTime = os.clock()
                                 
-                                -- สร้างเส้นทาง Debug สีเหลืองสำหรับบันได/บล็อกลอย
                                 if debugEnabled then
                                     clearVisuals()
                                     for _, wp in ipairs(currentWaypoints) do
@@ -299,7 +301,6 @@ task.spawn(function()
                                     end
                                 end
                             else
-                                -- ถ้าสแกนบันไดไม่เจอ (หรือเป้าหมายไม่ได้อยู่สูง) ค่อยใช้ Pathfinding ของ Roblox ปกติ
                                 local path = PathfindingService:CreatePath({
                                     AgentRadius = 2.5, 
                                     AgentHeight = 5, 
@@ -379,7 +380,8 @@ task.spawn(function()
 
                             if wp then
                                 local wpHeightDiff = math.abs(currentPos.Y - wp.Position.Y)
-                                if wpHeightDiff > 6 then
+                                -- [แก้บั๊กทะลุหลอด] เปลี่ยนจาก 6 เป็น 12 เพื่อไม่ให้มันล้างทางปีนของเราทิ้งกลางคัน!
+                                if wpHeightDiff > 12 then
                                     currentWaypoints = {} 
                                     return 
                                 end
