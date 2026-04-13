@@ -131,17 +131,17 @@ task.spawn(function()
                 local currentPos = myRoot.Position
                 local targetPos = tRoot.Position
                 
-                -- [จุดที่แก้ 1] แยกการคำนวณระยะทาง แนวนอน (X,Z) และ แนวตั้ง (Y)
+                -- [ใหม่] คำนวณระยะห่างแยกแกนแนวนอนและแนวตั้ง
+                local trueDist = (targetPos - currentPos).Magnitude
                 local hDist = (Vector3.new(targetPos.X, 0, targetPos.Z) - Vector3.new(currentPos.X, 0, currentPos.Z)).Magnitude
                 local vDist = math.abs(targetPos.Y - currentPos.Y)
                 
-                local trueDist = (targetPos - currentPos).Magnitude
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
 
-                -- ระบบ Stuck Detection ตรวจสอบว่าเดินติดกำแพงหรือไม่
+                -- [ใหม่] ระบบ Stuck Detection ตรวจสอบว่าเดินติดกำแพงหรือไม่
                 if (currentPos - lastPosition).Magnitude < 0.5 then
                     if os.clock() - lastMoveTick > 0.7 then 
-                        currentWaypoints = {} 
+                        currentWaypoints = {} -- ถ้าไม่ขยับเกิน 0.7 วินาที ล้างเส้นทางเพื่อหาทางใหม่
                         lastMoveTick = os.clock()
                     end
                 else
@@ -149,21 +149,17 @@ task.spawn(function()
                     lastMoveTick = os.clock()
                 end
 
-                -- [จุดที่แก้ 2] จะเดินตามก็ต่อเมื่อ: แนวนอนห่างเกินระยะ followDistance "หรือ" ความสูงต่างกันเกิน 5 สตัดส์
+                -- [ใหม่] จะเดินก็ต่อเมื่อแนวนอนห่าง หรือ อยู่คนละชั้นกันเกินไป
                 if hDist > followDistance or vDist > 5 then
-                    
                     local moveDir = (targetPos - currentPos).Unit
-                    -- ยิง Raycast ตรวจจับสิ่งกีดขวางด้วยระยะทางจริงๆ (trueDist)
                     local directRay = workspace:Raycast(currentPos, moveDir * trueDist, rayParams)
 
-                    -- จะวิ่งพุ่งชนได้ต้องไม่มีอะไรกั้น และความสูงต้องอยู่ในระดับเดียวกันเท่านั้น
                     if not directRay and vDist < 5 then
                         isProbing = false
                         currentWaypoints = {}
                         updateDebug("DirectTrace", currentPos, targetPos, Color3.fromRGB(0, 255, 0))
                         myHuman:MoveTo(targetPos)
                     else
-                        -- เข้าสู่ระบบ Pathfinding หาบันได/ทางอ้อม
                         if os.clock() - lastComputeTime > 0.5 or (targetPos - lastTargetPos).Magnitude > 5 then
                             local path = PathfindingService:CreatePath({
                                 AgentRadius = 2.5, 
@@ -206,15 +202,16 @@ task.spawn(function()
                         elseif #currentWaypoints > 0 then
                             local wp = currentWaypoints[currentWaypointIndex]
                             if wp then
-                                -- Y-Axis Validation
+                                -- [ใหม่] Y-Axis Validation ตรวจสอบความสูงเวลาตกหลุม
                                 local wpHeightDiff = math.abs(currentPos.Y - wp.Position.Y)
                                 if wpHeightDiff > 6 then
-                                    currentWaypoints = {} 
+                                    currentWaypoints = {} -- ล้างทางเดินทิ้ง เพื่อให้ Loop ถัดไปหาทางใหม่
                                     return 
                                 end
 
                                 myHuman:MoveTo(wp.Position)
-                                -- [จุดที่แก้ 3] เช็คการเดินชน Waypoint เฉพาะแกน X, Z เพื่อกันปัญหาเดินวนใต้จุด
+                                
+                                -- [ใหม่] เปลี่ยนมาเช็คระยะ Waypoint แบบ 2D กันปัญหาเดินวนใต้จุด
                                 local distToWp = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude
                                 if distToWp < 3.5 then
                                     currentWaypointIndex = currentWaypointIndex + 1
@@ -228,7 +225,7 @@ task.spawn(function()
                         updateDebug("DirectTrace", currentPos, directRay and directRay.Position or targetPos, Color3.fromRGB(255, 0, 0))
                     end
                 else
-                    -- ถึงตัวผู้เล่นเป้าหมายแล้วจริงๆ (ทั้งแนวนอนและแนวตั้ง) ค่อยหยุดเดิน
+                    -- ถึงตัวผู้เล่นจริงๆ แล้ว (ทั้ง X, Z และ Y) สั่งหยุดเดินและล้างทางเดินทิ้ง
                     currentWaypoints = {}
                     myHuman:MoveTo(currentPos)
                 end
