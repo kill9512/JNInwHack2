@@ -31,6 +31,38 @@ local randomTarget = nil
 
 _G.CustomPathFailTick = 0 
 
+-- --- X-Ray Raycast (ทะลวงบล็อกล่องหน / บล็อกที่เดินทะลุได้) ---
+local function smartRaycast(origin, dir)
+    local ignoreList = {}
+    if LocalPlayer.Character then table.insert(ignoreList, LocalPlayer.Character) end
+    for _, p in pairs(Players:GetPlayers()) do
+        if p.Character then table.insert(ignoreList, p.Character) end
+    end
+
+    local currentOrigin = origin
+    local distRemaining = dir.Magnitude
+    local dirUnit = dir.Unit
+
+    for i = 1, 5 do -- อนุญาตให้ยิงทะลุกำแพงล่องหนได้สูงสุด 5 ชั้น
+        rayParams.FilterDescendantsInstances = ignoreList
+        local hit = workspace:Raycast(currentOrigin, dirUnit * distRemaining, rayParams)
+        if hit then
+            -- ถ้าเจอบล็อกล่องหนเกือบ 100% หรือบล็อกที่ไม่ชน (CanCollide=false) ให้ทะลุผ่านไป
+            if hit.Instance.Transparency >= 0.9 or not hit.Instance.CanCollide then
+                table.insert(ignoreList, hit.Instance)
+                currentOrigin = hit.Position + (dirUnit * 0.05)
+                distRemaining = distRemaining - hit.Distance - 0.05
+                if distRemaining <= 0 then return nil end
+            else
+                return hit -- ชนของจริง
+            end
+        else
+            return nil -- ทางสะดวก
+        end
+    end
+    return nil
+end
+
 -- --- Debug Visualization ---
 local function updateDebug(name, startPos, endPos, color)
     if not debugEnabled then 
@@ -45,9 +77,9 @@ local function updateDebug(name, startPos, endPos, color)
 end
 
 local function clearVisuals()
+    -- ลบแค่เส้น Debug เล็กๆ น้อยๆ จะไม่ลบตารางเพดานสีเขียว/เหลือง เพื่อให้มันค้างโชว์สถานะ
     for _, v in pairs(workspace.Terrain:GetChildren()) do
-        if v.Name == "WP_Debug" or v.Name == "DirectTrace" or v.Name == "ProbeTrace" 
-        or v.Name == "Debug_Ceiling" or v.Name == "Debug_Edge" or v.Name == "CeilingLaser" then 
+        if v.Name == "WP_Debug" or v.Name == "DirectTrace" or v.Name == "ProbeTrace" or v.Name == "CeilingLaser" then 
             v:Destroy() 
         end
     end
@@ -61,21 +93,18 @@ local function forceJump(hum)
     end
 end
 
--- เช็คเพดาน ป้องกันหัวติดตอนปีน
 local function hasHeadroom(pos)
-    local checkRay = workspace:Raycast(pos + Vector3.new(0, 1, 0), Vector3.new(0, 6, 0), rayParams)
-    return checkRay == nil 
+    return smartRaycast(pos + Vector3.new(0, 1, 0), Vector3.new(0, 6, 0)) == nil 
 end
 
--- ยิงเรดาร์ 5 จุดรอบตัว ป้องกันบั๊กยืนหมิ่นขอบเพดานแล้วไม่กางตาราง
 local function checkCeilingAround(pos, height)
     local offsets = {
         Vector3.new(0,0,0), 
-        Vector3.new(3,0,0), Vector3.new(-3,0,0), 
-        Vector3.new(0,0,3), Vector3.new(0,0,-3)
+        Vector3.new(2,0,0), Vector3.new(-2,0,0), 
+        Vector3.new(0,0,2), Vector3.new(0,0,-2)
     }
     for _, off in ipairs(offsets) do
-        if workspace:Raycast(pos + off + Vector3.new(0, 1, 0), Vector3.new(0, height, 0), rayParams) then
+        if smartRaycast(pos + off + Vector3.new(0, 1, 0), Vector3.new(0, height, 0)) then
             return true
         end
     end
@@ -90,22 +119,20 @@ local function getProbingDirection(myRoot, targetPos)
     local maxDist = 0
     for _, angle in ipairs(scanAngles) do
         local dir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(baseDir.X, 0, baseDir.Z)).Unit
-        local ray = workspace:Raycast(currentPos, dir * 15, rayParams)
+        local ray = smartRaycast(currentPos, dir * 15)
         local d = ray and ray.Distance or 15
         if d > maxDist then maxDist = d; bestDir = dir end
     end
     return bestDir
 end
 
--- [ใหม่] ระบบพยายามหาทางเดินอ้อมให้ใกล้เป้าหมายที่สุด ก่อนจะยอมแพ้ใช้โหมดเพดาน
+-- ระบบพยายามหาทางเดินอ้อมให้ใกล้เป้าหมายที่สุด (แบบรัศมี)
 local function findPathWithFallback(startPos, targetPos)
     local path = PathfindingService:CreatePath({AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 3})
     
-    -- 1. ลองเดินตรงไปที่จุดเป้าหมายก่อน
     path:ComputeAsync(startPos, targetPos)
     if path.Status == Enum.PathStatus.Success then return path:GetWaypoints() end
     
-    -- 2. ถ้าจนมุม ให้หาจุดใกล้เคียงเป้าหมายในรัศมี 10-20 Block
     local searchRadii = {10, 20}
     local angles = {0, 45, -45, 90, -90, 135, -135, 180}
     
@@ -114,15 +141,15 @@ local function findPathWithFallback(startPos, targetPos)
             local offset = CFrame.Angles(0, math.rad(ang), 0) * Vector3.new(0, 0, r)
             local testPos = targetPos + offset
             
-            -- ยิงเรดาร์ลงพื้นเพื่อหาว่าตรงนั้นเดินเหยียบได้ไหม
-            local floorRay = workspace:Raycast(testPos + Vector3.new(0, 10, 0), Vector3.new(0, -50, 0), rayParams)
+            -- ยิงหาพื้น (ใช้ smartRaycast เพื่อป้องกันทะลุไปยืนบนของล่องหน)
+            local floorRay = smartRaycast(testPos + Vector3.new(0, 10, 0), Vector3.new(0, -50, 0))
             if floorRay then
                 path:ComputeAsync(startPos, floorRay.Position)
                 if path.Status == Enum.PathStatus.Success then return path:GetWaypoints() end
             end
         end
     end
-    return {} -- จนมุมทุกทิศทาง
+    return {}
 end
 
 local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
@@ -144,9 +171,9 @@ local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
         local partsNearby = workspace:GetPartBoundsInRadius(searchCenter, 8, params)
         
         for _, part in ipairs(partsNearby) do
-            if part:IsA("BasePart") and part.CanCollide and part.Transparency < 1 then
+            if part:IsA("BasePart") and part.CanCollide and part.Transparency < 0.9 then
                 local rayOrigin = part.Position + Vector3.new(0, (part.Size.Y/2) + 4, 0)
-                local downRay = workspace:Raycast(rayOrigin, Vector3.new(0, -8, 0), rayParams)
+                local downRay = smartRaycast(rayOrigin, Vector3.new(0, -8, 0))
                 if downRay then
                     local hitPos = downRay.Position
                     local heightDiff = hitPos.Y - currentScanPos.Y
@@ -173,8 +200,8 @@ local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
             if baseDir.Magnitude == baseDir.Magnitude then
                 for _, angle in ipairs({0, 20, -20}) do
                     local dir = (CFrame.Angles(0, math.rad(angle), 0) * baseDir).Unit
-                    local wallRay = workspace:Raycast(currentScanPos + Vector3.new(0, 2, 0), dir * 10, rayParams)
-                    if wallRay and wallRay.Instance.CanCollide then
+                    local wallRay = smartRaycast(currentScanPos + Vector3.new(0, 2, 0), dir * 10)
+                    if wallRay and wallRay.Instance.CanCollide and wallRay.Instance.Transparency < 0.9 then
                         local climbPos = wallRay.Position + Vector3.new(0, 6, 0) + (wallRay.Normal * 1.5)
                         if hasHeadroom(climbPos) then
                             local isVisited = false
@@ -206,21 +233,20 @@ local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
     return customWaypoints
 end
 
--- [ใหม่] ระบบกางตารางเพดานที่คว้านเนื้อในออก แสดงแค่ขอบนอก
+-- ระบบตารางเพดานที่ปรับการวาดและการจำขอบใหม่
 local function computeCeilingEscapePath(startPos, targetPos)
     local step = 4 
-    local maxRadius = 32 
-    local maxCheckHeight = math.max(40, targetPos.Y - startPos.Y + 10)
+    local maxRadius = 24 
+    local maxCheckHeight = math.max(30, targetPos.Y - startPos.Y + 5)
     
     local grid = {} 
     
-    -- 1. กางตารางเก็บข้อมูลว่าตรงไหนเป็นเพดาน
     for x = -maxRadius, maxRadius, step do
         grid[x] = {}
         for z = -maxRadius, maxRadius, step do
             local checkPos = startPos + Vector3.new(x, 0, z)
             local rayOrigin = checkPos + Vector3.new(0, 1, 0)
-            local upRay = workspace:Raycast(rayOrigin, Vector3.new(0, maxCheckHeight, 0), rayParams)
+            local upRay = smartRaycast(rayOrigin, Vector3.new(0, maxCheckHeight, 0))
             if upRay then
                 grid[x][z] = {hitY = upRay.Position.Y}
             end
@@ -229,25 +255,21 @@ local function computeCeilingEscapePath(startPos, targetPos)
 
     local greenEdges = {}
     local yellowEdges = {}
-    local yellowEdgeSet = {} -- กันวาดซ้ำ
+    local yellowEdgeSet = {} 
 
-    -- 2. ตรวจหา "ขอบนอกสุด" ของเพดาน
     for x = -maxRadius, maxRadius, step do
         for z = -maxRadius, maxRadius, step do
             if grid[x] and grid[x][z] then
                 local hitY = grid[x][z].hitY
                 local isEdge = false
                 
-                -- เช็ค 4 ทิศทางรอบตัว
                 local neighbors = { {step,0}, {-step,0}, {0,step}, {0,-step} }
                 for _, offset in ipairs(neighbors) do
                     local nx, nz = x + offset[1], z + offset[2]
                     
                     if nx >= -maxRadius and nx <= maxRadius and nz >= -maxRadius and nz <= maxRadius then
                         if not (grid[nx] and grid[nx][nz]) then
-                            -- ถ้าข้างๆ ไม่มีเพดาน แสดงว่าบล็อกนี้คือขอบเขียว
                             isEdge = true
-                            -- และช่องว่างข้างๆ คือทางออกสีเหลือง
                             local key = nx..","..nz
                             if not yellowEdgeSet[key] then
                                 yellowEdgeSet[key] = true
@@ -255,7 +277,6 @@ local function computeCeilingEscapePath(startPos, targetPos)
                             end
                         end
                     else
-                        -- ถ้าสุดขอบเรดาร์ ก็ถือเป็นทางออกเผื่อไว้ก่อน
                         isEdge = true
                         local key = nx..","..nz
                         if not yellowEdgeSet[key] then
@@ -265,7 +286,6 @@ local function computeCeilingEscapePath(startPos, targetPos)
                     end
                 end
                 
-                -- ถ้าเป็นขอบ ให้เก็บไว้แสดงเป็น Block สีเขียว (เนื้อในจะไม่ถูกเก็บ)
                 if isEdge then
                     table.insert(greenEdges, {x = x, z = z, hitY = hitY})
                 end
@@ -273,12 +293,11 @@ local function computeCeilingEscapePath(startPos, targetPos)
         end
     end
 
-    -- 3. การวาดบล็อคบนเพดานให้เห็นขอบ
+    -- เคลียร์ตารางเก่า ก่อนจะวาดตารางใหม่ให้ค้างไว้
     if debugEnabled then
         for _, v in pairs(workspace.Terrain:GetChildren()) do
             if v.Name == "Debug_Ceiling" or v.Name == "Debug_Edge" then v:Destroy() end
         end
-        -- วาดเฉพาะขอบเขียวนอกสุด
         for _, ceil in ipairs(greenEdges) do
             local p = Instance.new("Part")
             p.Name, p.Size = "Debug_Ceiling", Vector3.new(step, 0.5, step)
@@ -287,7 +306,6 @@ local function computeCeilingEscapePath(startPos, targetPos)
             p.Color, p.Material = Color3.fromRGB(0, 255, 0), Enum.Material.Neon
             p.Parent = workspace.Terrain
         end
-        -- วาดบล็อกเหลืองทางหนี
         for _, edge in ipairs(yellowEdges) do
             local p = Instance.new("Part")
             p.Name, p.Size = "Debug_Edge", Vector3.new(step, 0.5, step)
@@ -313,9 +331,18 @@ local function computeCeilingEscapePath(startPos, targetPos)
         end
     end
 
+    -- แทนที่จะขยับแค่ Waypoint เดียวแล้วคำนวณรัวๆ (แก้ข้อ 1 & 2)
+    -- โยนให้ PathfindingService ลากเส้นไปหาบล็อกเหลืองเลย บอทจะได้เดินหาจนกว่าจะถึง
     local customWaypoints = {}
     if bestEdge then
-        table.insert(customWaypoints, {Position = bestEdge, Action = Enum.PathWaypointAction.Walk})
+        local path = PathfindingService:CreatePath({AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true})
+        path:ComputeAsync(startPos, bestEdge)
+        if path.Status == Enum.PathStatus.Success then
+            customWaypoints = path:GetWaypoints()
+        else
+            -- ถ้าสร้างเส้นทางไม่สำเร็จ ให้พยายามเดินตรงๆ ไปก่อน 1 ก้าว
+            table.insert(customWaypoints, {Position = bestEdge, Action = Enum.PathWaypointAction.Walk})
+        end
     end
 
     return customWaypoints
@@ -356,6 +383,10 @@ MoveSection:NewToggle("Enable Follow", "Start Logic", function(s)
     if not s then 
         currentWaypoints = {}
         clearVisuals()
+        -- ถ้าปิดการติดตาม ให้ลบตารางด้วย
+        for _, v in pairs(workspace.Terrain:GetChildren()) do
+            if v.Name == "Debug_Ceiling" or v.Name == "Debug_Edge" then v:Destroy() end
+        end
         isProbing = false
         isFollowingCustomPath = false 
     end
@@ -457,10 +488,10 @@ task.spawn(function()
 
                 if hDist > followDistance or math.abs(vDist) > 5 then
                     local moveDir = (targetPos - currentPos).Unit
-                    local directRay = workspace:Raycast(currentPos, moveDir * trueDist, rayParams)
+                    local directRay = smartRaycast(currentPos, moveDir * trueDist)
                     local headPos = currentPos + Vector3.new(0, 2.5, 0)
                     local targetHeadPos = targetPos + Vector3.new(0, 2.5, 0)
-                    local headRay = workspace:Raycast(headPos, (targetHeadPos - headPos).Unit * trueDist, rayParams)
+                    local headRay = smartRaycast(headPos, (targetHeadPos - headPos).Unit * trueDist)
                     
                     local isSmartDrop = false
                     local shouldJumpDrop = false
@@ -469,8 +500,8 @@ task.spawn(function()
                     if vDist < -4 then 
                         local flatDir = (flatTargetPos - currentPos).Unit
                         if flatDir.Magnitude == flatDir.Magnitude then
-                            local hRayChest = workspace:Raycast(currentPos, flatDir * hDist, rayParams)
-                            local hRayHead = workspace:Raycast(headPos, flatDir * hDist, rayParams)
+                            local hRayChest = smartRaycast(currentPos, flatDir * hDist)
+                            local hRayHead = smartRaycast(headPos, flatDir * hDist)
                             if not hRayHead then
                                 isSmartDrop = true
                                 if hRayChest and hRayChest.Distance < 4 then shouldJumpDrop = true end
@@ -499,7 +530,7 @@ task.spawn(function()
                             currentWaypoints = {} 
                             isProbing = false
                             
-                            -- ลำดับที่ 1: พยายามหาทางเดินอ้อม หรือจุดใกล้เคียงให้มากที่สุดก่อน (ตามข้อ 1)
+                            -- โหมดเดินอ้อม พยายามเข้าใกล้เป้าหมาย
                             local testWaypoints = findPathWithFallback(currentPos, targetPos)
                             
                             if #testWaypoints > 0 then
@@ -520,7 +551,7 @@ task.spawn(function()
                                     end
                                 end
                             else
-                                -- ลำดับที่ 2: จนตรอกจริงๆ หันมาใช้โหมดเพดานหรือปีน
+                                -- โหมดโหนเพดาน หรือ ปีนขึ้น (ทำงานเมื่อจนตรอกจริง)
                                 local canUseCustomPaths = (_G.CustomPathFailTick == nil) or (os.clock() - _G.CustomPathFailTick > 4)
 
                                 if targetPos.Y > currentPos.Y + 4 and canUseCustomPaths then
@@ -528,17 +559,30 @@ task.spawn(function()
                                     
                                     if checkCeilingAround(currentPos, requiredHeightCheck) then
                                         currentWaypoints = computeCeilingEscapePath(currentPos, targetPos)
+                                        isFollowingCustomPath = true -- ให้มันตามไปที่ขอบตารางให้เสร็จก่อน
                                     else
                                         currentWaypoints = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
+                                        isFollowingCustomPath = true
                                     end
                                 end
                                 
                                 if #currentWaypoints > 0 then
-                                    isFollowingCustomPath = true
                                     currentWaypointIndex = 1
                                     lastTargetPos = targetPos
                                     lastComputeTime = os.clock()
                                     lastMoveTick = os.clock() 
+                                    
+                                    -- แสดงจุด Waypoint พิเศษ
+                                    if debugEnabled then
+                                        clearVisuals()
+                                        for _, wp in ipairs(currentWaypoints) do
+                                            local p = Instance.new("Part")
+                                            p.Name, p.Size, p.Position = "WP_Debug", Vector3.new(1.5, 1.5, 1.5), wp.Position
+                                            p.Anchored, p.CanCollide, p.CanQuery, p.Transparency = true, false, false, 0.4
+                                            p.Color, p.Material = Color3.fromRGB(255, 100, 255), Enum.Material.Neon
+                                            p.Parent = workspace.Terrain
+                                        end
+                                    end
                                 else
                                     isProbing = true
                                     currentWaypoints = {}
@@ -551,7 +595,7 @@ task.spawn(function()
                             if probeDir then
                                 updateDebug("ProbeTrace", currentPos, currentPos + (probeDir * 5), Color3.fromRGB(255, 165, 0))
                                 myHuman:MoveTo(currentPos + (probeDir * 8))
-                                local wallCheck = workspace:Raycast(currentPos, probeDir * 4, rayParams)
+                                local wallCheck = smartRaycast(currentPos, probeDir * 4)
                                 if wallCheck then forceJump(myHuman) end
                             end
                         elseif #currentWaypoints > 0 and not isFollowingCustomPath then
@@ -578,7 +622,7 @@ task.spawn(function()
                                     if not hasJump then
                                         local rayOrigin = currentPos + Vector3.new(0, 2, 0) 
                                         local targetOrigin = testWp.Position + Vector3.new(0, 2, 0)
-                                        local hit = workspace:Raycast(rayOrigin, targetOrigin - rayOrigin, rayParams)
+                                        local hit = smartRaycast(rayOrigin, targetOrigin - rayOrigin)
                                         if not hit then lookAheadIndex = i; break end
                                     end
                                 end
