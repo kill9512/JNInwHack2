@@ -40,16 +40,18 @@ _G.TraceState = {
     Phase = "None",
     TargetPos = nil,
     StartPos = nil,
+    LastPos = nil,
     StepCount = 0,
     Visited = {},
+    Path = {}, -- เก็บเส้นทาง block สีเหลือง
+    PathIndex = 1,
     LastMoveTick = 0
 }
 
 -- --- Debug Visualization ---
 local function clearVisuals()
     for _, v in pairs(workspace.Terrain:GetChildren()) do
-        if v.Name == "WP_Debug" or v.Name == "DirectTrace" or v.Name == "ProbeTrace" 
-        or string.find(v.Name, "Debug_Edge") or string.find(v.Name, "Debug_Ceil") then 
+        if v.Name == "WP_Debug" or v.Name == "DirectTrace" or string.find(v.Name, "TraceTrail") then 
             v:Destroy() 
         end
     end
@@ -66,25 +68,36 @@ end
 
 local function drawMemoryPillars()
     for _, v in pairs(workspace.Terrain:GetChildren()) do
-        if string.find(v.Name, "MemPillar_") then v:Destroy() end
+        if string.find(v.Name, "MemPillar_") or string.find(v.Name, "MemPath_") then v:Destroy() end
     end
     if not debugEnabled then return end
     
     for i, mem in ipairs(_G.BuildingMemories) do
-        local name = "MemPillar_"..i
+        -- แท่งสีฟ้า (Pillar)
         local p = Instance.new("Part")
-        p.Name = name
-        
-        -- ปรับแท่งสีฟ้าให้สูงเท่าตำแหน่งแกน Y ของเป้าหมายพอดี
+        p.Name = "MemPillar_"..i
         local targetY = mem.TargetY or (mem.ClimbSpot.Y + 50)
         local h = math.max(10, targetY - mem.ClimbSpot.Y)
-        
         p.Size = Vector3.new(2, h, 2)
         p.Position = mem.ClimbSpot + Vector3.new(0, h/2, 0)
         p.Anchored, p.CanCollide, p.CanQuery = true, false, false
         p.Transparency, p.Material = 0.4, Enum.Material.Neon
         p.Color = Color3.fromRGB(0, 255, 255) 
         p.Parent = workspace.Terrain
+        
+        -- สร้าง Area สีเขียวจางๆ (Green Path Area)
+        if mem.Path then
+            for j, wp in ipairs(mem.Path) do
+                local gp = Instance.new("Part")
+                gp.Name = "MemPath_"..i.."_"..j
+                gp.Size = Vector3.new(6, 0.5, 6)
+                gp.Position = wp + Vector3.new(0, 0.5, 0)
+                gp.Anchored, gp.CanCollide, gp.CanQuery = true, false, false
+                gp.Transparency, gp.Material = 0.8, Enum.Material.Neon
+                gp.Color = Color3.fromRGB(0, 255, 100)
+                gp.Parent = workspace.Terrain
+            end
+        end
     end
 end
 
@@ -118,14 +131,6 @@ local function hasHeadroom(pos)
     return checkRay == nil 
 end
 
-local function checkCeilingAround(pos, height)
-    local offsets = { Vector3.new(0,0,0), Vector3.new(3,0,0), Vector3.new(-3,0,0), Vector3.new(0,0,3), Vector3.new(0,0,-3) }
-    for _, off in ipairs(offsets) do
-        if workspace:Raycast(pos + off + Vector3.new(0, 1, 0), Vector3.new(0, height, 0), rayParams) then return true end
-    end
-    return false
-end
-
 local function crossScanForEdge(startPos, maxCheckHeight, targetPos)
     local step = 6
     local maxRadius = 60
@@ -135,13 +140,8 @@ local function crossScanForEdge(startPos, maxCheckHeight, targetPos)
     for _, dir in ipairs(dirs) do
         for d = step, maxRadius, step do
             local checkPos = startPos + (dir * d)
-            local rayOrigin = checkPos + Vector3.new(0, 1, 0)
-            local upRay = workspace:Raycast(rayOrigin, Vector3.new(0, maxCheckHeight, 0), rayParams)
-            
-            if not upRay then
-                table.insert(endpoints, checkPos)
-                break 
-            end
+            local upRay = workspace:Raycast(checkPos + Vector3.new(0, 1, 0), Vector3.new(0, maxCheckHeight, 0), rayParams)
+            if not upRay then table.insert(endpoints, checkPos); break end
         end
     end
 
@@ -149,177 +149,72 @@ local function crossScanForEdge(startPos, maxCheckHeight, targetPos)
     local bestDist = math.huge
     for _, edgePos in ipairs(endpoints) do
         local d = (edgePos - targetPos).Magnitude
-        if d < bestDist then
-            bestDist = d
-            bestEdge = edgePos
-        end
+        if d < bestDist then bestDist = d; bestEdge = edgePos end
     end
     return bestEdge
 end
 
-local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
+local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos, lastPos)
     local step = 6
     local neighbors = { Vector3.new(step,0,0), Vector3.new(-step,0,0), Vector3.new(0,0,step), Vector3.new(0,0,-step) }
     local validSteps = {}
-    local visualGreens = {}
+
+    -- หา direction ว่าก่อนหน้าเดินมาจากทางไหน เพื่อกันการเดินย้อนกลับ
+    local forwardDir = nil
+    if lastPos and (currentPos - lastPos).Magnitude > 1 then
+        forwardDir = (currentPos - lastPos).Unit
+    end
 
     for _, offset in ipairs(neighbors) do
         local testPos = currentPos + offset
         
         local visited = false
         for _, v in ipairs(_G.TraceState.Visited) do
-            if (v - testPos).Magnitude < 2 then visited = true; break end
+            if (v - testPos).Magnitude < 3 then visited = true; break end
         end
 
         if not visited then
-            -- เช็คว่าตรงที่เราจะเดินไป ต้องไม่มีอะไรขวางเพดาน (เดินได้)
+            -- ต้องเดินได้ (ไม่มีเพดาน)
             local isWalkable = not workspace:Raycast(testPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams)
-            
             if isWalkable then
-                -- เช็ครอบๆ จุดนี้ว่ามี "กำแพง" อยู่ติดกันไหม (เพื่อเกาะขอบตึก)
+                -- ต้องมีกำแพงตึกติดกัน
                 local isNearWall = false
                 for _, subOff in ipairs(neighbors) do
-                    local wallCheckPos = testPos + subOff
-                    local wallRay = workspace:Raycast(wallCheckPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams)
-                    if wallRay then 
-                        isNearWall = true 
-                        table.insert(visualGreens, wallCheckPos)
-                    end
+                    local wallRay = workspace:Raycast(testPos + subOff + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams)
+                    if wallRay then isNearWall = true; break end
                 end
                 
-                -- ถ้ารอบๆ มีกำแพง และตัวมันเดินได้ = นี่คือ Block ขอบตึกที่ถูกต้อง
-                if isNearWall then 
-                    table.insert(validSteps, testPos)
-                end
+                if isNearWall then table.insert(validSteps, testPos) end
             end
         end
     end
 
     local bestStep = nil
-    local bestDist = math.huge
+    local bestScore = math.huge
     for _, pos in ipairs(validSteps) do
-        local d = (pos - targetPos).Magnitude
-        if d < bestDist then bestDist = d; bestStep = pos end
+        local dTarget = (pos - targetPos).Magnitude
+        local penalty = 0
+        -- ถ้าจุดที่จะเดินไป มันเป็นการเดินหันหลังกลับ ให้หักคะแนนทิ้งรุนแรง
+        if forwardDir then
+            local stepDir = (pos - currentPos).Unit
+            local dot = forwardDir:Dot(stepDir)
+            if dot < -0.5 then penalty = 1000 end 
+        end
+
+        local score = dTarget + penalty
+        if score < bestScore then 
+            bestScore = score; bestStep = pos 
+        end
     end
 
-    if debugEnabled then
-        -- บล็อกสีเขียว = กำแพง/ตึกที่มันเกาะอยู่
-        for _, gPos in ipairs(visualGreens) do
-            local pg = Instance.new("Part")
-            pg.Name, pg.Size, pg.Position = "TraceTrail_Green", Vector3.new(1.5, 0.5, 1.5), gPos + Vector3.new(0, 2, 0)
-            pg.Anchored, pg.CanCollide, pg.CanQuery, pg.Transparency, pg.Color = true, false, false, 0.4, Color3.fromRGB(0, 255, 0)
-            pg.Material, pg.Parent = Enum.Material.Neon, workspace.Terrain
-        end
-
-        -- บล็อกสีเหลือง = พื้นที่มันกำลังจะก้าวไปเดินเลาะ
-        if bestStep then
-            local py = Instance.new("Part")
-            py.Name, py.Size, py.Position = "TraceTrail_Yellow", Vector3.new(1.5, 0.5, 1.5), bestStep + Vector3.new(0, 2, 0)
-            py.Anchored, py.CanCollide, py.CanQuery, py.Transparency, py.Color = true, false, false, 0.2, Color3.fromRGB(255, 255, 0)
-            py.Material, py.Parent = Enum.Material.Neon, workspace.Terrain
-        end
+    if debugEnabled and bestStep then
+        local py = Instance.new("Part")
+        py.Name, py.Size, py.Position = "TraceTrail_Yellow", Vector3.new(1.5, 0.5, 1.5), bestStep + Vector3.new(0, 2, 0)
+        py.Anchored, py.CanCollide, py.CanQuery, py.Transparency, py.Color = true, false, false, 0.2, Color3.fromRGB(255, 255, 0)
+        py.Material, py.Parent = Enum.Material.Neon, workspace.Terrain
     end
 
     return bestStep and {pos = bestStep} or nil
-end
-
-local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
-    local customWaypoints = {}
-    local currentScanPos = startPos
-    local heightToClimb = targetPos.Y - startPos.Y
-    if heightToClimb < 3 then return customWaypoints end
-
-    local params = OverlapParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {myChar, tChar, workspace.Terrain}
-
-    local visited = {}
-    for jump = 1, 20 do
-        local bestNextPos = nil
-        local bestScore = math.huge
-        local searchCenter = currentScanPos + Vector3.new(0, 6, 0)
-        local partsNearby = workspace:GetPartBoundsInRadius(searchCenter, 8, params)
-        
-        for _, part in ipairs(partsNearby) do
-            if part:IsA("BasePart") and part.CanCollide and part.Transparency < 1 then
-                local rayOrigin = part.Position + Vector3.new(0, (part.Size.Y/2) + 4, 0)
-                local downRay = workspace:Raycast(rayOrigin, Vector3.new(0, -8, 0), rayParams)
-                if downRay then
-                    local hitPos = downRay.Position
-                    local heightDiff = hitPos.Y - currentScanPos.Y
-                    if heightDiff > 0.5 and heightDiff <= 8.0 and hasHeadroom(hitPos) then
-                        local isVisited = false
-                        for _, v in ipairs(visited) do
-                            if (v - hitPos).Magnitude < 2.5 then isVisited = true; break end
-                        end
-                        
-                        if not isVisited then
-                            -- NEW LOGIC: ยิง Raycast ชี้ตรงขึ้นไปข้างบนเพื่อดูว่าตึกนี้ถึงเป้าหมายได้ไหม
-                            local requiredUpDist = math.max(5, targetPos.Y - hitPos.Y)
-                            local upCheckRay = workspace:Raycast(hitPos + Vector3.new(0, 1, 0), Vector3.new(0, requiredUpDist, 0), rayParams)
-                            local actualUpDist = upCheckRay and upCheckRay.Distance or requiredUpDist
-                            
-                            -- สร้างบล็อกสีเขียวชี้ขึ้นไปข้างบนเพื่อตรวจเช็คความสูง
-                            if debugEnabled then
-                                local ceilMark = Instance.new("Part")
-                                ceilMark.Name = "Debug_Ceil"
-                                ceilMark.Size = Vector3.new(0.5, actualUpDist, 0.5)
-                                ceilMark.Position = hitPos + Vector3.new(0, actualUpDist/2 + 1, 0)
-                                ceilMark.Anchored, ceilMark.CanCollide, ceilMark.CanQuery = true, false, false
-                                ceilMark.Transparency, ceilMark.Color = 0.5, Color3.fromRGB(0, 255, 0)
-                                ceilMark.Material, ceilMark.Parent = Enum.Material.Neon, workspace.Terrain
-                            end
-
-                            -- ถ้าติดเพดานต่ำๆ คะแนนจะโดนหักเยอะ
-                            local ceilingPenalty = upCheckRay and (requiredUpDist - actualUpDist) * 10 or 0
-                            local dist2D = (Vector2.new(hitPos.X, hitPos.Z) - Vector2.new(targetPos.X, targetPos.Z)).Magnitude
-                            
-                            local score = dist2D - (heightDiff * 15) + ceilingPenalty
-                            if score < bestScore then
-                                bestScore = score; bestNextPos = hitPos
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        
-        -- ถ้าหาทางขึ้นไม่ได้ ให้หาจากกำแพงข้างๆ
-        if not bestNextPos then
-            local baseDir = (Vector3.new(targetPos.X, 0, targetPos.Z) - Vector3.new(currentScanPos.X, 0, currentScanPos.Z)).Unit
-            if baseDir.Magnitude == baseDir.Magnitude then
-                for _, angle in ipairs({0, 20, -20}) do
-                    local dir = (CFrame.Angles(0, math.rad(angle), 0) * baseDir).Unit
-                    local wallRay = workspace:Raycast(currentScanPos + Vector3.new(0, 2, 0), dir * 10, rayParams)
-                    if wallRay and wallRay.Instance.CanCollide then
-                        local climbPos = wallRay.Position + Vector3.new(0, 6, 0) + (wallRay.Normal * 1.5)
-                        if hasHeadroom(climbPos) then
-                            local isVisited = false
-                            for _, v in ipairs(visited) do
-                                if (v - climbPos).Magnitude < 2.5 then isVisited = true; break end
-                            end
-                            if not isVisited then
-                                bestNextPos = climbPos; break
-                            end
-                        end
-                    end
-                end
-            end
-        end
-
-        if bestNextPos then
-            table.insert(customWaypoints, {Position = bestNextPos, Action = Enum.PathWaypointAction.Jump})
-            table.insert(visited, bestNextPos)
-            currentScanPos = bestNextPos
-            if currentScanPos.Y >= targetPos.Y - 2 then
-                table.insert(customWaypoints, {Position = targetPos, Action = Enum.PathWaypointAction.Walk})
-                break
-            end
-        else
-            break
-        end
-    end
-    return customWaypoints
 end
 
 local function findPathWithFallback(startPos, targetPos)
@@ -352,9 +247,7 @@ Section:NewTextBox("Search Player", "พิมพ์ชื่อ หรือ Di
     local lowerTxt = txt:lower()
     for _, p in pairs(Players:GetPlayers()) do 
         if p ~= LocalPlayer and (p.Name:lower():find(lowerTxt) or p.DisplayName:lower():find(lowerTxt)) then
-            SelectedPlayerName = p.Name
-            SelectedMode = "Manual" 
-            break
+            SelectedPlayerName = p.Name; SelectedMode = "Manual"; break
         end
     end
 end)
@@ -375,8 +268,6 @@ MoveSection:NewToggle("Enable Follow", "Start Logic", function(s)
     if not s then 
         currentWaypoints = {}
         clearVisuals()
-        isProbing = false
-        isFollowingCustomPath = false 
         _G.TraceState.Active = false
     end
 end)
@@ -389,9 +280,6 @@ MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s e
 MoveSection:NewButton("Clear Memory", "ล้างความจำตึกและรอยทาง", function() 
     _G.BuildingMemories = {} 
     drawMemoryPillars()
-    for _, v in pairs(workspace.Terrain:GetChildren()) do
-        if string.find(v.Name, "TraceTrail_") then v:Destroy() end
-    end
 end)
 
 -- --- MAIN LOOP ---
@@ -452,8 +340,7 @@ task.spawn(function()
                         if isFollowingCustomPath or _G.TraceState.Active then
                             _G.CustomPathFailTick = os.clock() 
                             isFollowingCustomPath = false
-                            _G.TraceState.Active = false
-                            currentWaypoints = {}
+                            -- ไม่รีเซ็ต TraceState เพราะโหมด Loop ต้องใช้ isStuck
                         end
                     end
                 else
@@ -462,54 +349,116 @@ task.spawn(function()
                 end
 
                 -- =======================================================
-                -- [โหมดลัดเลาะขอบ (Edge Tracing Phase)]
+                -- [1] ไฮแจ็คระบบ! ตรวจจับว่าเข้าสู่ Area สีเขียวแล้วหรือยัง
+                -- =======================================================
+                local insideMemory = nil
+                for _, mem in ipairs(_G.BuildingMemories) do
+                    for _, wp in ipairs(mem.Path) do
+                        if (Vector3.new(currentPos.X, wp.Y, currentPos.Z) - wp).Magnitude < 6 then
+                            insideMemory = mem
+                            break
+                        end
+                    end
+                    if insideMemory then break end
+                end
+
+                if insideMemory then
+                    local flatClimb = Vector3.new(insideMemory.ClimbSpot.X, currentPos.Y, insideMemory.ClimbSpot.Z)
+                    local distToPillar = (flatClimb - currentPos).Magnitude
+                    
+                    if distToPillar < 3.5 then
+                        -- ถึงแท่งสีฟ้าแล้ว หันหน้าเข้าหาตึก แล้วเดินหน้าไม่หยุด
+                        local wallDir = (flatClimb - Vector3.new(insideMemory.Center.X, currentPos.Y, insideMemory.Center.Z)).Unit
+                        if wallDir.Magnitude > 0 then
+                            myRoot.CFrame = CFrame.lookAt(myRoot.Position, myRoot.Position + wallDir)
+                            myHuman:MoveTo(myRoot.Position + wallDir * 10) -- เดินฝ่าเข้าไปในกำแพงรัวๆ
+                            forceJump(myHuman)
+                        end
+                    else
+                        -- เดินไปที่แท่งสีฟ้าให้ตรงจุด
+                        moveWithAvoidance(myHuman, flatClimb)
+                    end
+                    _G.TraceState.Active = false
+                    return -- จบ Loop ทำงานแค่นี้เมื่ออยู่ในเขตปีน
+                end
+
+                -- =======================================================
+                -- [2] โหมดลัดเลาะขอบ (Edge Tracing Loop Phase)
                 -- =======================================================
                 if _G.TraceState.Active then
                     local st = _G.TraceState
                     local flatTarget = Vector3.new(st.TargetPos.X, currentPos.Y, st.TargetPos.Z)
                     local distToTarget = (flatTarget - currentPos).Magnitude
                     
-                    if distToTarget < 2 then
-                        table.insert(st.Visited, st.TargetPos)
-                        st.StepCount = st.StepCount + 1
-
-                        if st.Phase == "MoveToEdge" then
-                            st.Phase = "Tracing"
+                    if st.Phase == "MoveToEdge" then
+                        if distToTarget < 2 then
+                            st.Phase = "TracingLoop"
                             st.StartPos = currentPos
+                            st.LastPos = currentPos
+                            table.insert(st.Path, currentPos)
+                            table.insert(st.Visited, currentPos)
+                        else
+                            moveWithAvoidance(myHuman, flatTarget)
+                            if os.clock() - st.LastMoveTick > 6 then st.Active = false end
                         end
 
-                        if st.Phase == "Tracing" then
-                            local climbWp = {}
-                            if st.StepCount >= 5 then
-                                climbWp = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
-                            end
+                    elseif st.Phase == "TracingLoop" then
+                        if distToTarget < 2.5 then
+                            table.insert(st.Path, st.TargetPos)
+                            table.insert(st.Visited, st.TargetPos)
+                            st.StepCount = st.StepCount + 1
+                            st.LastPos = currentPos
 
-                            if #climbWp > 0 then
-                                -- บันทึกความจำ พร้อมความสูงของเป้าหมายที่แท้จริง
-                                table.insert(_G.BuildingMemories, {AreaCenter = st.StartPos, ClimbSpot = currentPos, TargetY = targetPos.Y})
-                                st.Active = false
-                                currentWaypoints = climbWp
-                                currentWaypointIndex = 1
-                                isFollowingCustomPath = true
+                            -- เช็คว่าเดินมาบรรจบกับบล็อกแรกที่เริ่มเดินหรือยัง (ปิดลูป)
+                            if st.StepCount > 8 and (st.TargetPos - st.StartPos).Magnitude < 8 then
+                                st.Phase = "WalkingLoopToBump"
+                                st.PathIndex = 1
+                                st.LastMoveTick = os.clock()
                             else
-                                if st.StepCount > 15 and (currentPos - st.StartPos).Magnitude < 8 then
-                                    st.Active = false 
-                                    _G.CustomPathFailTick = os.clock()
+                                local reqH = math.max(20, targetPos.Y - currentPos.Y + 5)
+                                local nextData = getNextEdgeTracingStep(currentPos, reqH, targetPos, st.LastPos)
+                                if nextData then
+                                    st.TargetPos = nextData.pos
+                                    st.LastMoveTick = os.clock()
                                 else
-                                    local reqH = math.max(20, targetPos.Y - currentPos.Y + 5)
-                                    local nextData = getNextEdgeTracingStep(currentPos, reqH, targetPos)
-                                    if nextData then
-                                        st.TargetPos = nextData.pos
-                                        st.LastMoveTick = os.clock()
-                                    else
-                                        st.Active = false
-                                    end
+                                    st.Active = false 
                                 end
                             end
+                        else
+                            moveWithAvoidance(myHuman, flatTarget)
+                            if os.clock() - st.LastMoveTick > 6 then st.Active = false end
                         end
-                    else
-                        moveWithAvoidance(myHuman, flatTarget)
-                        if os.clock() - st.LastMoveTick > 6 then st.Active = false end
+
+                    elseif st.Phase == "WalkingLoopToBump" then
+                        if isStuck then
+                            -- พอชน (ซน) ปุ๊บ สร้างแท่งสีฟ้าทันที และเซฟ Area
+                            local center = Vector3.new()
+                            for _, p in ipairs(st.Path) do center = center + p end
+                            center = center / #st.Path
+
+                            table.insert(_G.BuildingMemories, {
+                                Path = st.Path,
+                                ClimbSpot = currentPos, -- แม่นยำตรงตำแหน่งเป๊ะ
+                                TargetY = targetPos.Y,  -- ดึงความสูงเป้าหมาย
+                                Center = center         -- หาจุดศูนย์กลางเพื่อไว้หันหลังชนกำแพง
+                            })
+                            st.Active = false
+                        else
+                            -- เดินซ้ำลูปเดิม
+                            local wpTarget = st.Path[st.PathIndex]
+                            local dist = (Vector3.new(wpTarget.X, currentPos.Y, wpTarget.Z) - currentPos).Magnitude
+                            if dist < 3 then
+                                st.PathIndex = st.PathIndex + 1
+                                if st.PathIndex > #st.Path then st.PathIndex = 1 end
+                                wpTarget = st.Path[st.PathIndex]
+                            end
+                            
+                            -- เทคนิค: บังคับเอียงตัวเดินเข้าหาเป้าหมาย เพื่อให้มันวิ่งไป "ซน/ชน" กับตึก
+                            local dirToTarget = (Vector3.new(targetPos.X, currentPos.Y, targetPos.Z) - currentPos).Unit
+                            moveWithAvoidance(myHuman, wpTarget + (dirToTarget * 3))
+                            
+                            if os.clock() - st.LastMoveTick > 15 then st.Active = false end
+                        end
                     end
                     return
                 end
@@ -517,40 +466,30 @@ task.spawn(function()
 
                 if isFollowingCustomPath and #currentWaypoints > 0 then
                     if (targetPos - lastTargetPos).Magnitude > 15 then
-                        isFollowingCustomPath = false
-                        currentWaypoints = {}
+                        isFollowingCustomPath = false; currentWaypoints = {}
                     else
                         local wp = currentWaypoints[currentWaypointIndex]
                         if wp then
                             myHuman:MoveTo(wp.Position)
-                            if wp.Action == Enum.PathWaypointAction.Jump then
-                                if myHuman.FloorMaterial ~= Enum.Material.Air and not isClimbingState then 
-                                    local lookPos = Vector3.new(wp.Position.X, myRoot.Position.Y, wp.Position.Z)
-                                    if (lookPos - myRoot.Position).Magnitude > 0.1 then
-                                        myRoot.CFrame = CFrame.lookAt(myRoot.Position, lookPos)
-                                    end
-                                    forceJump(myHuman) 
-                                end
+                            if wp.Action == Enum.PathWaypointAction.Jump and myHuman.FloorMaterial ~= Enum.Material.Air then 
+                                forceJump(myHuman) 
                             end
                             local dist2D = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude
-                            local distY = math.abs(currentPos.Y - wp.Position.Y)
-                            if dist2D < 3.5 and distY < 4.5 then
+                            if dist2D < 3.5 and math.abs(currentPos.Y - wp.Position.Y) < 4.5 then
                                 currentWaypointIndex = currentWaypointIndex + 1
                                 lastMoveTick = os.clock() 
                             end
                             return 
                         else
-                            isFollowingCustomPath = false
-                            currentWaypoints = {}
+                            isFollowingCustomPath = false; currentWaypoints = {}
                         end
                     end
                 end
 
                 -- =======================================================
-                -- ลำดับการตรวจสอบหลัก
+                -- ลำดับการตรวจสอบหลัก (Normal Flow)
                 -- =======================================================
                 if hDist > followDistance or math.abs(vDist) > 5 then
-                    
                     local hasLineOfSight = false
                     local dirToTarget = (targetPos - currentPos).Unit
                     if dirToTarget.Magnitude > 0 then
@@ -558,34 +497,27 @@ task.spawn(function()
                         if not losRay then hasLineOfSight = true end
                     end
 
-                    -- [1] มองเห็น
+                    -- [1] เดินตรง
                     if hasLineOfSight and not isStuck then
-                        isProbing = false
-                        currentWaypoints = {}
-                        isFollowingCustomPath = false
+                        isProbing = false; currentWaypoints = {}; isFollowingCustomPath = false
                         updateDebug("DirectTrace", currentPos, targetPos, Color3.fromRGB(0, 255, 0)) 
                         moveWithAvoidance(myHuman, targetPos)
                         
-                    -- [2] มองไม่เห็น + อยู่สูงกว่า (Drop)
+                    -- [2] Drop ตัวหลบ
                     elseif vDist < -5 and not isStuck then
                         local flatTargetPos = Vector3.new(targetPos.X, currentPos.Y, targetPos.Z)
-                        isProbing = false
-                        currentWaypoints = {}
-                        isFollowingCustomPath = false
+                        isProbing = false; currentWaypoints = {}; isFollowingCustomPath = false
                         updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0))
-                        
                         moveWithAvoidance(myHuman, flatTargetPos)
 
                         local flatDir = (flatTargetPos - currentPos).Unit
                         if flatDir.Magnitude > 0 then
                             local chestRay = workspace:Raycast(currentPos, flatDir * 4, rayParams)
                             local floorDropRay = workspace:Raycast(currentPos + (flatDir * 4) + Vector3.new(0, 1, 0), Vector3.new(0, -10, 0), rayParams)
-                            if chestRay and chestRay.Distance < 3 and not floorDropRay then
-                                forceJump(myHuman)
-                            end
+                            if chestRay and chestRay.Distance < 3 and not floorDropRay then forceJump(myHuman) end
                         end
                         
-                    -- [3] โหมดอ้อม
+                    -- [3] เดินอ้อม / หาทางลัดเลาะ
                     else
                         if os.clock() - lastComputeTime > 0.5 or (targetPos - lastTargetPos).Magnitude > 5 then
                             lastComputeTime = os.clock()
@@ -597,63 +529,24 @@ task.spawn(function()
                                 currentWaypoints = testWaypoints
                                 currentWaypointIndex = 2
                                 isFollowingCustomPath = true
-                                if debugEnabled then
-                                    clearVisuals()
-                                    for _, wp in ipairs(currentWaypoints) do
-                                        local p = Instance.new("Part")
-                                        p.Name, p.Size, p.Position = "WP_Debug", Vector3.new(1.2, 1.2, 1.2), wp.Position
-                                        p.Anchored, p.CanCollide, p.CanQuery, p.Transparency = true, false, false, 0.4
-                                        p.Color, p.Material = Color3.fromRGB(0, 150, 255), Enum.Material.Neon
-                                        p.Parent = workspace.Terrain
-                                    end
-                                end
                             else
-                                -- [4] ถ้าติด -> ตรวจเพดาน -> ปีน
+                                -- Pathfind ติดขัด -> เข้าสู่โหมดลัดเลาะเพื่อเปิด Area ตึก
                                 local canUseCustomPaths = (_G.CustomPathFailTick == nil) or (os.clock() - _G.CustomPathFailTick > 4)
-
                                 if canUseCustomPaths then
                                     local requiredHeightCheck = math.max(20, targetPos.Y - currentPos.Y + 5)
+                                    local edgeStart = crossScanForEdge(currentPos, requiredHeightCheck, targetPos)
                                     
-                                    if checkCeilingAround(currentPos, requiredHeightCheck) then
-                                        local knownClimbSpot = nil
-                                        for _, mem in ipairs(_G.BuildingMemories) do
-                                            if (currentPos - mem.AreaCenter).Magnitude < 100 then 
-                                                knownClimbSpot = mem.ClimbSpot; break
-                                            end
-                                        end
-                                        
-                                        if knownClimbSpot then
-                                            local path = PathfindingService:CreatePath({AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true})
-                                            path:ComputeAsync(currentPos, knownClimbSpot)
-                                            if path.Status == Enum.PathStatus.Success then
-                                                currentWaypoints = path:GetWaypoints()
-                                                currentWaypointIndex = 2
-                                                isFollowingCustomPath = true 
-                                            else
-                                                moveWithAvoidance(myHuman, knownClimbSpot)
-                                            end
-                                        else
-                                            local edgeStart = crossScanForEdge(currentPos, requiredHeightCheck, targetPos)
-                                            if edgeStart then
-                                                _G.TraceState.Active = true
-                                                _G.TraceState.Phase = "MoveToEdge"
-                                                _G.TraceState.TargetPos = edgeStart
-                                                _G.TraceState.Visited = {}
-                                                _G.TraceState.StepCount = 0
-                                                _G.TraceState.LastMoveTick = os.clock()
-                                            end
-                                        end
-                                    else
-                                        currentWaypoints = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
-                                        if #currentWaypoints > 0 then
-                                            isFollowingCustomPath = true
-                                            currentWaypointIndex = 1
-                                        end
+                                    if edgeStart then
+                                        _G.TraceState.Active = true
+                                        _G.TraceState.Phase = "MoveToEdge"
+                                        _G.TraceState.TargetPos = edgeStart
+                                        _G.TraceState.Visited = {}
+                                        _G.TraceState.Path = {}
+                                        _G.TraceState.StepCount = 0
+                                        _G.TraceState.LastMoveTick = os.clock()
+                                        _G.TraceState.LastPos = currentPos
                                     end
                                 else
-                                    isProbing = false
-                                    currentWaypoints = {}
-                                    isFollowingCustomPath = false
                                     moveWithAvoidance(myHuman, targetPos)
                                 end
                             end
