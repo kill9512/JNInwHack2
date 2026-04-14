@@ -77,7 +77,7 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- [ปรับปรุง] เรดาร์พุ่งขึ้นฟ้า ให้มองหาบล็อกสูงๆ และหลบเลี่ยงเพดานแต่แรก
+-- เรดาร์พุ่งขึ้นฟ้า หาบล็อกลอย และบันไดวน (อัปเกรด 360 องศา & ป้องกันปีนกำแพงเรียบ)
 local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
     local customWaypoints = {}
     local currentScanPos = startPos
@@ -94,42 +94,32 @@ local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
         local bestNextPos = nil
         local bestScore = math.huge
         
-        -- สแกนหากล่องหรือพื้นที่เหยียบได้ สูงขึ้นไปถึง 15 สตั๊ด
-        local searchCenter = currentScanPos + Vector3.new(0, 10, 0) 
-        local partsNearby = workspace:GetPartBoundsInRadius(searchCenter, 10, params)
+        local searchCenter = currentScanPos + Vector3.new(0, 6, 0)
+        -- [แก้ไข] ขยายรัศมี 15 สตั๊ด เพื่อสแกนรอบตัว 360 องศาให้กว้างขึ้น
+        local partsNearby = workspace:GetPartBoundsInRadius(searchCenter, 15, params)
         
         for _, part in ipairs(partsNearby) do
             if part:IsA("BasePart") and part.CanCollide and part.Transparency < 1 then
                 local rayOrigin = part.Position + Vector3.new(0, (part.Size.Y/2) + 4, 0)
-                local downRay = workspace:Raycast(rayOrigin, Vector3.new(0, -10, 0), rayParams)
+                local downRay = workspace:Raycast(rayOrigin, Vector3.new(0, -8, 0), rayParams)
                 
                 if downRay then
                     local hitPos = downRay.Position
                     local heightDiff = hitPos.Y - currentScanPos.Y
                     
-                    -- [กุญแจสำคัญ] ต้องมี Headroom โล่งจริงๆ ถึงจะพิจารณา
-                    if heightDiff > 0.5 and heightDiff <= 12.0 and hasHeadroom(hitPos) then
+                    if heightDiff > 0.5 and heightDiff <= 8.0 and hasHeadroom(hitPos) then
+                        local isVisited = false
+                        for _, v in ipairs(visited) do
+                            if (v - hitPos).Magnitude < 2.5 then isVisited = true; break end
+                        end
                         
-                        -- ตรวจสอบเพดานระหว่างจุดกระโดด
-                        local jumpPathClear = true
-                        local jumpRayDir = hitPos - currentScanPos
-                        local jumpRay = workspace:Raycast(currentScanPos, jumpRayDir, rayParams)
-                        if jumpRay then jumpPathClear = false end
-
-                        if jumpPathClear then
-                            local isVisited = false
-                            for _, v in ipairs(visited) do
-                                if (v - hitPos).Magnitude < 2.5 then isVisited = true; break end
-                            end
+                        if not isVisited then
+                            local dist2D = (Vector2.new(hitPos.X, hitPos.Z) - Vector2.new(targetPos.X, targetPos.Z)).Magnitude
+                            local score = dist2D - (heightDiff * 12)
                             
-                            if not isVisited then
-                                local dist2D = (Vector2.new(hitPos.X, hitPos.Z) - Vector2.new(targetPos.X, targetPos.Z)).Magnitude
-                                local score = dist2D - (heightDiff * 15)
-                                
-                                if score < bestScore then
-                                    bestScore = score
-                                    bestNextPos = hitPos
-                                end
+                            if score < bestScore then
+                                bestScore = score
+                                bestNextPos = hitPos
                             end
                         end
                     end
@@ -137,24 +127,39 @@ local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
             end
         end
         
-        -- ถ้าหาบล็อกลอยไม่เจอ ลองยิงหา "กำแพงแบบตรงๆ"
+        -- ถ้าหาบล็อกลอยไม่เจอ ลองยิงหากำแพง
         if not bestNextPos then
             local baseDir = (Vector3.new(targetPos.X, 0, targetPos.Z) - Vector3.new(currentScanPos.X, 0, currentScanPos.Z)).Unit
-            if baseDir.Magnitude == baseDir.Magnitude then
-                for _, angle in ipairs({0, 20, -20}) do
-                    local dir = (CFrame.Angles(0, math.rad(angle), 0) * baseDir).Unit
-                    local wallRay = workspace:Raycast(currentScanPos + Vector3.new(0, 2, 0), dir * 10, rayParams)
-                    if wallRay and wallRay.Instance.CanCollide then
-                        local climbPos = wallRay.Position + Vector3.new(0, 6, 0) + (wallRay.Normal * 1.5)
-                        if hasHeadroom(climbPos) then
-                            local isVisited = false
-                            for _, v in ipairs(visited) do
-                                if (v - climbPos).Magnitude < 2.5 then isVisited = true; break end
-                            end
-                            if not isVisited then
-                                bestNextPos = climbPos
-                                break
-                            end
+            if baseDir.Magnitude ~= baseDir.Magnitude then baseDir = Vector3.new(1,0,0) end
+            
+            -- [แก้ไข] หมุนกวาด 360 องศา หากำแพงหรือบันไดรอบตัว
+            for _, angle in ipairs({0, 45, -45, 90, -90, 135, -135, 180}) do
+                local dir = (CFrame.Angles(0, math.rad(angle), 0) * baseDir).Unit
+                local wallRay = workspace:Raycast(currentScanPos + Vector3.new(0, 2, 0), dir * 10, rayParams)
+                
+                if wallRay and wallRay.Instance.CanCollide then
+                    local isTruss = wallRay.Instance:IsA("TrussPart")
+                    local climbPos = nil
+                    
+                    -- [แก้ไข] เช็คว่าเป็นบันได หรือ มีขอบบนกำแพง (Ledge) ให้ยืนไหม จะได้ไม่โดดอัดกำแพงเรียบๆ
+                    if isTruss then
+                        climbPos = wallRay.Position + Vector3.new(0, 6, 0) + (wallRay.Normal * 1.5)
+                    else
+                        local ledgeOrigin = wallRay.Position + (dir * 1.5) + Vector3.new(0, 8, 0)
+                        local ledgeRay = workspace:Raycast(ledgeOrigin, Vector3.new(0, -9, 0), rayParams)
+                        if ledgeRay and ledgeRay.Position.Y > currentScanPos.Y then
+                            climbPos = ledgeRay.Position
+                        end
+                    end
+
+                    if climbPos and hasHeadroom(climbPos) then
+                        local isVisited = false
+                        for _, v in ipairs(visited) do
+                            if (v - climbPos).Magnitude < 2.5 then isVisited = true; break end
+                        end
+                        if not isVisited then
+                            bestNextPos = climbPos
+                            break
                         end
                     end
                 end
@@ -307,18 +312,10 @@ task.spawn(function()
                 end
                 -- =======================================================
 
-                -- [ปรับปรุง] เช็คการติดขัด (Stuck) โหมดปกติ + ถอยออกจากเพดาน
                 if (currentPos - lastPosition).Magnitude < 0.5 then
-                    if os.clock() - lastMoveTick > 1.5 then 
+                    if os.clock() - lastMoveTick > 0.7 then 
                         currentWaypoints = {} 
                         lastMoveTick = os.clock()
-                        
-                        -- ถ้ารู้สึกตัวว่าติดขัด ให้เดินถอยหลังหรือเฉียงๆ ออกมาเพื่อหาพื้นที่ใหม่
-                        local randomEscapeAngle = math.rad(math.random(90, 270))
-                        local moveDir = (targetPos - currentPos).Unit
-                        local escapeDir = (CFrame.Angles(0, randomEscapeAngle, 0) * moveDir).Unit
-                        myHuman:MoveTo(currentPos + (escapeDir * 15))
-                        return -- ข้ามลอจิกอื่นๆ ไปเลยเพื่อให้มันเดินหนีออกจากมุมอับก่อน
                     end
                 else
                     lastPosition = currentPos
@@ -339,7 +336,7 @@ task.spawn(function()
                     local shouldJumpDrop = false
                     local flatTargetPos = Vector3.new(targetPos.X, currentPos.Y, targetPos.Z)
 
-                    if vDist < -4 then 
+                    if vDist < -4 then
                         local flatDir = (flatTargetPos - currentPos).Unit
                         if flatDir.Magnitude == flatDir.Magnitude then
                             local hRayChest = workspace:Raycast(currentPos, flatDir * hDist, rayParams)
@@ -361,7 +358,7 @@ task.spawn(function()
                         isProbing = false
                         currentWaypoints = {}
                         isFollowingCustomPath = false
-                        updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0)) 
+                        updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0))
                         myHuman:MoveTo(flatTargetPos)
                         
                         if shouldJumpDrop then
@@ -379,7 +376,11 @@ task.spawn(function()
                             currentWaypoints = {} 
                             isProbing = false
                             
-                            if targetPos.Y > currentPos.Y + 4 and hDist < 25 then
+                            -- [การแก้ไขสำคัญ] ยิงเรดาร์เช็คว่าท้องฟ้าตรงจุดที่ยืนอยู่โล่งไหม?
+                            local myHeadroomClear = hasHeadroom(currentPos)
+                            
+                            -- ถ้าเป้าหมายอยู่สูง และ หัวเราไม่ติดเพดาน (myHeadroomClear) ถึงจะใช้โหมดปีน
+                            if targetPos.Y > currentPos.Y + 4 and hDist < 25 and myHeadroomClear then
                                 currentWaypoints = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
                             end
                             
@@ -401,6 +402,8 @@ task.spawn(function()
                                     end
                                 end
                             else
+                                -- ถ้าหัวติดเพดาน (หรือปีนไม่ได้) จะตกมาทำงานที่โค้ด Pathfinding ดั้งเดิม
+                                -- ซึ่งมันจะคำนวณพาผู้เล่นเดินหาที่โล่งเอง
                                 local path = PathfindingService:CreatePath({
                                     AgentRadius = 2.5, 
                                     AgentHeight = 5, 
