@@ -56,46 +56,10 @@ local function forceJump(hum)
     end
 end
 
--- เช็คเพดานระยะประชิด (6 stud)
+-- เช็คเพดาน ป้องกันหัวติด
 local function hasHeadroom(pos)
     local checkRay = workspace:Raycast(pos + Vector3.new(0, 1, 0), Vector3.new(0, 6, 0), rayParams)
     return checkRay == nil 
-end
-
--- [โหมดใหม่ตามไอเดียคุณ] สแกนหาขอบเพดาน ขยาย X, Z เพื่อหาจุดท้องฟ้าเปิด
-local function findClearSkyPosition(center, targetPos)
-    -- ยิงเรดาร์ขึ้นฟ้า 40 สตั๊ด ดูว่าติดหลังคาไหม
-    local isBlocked = workspace:Raycast(center + Vector3.new(0, 1, 0), Vector3.new(0, 40, 0), rayParams)
-    if not isBlocked then return nil end -- ถ้าโล่งอยู่แล้ว ไม่ต้องหาทางออก
-
-    local bestPos = nil
-    local bestDist = math.huge
-    
-    -- กวาดเรดาร์วงกลมขยายออกไปทีละ 8, 16, 24 สตั๊ดรอบตัว
-    for r = 8, 24, 8 do
-        for angle = 0, 315, 45 do
-            local offset = CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(0, 0, -r)
-            local checkPos = center + offset
-            
-            -- ยิงเรดาร์ลงพื้นเพื่อหาที่ยืน
-            local groundRay = workspace:Raycast(checkPos + Vector3.new(0, 5, 0), Vector3.new(0, -10, 0), rayParams)
-            if groundRay then
-                local gPos = groundRay.Position
-                -- ยิงเรดาร์ขึ้นฟ้าจากจุดนั้น เพื่อดูว่าพ้นหลังคายัง
-                local skyRay = workspace:Raycast(gPos + Vector3.new(0, 1, 0), Vector3.new(0, 40, 0), rayParams)
-                
-                if not skyRay then
-                    -- เจอขอบหลังคา (ที่โล่ง) แล้ว! เลือกจุดที่เดินไปหาเป้าหมายได้ใกล้ที่สุด
-                    local d = (Vector2.new(gPos.X, gPos.Z) - Vector2.new(targetPos.X, targetPos.Z)).Magnitude
-                    if d < bestDist then
-                        bestDist = d
-                        bestPos = gPos
-                    end
-                end
-            end
-        end
-    end
-    return bestPos
 end
 
 local function getProbingDirection(myRoot, targetPos)
@@ -113,7 +77,66 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- เรดาร์พุ่งขึ้นฟ้า หาบล็อกลอย และบันไดวน (ปรับปรุงแก้ปีนเสาเรียบ)
+-- ==========================================
+-- [ระบบใหม่] สแกนตาราง Grid แผ่ออกไปเพื่อหาขอบเพดาน
+-- ==========================================
+local function scanCeilingGrid(startPos, targetPos)
+    local maxGridRadius = 40 -- ระยะแผ่ขยายสูงสุด (x, z)
+    local stepSize = 5 -- ระยะห่างของแต่ละจุด (เพิ่มเป็น 5 เพื่อลดแลค)
+    
+    -- หาความสูงของเพดานที่กำลังบังอยู่
+    local ceilingHeightY = startPos.Y
+    local upRay = workspace:Raycast(startPos + Vector3.new(0, 2, 0), Vector3.new(0, 50, 0), rayParams)
+    
+    if upRay then
+        ceilingHeightY = upRay.Position.Y - 1 
+    else
+        return nil -- ถ้าไม่ได้ติดเพดาน ไม่ต้องทำ
+    end
+
+    local edgeWaypoints = {}
+    
+    -- แผ่ตาราง Grid
+    for x = -maxGridRadius, maxGridRadius, stepSize do
+        for z = -maxGridRadius, maxGridRadius, stepSize do
+            local gridPointPos = Vector3.new(startPos.X + x, ceilingHeightY, startPos.Z + z)
+            local checkSky = workspace:Raycast(gridPointPos, Vector3.new(0, 30, 0), rayParams)
+            
+            if not checkSky then
+                -- จุดนี้ทะลุเพดาน (เป็นขอบนอก)
+                local checkGround = workspace:Raycast(gridPointPos, Vector3.new(0, -50, 0), rayParams)
+                if checkGround and math.abs(checkGround.Position.Y - startPos.Y) < 15 then
+                    table.insert(edgeWaypoints, checkGround.Position)
+                    
+                    if debugEnabled then
+                        local p = Instance.new("Part")
+                        p.Name, p.Size, p.Position = "WP_Debug", Vector3.new(2, 0.5, 2), gridPointPos
+                        p.Anchored, p.CanCollide, p.Transparency = true, false, 0.5
+                        p.Color = Color3.fromRGB(0, 255, 0) -- บล็อกสีเขียว
+                        p.Parent = workspace.Terrain
+                    end
+                end
+            end
+        end
+    end
+
+    -- หาจุดขอบที่ดีที่สุด (ใกล้ตัว + มุ่งหน้าไปหาเป้าหมาย)
+    local bestEdge = nil
+    local bestScore = math.huge
+    for _, edgePos in ipairs(edgeWaypoints) do
+        local distToMe = (Vector3.new(edgePos.X, 0, edgePos.Z) - Vector3.new(startPos.X, 0, startPos.Z)).Magnitude
+        local distToTarget = (Vector3.new(edgePos.X, 0, edgePos.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
+        local score = distToMe + (distToTarget * 0.5) 
+        if score < bestScore then
+            bestScore = score
+            bestEdge = edgePos
+        end
+    end
+
+    return bestEdge
+end
+
+-- เรดาร์พุ่งขึ้นฟ้า หาบล็อกลอย และบันไดวน
 local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
     local customWaypoints = {}
     local currentScanPos = startPos
@@ -123,15 +146,15 @@ local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
     local params = OverlapParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = {myChar, tChar, workspace.Terrain}
+
     local visited = {}
     
     for jump = 1, 20 do
         local bestNextPos = nil
         local bestScore = math.huge
         
-        -- 1. หาบล็อกลอย
         local searchCenter = currentScanPos + Vector3.new(0, 6, 0)
-        local partsNearby = workspace:GetPartBoundsInRadius(searchCenter, 10, params)
+        local partsNearby = workspace:GetPartBoundsInRadius(searchCenter, 8, params)
         
         for _, part in ipairs(partsNearby) do
             if part:IsA("BasePart") and part.CanCollide and part.Transparency < 1 then
@@ -147,9 +170,11 @@ local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
                         for _, v in ipairs(visited) do
                             if (v - hitPos).Magnitude < 2.5 then isVisited = true; break end
                         end
+                        
                         if not isVisited then
                             local dist2D = (Vector2.new(hitPos.X, hitPos.Z) - Vector2.new(targetPos.X, targetPos.Z)).Magnitude
                             local score = dist2D - (heightDiff * 12)
+                            
                             if score < bestScore then
                                 bestScore = score
                                 bestNextPos = hitPos
@@ -160,31 +185,15 @@ local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
             end
         end
         
-        -- 2. หากำแพง (แก้ปัญหาปีนกำแพงเรียบๆ โดยเช็ค Ledge/Truss)
         if not bestNextPos then
             local baseDir = (Vector3.new(targetPos.X, 0, targetPos.Z) - Vector3.new(currentScanPos.X, 0, currentScanPos.Z)).Unit
             if baseDir.Magnitude == baseDir.Magnitude then
                 for _, angle in ipairs({0, 20, -20}) do
                     local dir = (CFrame.Angles(0, math.rad(angle), 0) * baseDir).Unit
                     local wallRay = workspace:Raycast(currentScanPos + Vector3.new(0, 2, 0), dir * 10, rayParams)
-                    
                     if wallRay and wallRay.Instance.CanCollide then
-                        local isTruss = wallRay.Instance:IsA("TrussPart")
-                        local climbPos = nil
-                        
-                        if isTruss then
-                            -- ถ้าเป็นบันไดปีน (Truss) เอาจุดหน้ากำแพงเลย
-                            climbPos = wallRay.Position + Vector3.new(0, 6, 0) + (wallRay.Normal * 1.5)
-                        else
-                            -- ถ้าเป็นกำแพงทึบ ต้องเช็คก่อนว่าข้างบนมี "ขอบ/พื้น" ให้เกาะไหม!
-                            local ledgeOrigin = wallRay.Position + (wallRay.Normal * -2) + Vector3.new(0, 9, 0)
-                            local ledgeRay = workspace:Raycast(ledgeOrigin, Vector3.new(0, -9, 0), rayParams)
-                            if ledgeRay and (ledgeRay.Position.Y - currentScanPos.Y) <= 8.5 then
-                                climbPos = ledgeRay.Position + Vector3.new(0, 1, 0)
-                            end
-                        end
-                        
-                        if climbPos and hasHeadroom(climbPos) then
+                        local climbPos = wallRay.Position + Vector3.new(0, 6, 0) + (wallRay.Normal * 1.5)
+                        if hasHeadroom(climbPos) then
                             local isVisited = false
                             for _, v in ipairs(visited) do
                                 if (v - climbPos).Magnitude < 2.5 then isVisited = true; break end
@@ -302,15 +311,12 @@ task.spawn(function()
                 
                 local trueDist = (targetPos - currentPos).Magnitude
                 local hDist = (Vector3.new(targetPos.X, 0, targetPos.Z) - Vector3.new(currentPos.X, 0, currentPos.Z)).Magnitude
-                local vDist = targetPos.Y - currentPos.Y 
+                local vDist = targetPos.Y - currentPos.Y
                 
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
 
                 local isClimbingState = (myHuman:GetState() == Enum.HumanoidStateType.Climbing)
 
-                -- =======================================================
-                -- [ระบบล็อคสถานะขั้นเด็ดขาด]
-                -- =======================================================
                 if isFollowingCustomPath and #currentWaypoints > 0 then
                     if os.clock() - lastMoveTick > 2.5 then
                         isFollowingCustomPath = false
@@ -365,14 +371,17 @@ task.spawn(function()
                     local shouldJumpDrop = false
                     local flatTargetPos = Vector3.new(targetPos.X, currentPos.Y, targetPos.Z)
 
-                    if vDist < -4 then 
+                    if vDist < -4 then
                         local flatDir = (flatTargetPos - currentPos).Unit
                         if flatDir.Magnitude == flatDir.Magnitude then
                             local hRayChest = workspace:Raycast(currentPos, flatDir * hDist, rayParams)
                             local hRayHead = workspace:Raycast(headPos, flatDir * hDist, rayParams)
+                            
                             if not hRayHead then
                                 isSmartDrop = true
-                                if hRayChest and hRayChest.Distance < 4 then shouldJumpDrop = true end
+                                if hRayChest and hRayChest.Distance < 4 then 
+                                    shouldJumpDrop = true 
+                                end
                             end
                         end
                     end
@@ -380,13 +389,19 @@ task.spawn(function()
                     local canWalkStraight = (not directRay and not headRay) and (math.abs(vDist) < 5)
 
                     if isSmartDrop then
-                        isProbing = false; currentWaypoints = {}; isFollowingCustomPath = false
+                        isProbing = false
+                        currentWaypoints = {}
+                        isFollowingCustomPath = false
                         updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0)) 
                         myHuman:MoveTo(flatTargetPos)
-                        if shouldJumpDrop then forceJump(myHuman) end
+                        
+                        if shouldJumpDrop then
+                            forceJump(myHuman)
+                        end
 
                     elseif canWalkStraight then
-                        isProbing = false; currentWaypoints = {}
+                        isProbing = false
+                        currentWaypoints = {}
                         updateDebug("DirectTrace", currentPos, targetPos, Color3.fromRGB(0, 255, 0))
                         myHuman:MoveTo(targetPos)
                     
@@ -395,26 +410,42 @@ task.spawn(function()
                             currentWaypoints = {} 
                             isProbing = false
                             
-                            -- [เงื่อนไขอัปเกรด] เป้าหมายอยู่ข้างบน! ขยาย hDist เป็น 40 ให้เรดาร์ทำงานจากระยะไกลขึ้น
-                            if targetPos.Y > currentPos.Y + 4 and hDist < 40 then
-                                
-                                -- ตรวจสอบก่อนว่าเราติดอยู่ใต้เพดานหรือไม่?
-                                local escapePos = findClearSkyPosition(currentPos, targetPos)
-                                
-                                if escapePos then
-                                    -- เจอขอบเพดานแล้ว! สร้างเส้นทางสีเหลืองให้เดินหนีไปที่จุดโล่งก่อน
-                                    table.insert(currentWaypoints, {Position = escapePos, Action = Enum.PathWaypointAction.Walk})
-                                    isFollowingCustomPath = true
+                            -- =======================================================
+                            -- [จัดการเงื่อนไขเป้าหมายอยู่ข้างบน] เช็คเพดาน + สร้าง Grid หลบ
+                            -- =======================================================
+                            if targetPos.Y > currentPos.Y + 4 then
+                                -- 1. ยิงเรดาร์เช็คว่าตรงนี้มีเพดานไหม
+                                local checkCeilingRay = workspace:Raycast(headPos, Vector3.new(0, 20, 0), rayParams)
+                                local isCeilingAbove = (checkCeilingRay and checkCeilingRay.Normal.Y < -0.1)
+
+                                if isCeilingAbove then
+                                    -- ถ้ายืนติดเพดานอยู่ -> เปิดใช้งาน Grid Scanner
+                                    local escapeEdgePos = scanCeilingGrid(currentPos, targetPos)
+                                    
+                                    if escapeEdgePos then
+                                        local path = PathfindingService:CreatePath({
+                                            AgentRadius = 2.5, 
+                                            AgentHeight = 5, 
+                                            AgentCanJump = true,
+                                            WaypointSpacing = 3
+                                        })
+                                        path:ComputeAsync(currentPos, escapeEdgePos)
+                                        
+                                        if path.Status == Enum.PathStatus.Success then
+                                            currentWaypoints = path:GetWaypoints()
+                                        end
+                                    end
                                 else
-                                    -- ถ้าพ้นเพดานแล้ว (Clear Sky) ก็ลากเรดาร์ปีนบันไดขึ้นฟ้าเลย!
-                                    currentWaypoints = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
-                                    if #currentWaypoints > 0 then
-                                        isFollowingCustomPath = true
+                                    -- ถ้าท้องฟ้าโล่ง -> เข้าโหมดปีนขึ้นปกติ
+                                    if hDist < 25 then
+                                        currentWaypoints = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
                                     end
                                 end
                             end
+                            -- =======================================================
                             
                             if #currentWaypoints > 0 then
+                                isFollowingCustomPath = true
                                 currentWaypointIndex = 1
                                 lastTargetPos = targetPos
                                 lastComputeTime = os.clock()
@@ -432,16 +463,21 @@ task.spawn(function()
                                 end
                             else
                                 local path = PathfindingService:CreatePath({
-                                    AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 3 
+                                    AgentRadius = 2.5, 
+                                    AgentHeight = 5, 
+                                    AgentCanJump = true,
+                                    WaypointSpacing = 3 
                                 })
                                 path:ComputeAsync(currentPos, targetPos)
+                                
                                 if path.Status == Enum.PathStatus.Success then
                                     currentWaypoints = path:GetWaypoints()
                                     currentWaypointIndex = 2
                                     lastTargetPos = targetPos
                                     lastComputeTime = os.clock()
                                 else
-                                    isProbing = true; currentWaypoints = {}
+                                    isProbing = true
+                                    currentWaypoints = {}
                                 end
                             end
                         end
@@ -470,8 +506,11 @@ task.spawn(function()
                                 if isHeightSafe then
                                     local hasJump = false
                                     for j = currentWaypointIndex, i do
-                                        if currentWaypoints[j].Action == Enum.PathWaypointAction.Jump then hasJump = true; break end
+                                        if currentWaypoints[j].Action == Enum.PathWaypointAction.Jump then
+                                            hasJump = true; break
+                                        end
                                     end
+                                    
                                     if not hasJump then
                                         local rayOrigin = currentPos + Vector3.new(0, 2, 0) 
                                         local targetOrigin = testWp.Position + Vector3.new(0, 2, 0)
@@ -486,7 +525,10 @@ task.spawn(function()
 
                             if wp then
                                 local wpHeightDiff = wp.Position.Y - currentPos.Y 
-                                if wpHeightDiff > 12 then currentWaypoints = {}; return end
+                                if wpHeightDiff > 12 then
+                                    currentWaypoints = {} 
+                                    return 
+                                end
 
                                 local isGoingUp = (wpHeightDiff > 2.5)
                                 local isGoingDownSteeply = (wpHeightDiff < -3.5) 
@@ -500,16 +542,24 @@ task.spawn(function()
                                     myHuman:MoveTo(wp.Position)
                                 end
                                 
-                                if isGoingDownSteeply and dist2D < 4 and wp.Position.Y < currentPos.Y then forceJump(myHuman) end
+                                if isGoingDownSteeply and dist2D < 4 and wp.Position.Y < currentPos.Y then
+                                    forceJump(myHuman)
+                                end
                                 
                                 if isClimbingState then
-                                    if currentPos.Y >= wp.Position.Y - 1 or (dist2D < 5 and distY < 3.5) then currentWaypointIndex = currentWaypointIndex + 1 end
+                                    if currentPos.Y >= wp.Position.Y - 1 or (dist2D < 5 and distY < 3.5) then
+                                        currentWaypointIndex = currentWaypointIndex + 1
+                                    end
                                 else
-                                    if dist2D < 4.5 and distY < 3.5 then currentWaypointIndex = currentWaypointIndex + 1 end
+                                    if dist2D < 4.5 and distY < 3.5 then
+                                        currentWaypointIndex = currentWaypointIndex + 1
+                                    end
                                 end
                                 
                                 if not isClimbingState then
-                                    if wp.Action == Enum.PathWaypointAction.Jump or (isGoingUp and dist2D < 2) then forceJump(myHuman) end
+                                    if wp.Action == Enum.PathWaypointAction.Jump or (isGoingUp and dist2D < 2) then
+                                        forceJump(myHuman)
+                                    end
                                 end
                             end
                         end
