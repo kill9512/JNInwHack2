@@ -29,6 +29,9 @@ local lastPosition = Vector3.new()
 local lastMoveTick = os.clock()
 local randomTarget = nil 
 
+-- ตัวแปรใหม่สำหรับจัดการอาการ "ติดแหง็ก"
+_G.CustomPathFailTick = 0 
+
 -- --- Debug Visualization ---
 local function updateDebug(name, startPos, endPos, color)
     if not debugEnabled then 
@@ -59,10 +62,16 @@ local function forceJump(hum)
     end
 end
 
--- เช็คเพดาน ป้องกันหัวติด
+-- เช็คเพดาน ป้องกันหัวติด (ใช้ตอนปีน)
 local function hasHeadroom(pos)
     local checkRay = workspace:Raycast(pos + Vector3.new(0, 1, 0), Vector3.new(0, 6, 0), rayParams)
     return checkRay == nil 
+end
+
+-- เช็คเพดานทะลุไปถึงเป้าหมาย (ใช้กางตารางโดนัท)
+local function hasCeilingAbove(pos, checkHeight)
+    local checkRay = workspace:Raycast(pos + Vector3.new(0, 1, 0), Vector3.new(0, checkHeight, 0), rayParams)
+    return checkRay ~= nil 
 end
 
 local function getProbingDirection(myRoot, targetPos)
@@ -170,31 +179,30 @@ end
 
 -- ระบบกาง Block ขอบเพดาน (ไอเดียโดนัท)
 local function computeCeilingEscapePath(startPos, targetPos)
-    local step = 4 -- ระยะห่างของแต่ละ Block (ยิ่งเยอะยิ่งคำนวณเร็ว แต่ความละเอียดลดลง)
-    local maxRadius = 24 -- รัศมีที่จะกางออกไปสำรวจแกน X, Z (จำกัดไว้ที่ 24 studs เพื่อกันแลค)
+    local step = 4 
+    local maxRadius = 32 -- ขยายขอบเขตให้กว้างขึ้น ครอบคลุมหลังคาตึกใหญ่
     local ceilingHitY = nil
 
-    -- 1. ยิงเรดาร์เส้นสีแดงตรงขึ้นไปบนหัว
+    -- 1. ยิงเรดาร์ไปเท่ากับความสูงของเป้าหมาย
+    local checkHeight = math.max(20, targetPos.Y - startPos.Y + 5)
     local centerRayOrigin = startPos + Vector3.new(0, 1, 0)
-    local centerRay = workspace:Raycast(centerRayOrigin, Vector3.new(0, 40, 0), rayParams)
+    local centerRay = workspace:Raycast(centerRayOrigin, Vector3.new(0, checkHeight, 0), rayParams)
     
     if centerRay then
         ceilingHitY = centerRay.Position.Y
         updateDebug("CeilingLaser", centerRayOrigin, centerRay.Position, Color3.fromRGB(255, 0, 0))
     else
-        return {} -- ถ้าไม่มีเพดานติดหัวแต่แรก ก็ไม่ต้องทำอะไร
+        return {} 
     end
 
     local ceilingPoints = {}
     local openPoints = {}
 
-    -- 2. กางอาณาเขตแกน X, Z เพื่อตรวจจับว่าตรงไหนคือเพดาน (เขียว) ตรงไหนคือพื้นที่โล่ง (ทางหนี)
     for x = -maxRadius, maxRadius, step do
         for z = -maxRadius, maxRadius, step do
             local checkPos = startPos + Vector3.new(x, 0, z)
             local rayOrigin = checkPos + Vector3.new(0, 1, 0)
             
-            -- ยิงขึ้นไปเช็คว่าจุดนี้มีเพดานกั้นไหม
             local upRay = workspace:Raycast(rayOrigin, Vector3.new(0, (ceilingHitY - startPos.Y) + 5, 0), rayParams)
 
             if upRay then
@@ -205,11 +213,9 @@ local function computeCeilingEscapePath(startPos, targetPos)
         end
     end
 
-    -- 3. หาขอบโดนัทรอบนอก 1 Block (สีเหลือง) จากพื้นที่โล่งที่อยู่ติดกับเพดาน
     local edgeWaypoints = {}
     for _, openPos in ipairs(openPoints) do
         local isEdge = false
-        -- เช็คว่าจุดที่ไม่มีเพดานนี้ อยู่ติดกับจุดที่มีเพดานไหม (ถ้าติดกัน แสดงว่าเป็นขอบ)
         for _, ceil in ipairs(ceilingPoints) do
             local dist = (Vector2.new(openPos.X, openPos.Z) - Vector2.new(ceil.pos.X, ceil.pos.Z)).Magnitude
             if dist <= step * 1.5 then 
@@ -218,24 +224,16 @@ local function computeCeilingEscapePath(startPos, targetPos)
             end
         end
 
+        -- บังคับเก็บขอบสีเหลืองเลย ไม่ต้องแคร์ว่ามีกำแพงบังไหม เพื่อให้เกิด Waypoint ชัวร์ๆ
         if isEdge then
-            -- กันเหนียว: เช็คว่าเดินจากจุดที่เรายืนไปหาขอบสีเหลืองนั้นได้ไหม (มีกำแพงบังหรือเปล่า)
-            local toEdgeDir = (openPos - startPos).Unit
-            local distToEdge = (openPos - startPos).Magnitude
-            local wallRay = workspace:Raycast(startPos + Vector3.new(0, 2, 0), toEdgeDir * distToEdge, rayParams)
-
-            if not wallRay then
-                table.insert(edgeWaypoints, openPos)
-            end
+            table.insert(edgeWaypoints, openPos)
         end
     end
 
-    -- 4. (Visuals) วาด Block สีเขียวและเหลืองบนเพดาน เพื่อดูการทำงาน
     if debugEnabled then
         for _, v in pairs(workspace.Terrain:GetChildren()) do
             if v.Name == "Debug_Ceiling" or v.Name == "Debug_Edge" then v:Destroy() end
         end
-        -- วาดเพดาน (สีเขียว)
         for _, ceil in ipairs(ceilingPoints) do
             local p = Instance.new("Part")
             p.Name, p.Size, p.Position = "Debug_Ceiling", Vector3.new(2, 0.5, 2), Vector3.new(ceil.pos.X, ceil.hitY - 0.5, ceil.pos.Z)
@@ -243,7 +241,6 @@ local function computeCeilingEscapePath(startPos, targetPos)
             p.Color, p.Material = Color3.fromRGB(0, 255, 0), Enum.Material.Neon
             p.Parent = workspace.Terrain
         end
-        -- วาดขอบโดนัท (สีเหลือง)
         for _, edge in ipairs(edgeWaypoints) do
             local p = Instance.new("Part")
             p.Name, p.Size, p.Position = "Debug_Edge", Vector3.new(3, 0.5, 3), Vector3.new(edge.X, ceilingHitY - 0.5, edge.Z)
@@ -253,7 +250,6 @@ local function computeCeilingEscapePath(startPos, targetPos)
         end
     end
 
-    -- 5. คัดกรองเป้าหมาย: หาขอบสีเหลืองที่ "ใกล้เป้าหมายที่สุด" เพื่อให้เดินอ้อมไปทางนั้น
     local bestEdge = nil
     local bestScore = math.huge
 
@@ -261,7 +257,6 @@ local function computeCeilingEscapePath(startPos, targetPos)
         local distToTarget = (Vector2.new(edge.X, edge.Z) - Vector2.new(targetPos.X, targetPos.Z)).Magnitude
         local distFromMe = (Vector2.new(edge.X, edge.Z) - Vector2.new(startPos.X, startPos.Z)).Magnitude
 
-        -- สมการให้คะแนน: เน้นไปทางเป้าหมาย (distToTarget) แต่ก็อย่าให้ไกลจากตัวเรามากเกินไป
         local score = distToTarget + (distFromMe * 0.5)
         if score < bestScore then
             bestScore = score
@@ -271,7 +266,6 @@ local function computeCeilingEscapePath(startPos, targetPos)
 
     local customWaypoints = {}
     if bestEdge then
-        -- สั่งให้เดินไปยังพิกัด X, Z ของ Block สีเหลือง
         table.insert(customWaypoints, {Position = bestEdge, Action = Enum.PathWaypointAction.Walk})
     end
 
@@ -365,24 +359,34 @@ task.spawn(function()
                 
                 local trueDist = (targetPos - currentPos).Magnitude
                 local hDist = (Vector3.new(targetPos.X, 0, targetPos.Z) - Vector3.new(currentPos.X, 0, currentPos.Z)).Magnitude
-                local vDist = targetPos.Y - currentPos.Y -- ค่าติดลบ = เป้าหมายอยู่ข้างล่าง
+                local vDist = targetPos.Y - currentPos.Y 
                 
                 rayParams.FilterDescendantsInstances = {myChar, target.Character}
-
                 local isClimbingState = (myHuman:GetState() == Enum.HumanoidStateType.Climbing)
 
                 -- =======================================================
-                -- [ระบบล็อคสถานะขั้นเด็ดขาด + Timeout ถอดใจ]
+                -- [ระบบตรวจจับตัวติดแหง็ก (Stuck Detection)]
                 -- =======================================================
+                if (currentPos - lastPosition).Magnitude < 0.5 then
+                    if os.clock() - lastMoveTick > 1.5 then 
+                        currentWaypoints = {} 
+                        lastMoveTick = os.clock()
+                        -- ถ้ากำลังใช้โหมดพิเศษ (ปีน/กางเพดาน) แล้วติด ให้แบนโหมดนั้น 4 วินาที
+                        if isFollowingCustomPath then
+                            _G.CustomPathFailTick = os.clock() 
+                            isFollowingCustomPath = false
+                        end
+                    end
+                else
+                    lastPosition = currentPos
+                    lastMoveTick = os.clock()
+                end
+
+                -- ระบบเดินตาม Path พิเศษ
                 if isFollowingCustomPath and #currentWaypoints > 0 then
-                    if os.clock() - lastMoveTick > 2.5 then
+                    if (targetPos - lastTargetPos).Magnitude > 15 then
                         isFollowingCustomPath = false
                         currentWaypoints = {}
-                        lastMoveTick = os.clock()
-                    elseif (targetPos - lastTargetPos).Magnitude > 15 then
-                        isFollowingCustomPath = false
-                        currentWaypoints = {}
-                        lastMoveTick = os.clock()
                     else
                         local wp = currentWaypoints[currentWaypointIndex]
                         if wp then
@@ -406,17 +410,6 @@ task.spawn(function()
                         end
                     end
                 end
-                -- =======================================================
-
-                if (currentPos - lastPosition).Magnitude < 0.5 then
-                    if os.clock() - lastMoveTick > 0.7 then 
-                        currentWaypoints = {} 
-                        lastMoveTick = os.clock()
-                    end
-                else
-                    lastPosition = currentPos
-                    if not isFollowingCustomPath then lastMoveTick = os.clock() end
-                end
 
                 if hDist > followDistance or math.abs(vDist) > 5 then
                     local moveDir = (targetPos - currentPos).Unit
@@ -425,65 +418,52 @@ task.spawn(function()
                     local targetHeadPos = targetPos + Vector3.new(0, 2.5, 0)
                     local headRay = workspace:Raycast(headPos, (targetHeadPos - headPos).Unit * trueDist, rayParams)
                     
-                    -- =======================================================
-                    -- [โหมดทิ้งตัวลง (Smart Drop)] ตรวจสอบเป้าหมายที่อยู่ต่ำกว่า
-                    -- =======================================================
                     local isSmartDrop = false
                     local shouldJumpDrop = false
                     local flatTargetPos = Vector3.new(targetPos.X, currentPos.Y, targetPos.Z)
 
-                    if vDist < -4 then -- ถ้าเป้าหมายอยู่ข้างล่างชัดเจน
+                    if vDist < -4 then 
                         local flatDir = (flatTargetPos - currentPos).Unit
                         if flatDir.Magnitude == flatDir.Magnitude then
-                            -- ยิงเลเซอร์แนวราบระดับหัวและหน้าอก ไปยังพิกัด X,Z ของเป้าหมาย
                             local hRayChest = workspace:Raycast(currentPos, flatDir * hDist, rayParams)
                             local hRayHead = workspace:Raycast(headPos, flatDir * hDist, rayParams)
-                            
-                            -- ถ้าระดับหัวไม่มีอะไรขวาง แสดงว่าไม่มีกำแพงบัง สามารถเดินไปทิ้งตัวลงได้
                             if not hRayHead then
                                 isSmartDrop = true
-                                -- ถ้าระดับหน้าอกมีอะไรขวาง แต่ระดับหัวโล่ง แสดงว่าเป็นราวระเบียง (ให้กระโดดข้าม)
-                                if hRayChest and hRayChest.Distance < 4 then 
-                                    shouldJumpDrop = true 
-                                end
+                                if hRayChest and hRayChest.Distance < 4 then shouldJumpDrop = true end
                             end
                         end
                     end
-                    -- =======================================================
 
                     local canWalkStraight = (not directRay and not headRay) and (math.abs(vDist) < 5)
 
-                    -- 1. ลำดับความสำคัญแรกสุด: ถ้าทิ้งตัวลงได้ ให้เดินดิ่งทิ้งตัวเลย (เส้นสีแดง)
                     if isSmartDrop then
                         isProbing = false
                         currentWaypoints = {}
                         isFollowingCustomPath = false
-                        updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0)) -- แสดงเส้นสีส้ม
+                        updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0)) 
                         myHuman:MoveTo(flatTargetPos)
-                        
-                        if shouldJumpDrop then
-                            forceJump(myHuman)
-                        end
+                        if shouldJumpDrop then forceJump(myHuman) end
 
-                    -- 2. เดินตรงปกติ
                     elseif canWalkStraight then
                         isProbing = false
                         currentWaypoints = {}
                         updateDebug("DirectTrace", currentPos, targetPos, Color3.fromRGB(0, 255, 0))
                         myHuman:MoveTo(targetPos)
                     
-                    -- 3. ติดสิ่งกีดขวาง: ค้นหาบันได หรือ Pathfinding อ้อม
                     else
                         if os.clock() - lastComputeTime > 0.5 or (targetPos - lastTargetPos).Magnitude > 5 then
                             currentWaypoints = {} 
                             isProbing = false
                             
-                            if targetPos.Y > currentPos.Y + 4 and hDist < 25 then
-                                if not hasHeadroom(currentPos) then
-                                    -- [เปิดโหมดกางอาณาเขตเพดาน] หารู/ขอบ เพื่อหลุดออกจากหลังคา
+                            -- เช็คว่าเพิ่งติดคูลดาวน์โหมดปีน/เพดาน หรือเปล่า (แบน 4 วินาที)
+                            local canUseCustomPaths = (_G.CustomPathFailTick == nil) or (os.clock() - _G.CustomPathFailTick > 4)
+
+                            if targetPos.Y > currentPos.Y + 4 and hDist < 25 and canUseCustomPaths then
+                                -- เช็คหลังคาถึงความสูงเป้าหมาย
+                                local requiredHeightCheck = math.max(15, targetPos.Y - currentPos.Y + 5)
+                                if hasCeilingAbove(currentPos, requiredHeightCheck) then
                                     currentWaypoints = computeCeilingEscapePath(currentPos, targetPos)
                                 else
-                                    -- ถ้าหัวโล่งแล้ว ยิงเรดาร์หาบันไดปีนปกติ
                                     currentWaypoints = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
                                 end
                             end
@@ -519,6 +499,19 @@ task.spawn(function()
                                     currentWaypointIndex = 2
                                     lastTargetPos = targetPos
                                     lastComputeTime = os.clock()
+                                    isFollowingCustomPath = false 
+                                    
+                                    -- แสดงเส้น Path สีฟ้า สำหรับการเดินอ้อมปกติ
+                                    if debugEnabled then
+                                        clearVisuals()
+                                        for _, wp in ipairs(currentWaypoints) do
+                                            local p = Instance.new("Part")
+                                            p.Name, p.Size, p.Position = "WP_Debug", Vector3.new(1.2, 1.2, 1.2), wp.Position
+                                            p.Anchored, p.CanCollide, p.CanQuery, p.Transparency = true, false, false, 0.4
+                                            p.Color, p.Material = Color3.fromRGB(0, 150, 255), Enum.Material.Neon
+                                            p.Parent = workspace.Terrain
+                                        end
+                                    end
                                 else
                                     isProbing = true
                                     currentWaypoints = {}
