@@ -77,61 +77,87 @@ local function getProbingDirection(myRoot, targetPos)
 end
 
 -- =======================================================
--- [ใหม่] ระบบขอบโดนัท (Donut Edge Scanner)
--- หากติดเพดาน จะกางเส้นทางหาขอบ แล้วยื่นออกไป 1 block นอกหลังคา
+-- [ระบบใหม่เป๊ะๆ ตามรูป!] ระบบสแกนกริดเพดาน & โดนัทขอบน้ำตาล
 -- =======================================================
-local function findCeilingEdgeDonut(startPos, targetPos)
+local function scanAndMapCeiling(startPos, targetPos)
+    local maxGridRadius = 30 -- กางอาณาเขตออกไปสูงสุด (ปรับลดได้ถ้าแลค)
+    local stepSize = 4 -- ระยะห่างแต่ละบล็อก (ยิ่งน้อยยิ่งละเอียด)
+    
+    -- 1. ยิงเรดาร์สีแดงขึ้นฟ้า เพื่อหาเพดานและจำความสูง
     local upRay = workspace:Raycast(startPos + Vector3.new(0, 2, 0), Vector3.new(0, 50, 0), rayParams)
-    if not upRay then return nil end -- ไม่ได้อยู่ใต้เพดาน ไม่ต้องทำโดนัท
+    if not upRay then return nil end -- ไม่ได้อยู่ใต้เพดาน
+    
+    local ceilingHeightY = upRay.Position.Y - 1 -- ลดระดับลงมา 1 ไม่ให้จมเนื้อบล็อก
 
-    local ceilingY = upRay.Position.Y - 1
-    local edgePos = nil
-    local bestScore = math.huge
+    local greenBlocks = {} -- เก็บตำแหน่งพื้นที่ๆ ติดเพดาน
+    local possibleEdges = {} -- เก็บตำแหน่งที่ทะลุเพดานได้ (เพื่อเอาไปทำโดนัท)
 
-    -- ทิศทางที่จะสแกน (เน้นพุ่งไปทางเป้าหมายเป็นหลักก่อน แล้วค่อยวนรอบตัว)
-    local dirToTarget = (Vector3.new(targetPos.X, 0, targetPos.Z) - Vector3.new(startPos.X, 0, startPos.Z)).Unit
-    local searchDirs = {dirToTarget}
-    for angle = 45, 315, 45 do
-        table.insert(searchDirs, (CFrame.Angles(0, math.rad(angle), 0) * dirToTarget).Unit)
-    end
-
-    for _, dir in ipairs(searchDirs) do
-        -- กางออกไปทีละ 3 studs จนสุด 30 studs
-        for dist = 3, 30, 3 do 
-            local checkPos = startPos + (dir * dist)
-            local checkUp = workspace:Raycast(checkPos + Vector3.new(0, 2, 0), Vector3.new(0, 50, 0), rayParams)
+    -- 2. กางพื้นที่ออกไปรอบๆ X, Z เพื่อสร้างตารางบล็อกสีเขียว
+    for x = -maxGridRadius, maxGridRadius, stepSize do
+        for z = -maxGridRadius, maxGridRadius, stepSize do
+            local checkPos = Vector3.new(startPos.X + x, ceilingHeightY, startPos.Z + z)
+            local checkSky = workspace:Raycast(checkPos, Vector3.new(0, 50, 0), rayParams)
             
-            -- ถ้ายิงขึ้นไปไม่โดนเพดานเดิม แสดงว่าเจอ "ขอบโดนัท" แล้ว!
-            if not checkUp or checkUp.Position.Y > ceilingY + 5 then
-                -- สร้าง 1 Block ยื่นออกมานอกขอบ (เคลือบน้ำตาล) ระยะ 3 studs
-                local safeEdgePos = checkPos + (dir * 3)
-                
-                -- เช็คว่าขอบนั้นมีพื้นให้ยืนตั้งหลักไหม (ไม่ใช่เหว)
-                local groundCheck = workspace:Raycast(safeEdgePos + Vector3.new(0, 5, 0), Vector3.new(0, -20, 0), rayParams)
-                if groundCheck and math.abs(groundCheck.Position.Y - startPos.Y) < 10 then
-                    local finalPos = groundCheck.Position
-                    local score = (finalPos - startPos).Magnitude + (finalPos - targetPos).Magnitude
-                    
-                    if score < bestScore then
-                        bestScore = score
-                        edgePos = finalPos
-                    end
-                end
-                break -- หยุดหาในทิศทางนี้ เจอขอบแล้ว
+            if checkSky then
+                -- ติดเพดาน (เก็บลงตารางสีเขียว) จำรหัส X,Z ไว้จับคู่
+                greenBlocks[x .. "," .. z] = checkPos
+            else
+                -- ทะลุฟ้า (เป็นไปได้ว่าจะเป็นขอบน้ำตาลรอบนอก)
+                table.insert(possibleEdges, {x = x, z = z, pos = checkPos})
             end
         end
     end
 
-    -- แสดงบล็อกสีฟ้าอมเขียว (Cyan) ตรงขอบโดนัท
-    if debugEnabled and edgePos then
-        local p = Instance.new("Part")
-        p.Name, p.Size, p.Position = "WP_Debug", Vector3.new(2, 0.5, 2), edgePos
-        p.Anchored, p.CanCollide, p.Transparency = true, false, 0.4
-        p.Color = Color3.fromRGB(0, 255, 255) 
-        p.Parent = workspace.Terrain
+    local yellowEdges = {} -- จุดขอบ "โดนัทเคลือบน้ำตาล" (ห่างจากสีเขียว 1 บล็อก)
+    
+    -- 3. คัดกรองจุดทะลุฟ้า ให้เหลือแค่ "ขอบนอกสุด" ที่ติดกับเพดานเท่านั้น
+    for _, edge in ipairs(possibleEdges) do
+        -- เช็คว่ามีบล็อกสีเขียวอยู่ติดกัน (ซ้าย ขวา หน้า หลัง) หรือไม่
+        local hasGreenNeighbor = greenBlocks[(edge.x + stepSize) .. "," .. edge.z] or
+                                 greenBlocks[(edge.x - stepSize) .. "," .. edge.z] or
+                                 greenBlocks[edge.x .. "," .. (edge.z + stepSize)] or
+                                 greenBlocks[edge.x .. "," .. (edge.z - stepSize)]
+                                 
+        if hasGreenNeighbor then
+            table.insert(yellowEdges, edge.pos)
+        end
     end
 
-    return edgePos
+    -- 4. [โหมด Debug] แสดงบล็อก สีเขียว และ สีเหลือง ให้เห็นบนเพดาน!
+    if debugEnabled then
+        for _, pos in pairs(greenBlocks) do
+            local p = Instance.new("Part")
+            p.Name, p.Size, p.Position = "WP_Debug", Vector3.new(3, 0.5, 3), pos
+            p.Anchored, p.CanCollide, p.Transparency = true, false, 0.4
+            p.Color = Color3.fromRGB(0, 255, 0) -- บล็อกสีเขียว
+            p.Parent = workspace.Terrain
+        end
+        for _, pos in ipairs(yellowEdges) do
+            local p = Instance.new("Part")
+            p.Name, p.Size, p.Position = "WP_Debug", Vector3.new(3, 0.5, 3), pos
+            p.Anchored, p.CanCollide, p.Transparency = true, false, 0.1
+            p.Color = Color3.fromRGB(255, 255, 0) -- บล็อกสีเหลือง (น้ำตาลเคลือบ)
+            p.Parent = workspace.Terrain
+        end
+    end
+
+    -- 5. เลือกบล็อกสีเหลืองที่ดีที่สุด (มีพื้นให้ยืน และใกล้เป้าหมาย)
+    local bestEdge = nil
+    local bestScore = math.huge
+    
+    for _, edgePos in ipairs(yellowEdges) do
+        local checkGround = workspace:Raycast(edgePos + Vector3.new(0, 5, 0), Vector3.new(0, -50, 0), rayParams)
+        if checkGround and math.abs(checkGround.Position.Y - startPos.Y) < 15 then
+            local finalPos = checkGround.Position
+            local score = (finalPos - startPos).Magnitude + (finalPos - targetPos).Magnitude
+            if score < bestScore then
+                bestScore = score
+                bestEdge = finalPos
+            end
+        end
+    end
+
+    return bestEdge
 end
 
 local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
@@ -303,11 +329,15 @@ task.spawn(function()
                 local isClimbingState = (myHuman:GetState() == Enum.HumanoidStateType.Climbing)
 
                 -- =======================================================
-                -- [แก้ปัญหาบอทลืมทาง] เพิ่มความอดทน (Patience) เป็น 2.5 วิ
+                -- [กันอาการลืมทาง] เช็คว่าจำเป็นต้องหาทางเดินใหม่ไหม?
                 -- =======================================================
+                local needsNewPath = false
+                if #currentWaypoints == 0 then needsNewPath = true end -- ถ้าไม่มีเส้นทาง
+                if (targetPos - lastTargetPos).Magnitude > 8 then needsNewPath = true end -- ถ้าเป้าหมายขยับไปไกล
+                
                 if (currentPos - lastPosition).Magnitude < 0.5 then
-                    if os.clock() - lastMoveTick > 2.5 then -- ถ้าติดค้างเกิน 2.5 วิ ค่อยยกเลิกทางเก่า
-                        currentWaypoints = {} 
+                    if os.clock() - lastMoveTick > 2.5 then -- ถ้าติดค้างอยู่นิ่งๆ เกิน 2.5 วิ แสดงว่าทางตัน
+                        needsNewPath = true
                         lastMoveTick = os.clock()
                     end
                 else
@@ -355,12 +385,14 @@ task.spawn(function()
                         myHuman:MoveTo(targetPos)
                     
                     else
-                        if os.clock() - lastComputeTime > 0.5 or (targetPos - lastTargetPos).Magnitude > 5 then
+                        if needsNewPath then
                             currentWaypoints = {} 
                             isProbing = false
+                            lastComputeTime = os.clock()
+                            lastTargetPos = targetPos
                             
                             -- =======================================================
-                            -- Priority 1: บังคับใช้โหมดอ้อม (Pathfinding) เสมอก่อนเป็นอันดับแรกสุด!
+                            -- Priority 1: Pathfinding (ทางเดินอ้อม) เป็นอันดับแรกสุด!
                             -- =======================================================
                             local path = PathfindingService:CreatePath({
                                 AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 3 
@@ -368,46 +400,45 @@ task.spawn(function()
                             path:ComputeAsync(currentPos, targetPos)
                             
                             if path.Status == Enum.PathStatus.Success then
-                                -- ถ้า Pathfinding ปกติสำเร็จ ให้ใช้ทันที! และตัดโหมดอื่นออกไป
                                 currentWaypoints = path:GetWaypoints()
                                 currentWaypointIndex = 2
-                                lastTargetPos = targetPos
-                                lastComputeTime = os.clock()
                                 isFollowingCustomPath = false 
                             else
                                 -- =======================================================
-                                -- Priority 2: Pathfinding ล้มเหลว ค่อยใช้ระบบโหมดปีน/ขอบโดนัท
+                                -- Priority 2: Pathfinding ปกติล้มเหลว -> เป้าหมายอยู่สูง -> ติดเพดานไหม?
                                 -- =======================================================
                                 if targetPos.Y > currentPos.Y + 4 and hDist < 25 then
-                                    local edgePos = findCeilingEdgeDonut(currentPos, targetPos)
                                     
-                                    if edgePos then
-                                        -- ถ้าเจอขอบโดนัท ให้สร้าง Pathfinding เดินไปหาขอบก่อน
-                                        path:ComputeAsync(currentPos, edgePos)
-                                        if path.Status == Enum.PathStatus.Success then
-                                            currentWaypoints = path:GetWaypoints()
-                                            currentWaypointIndex = 2
-                                            isFollowingCustomPath = true -- สั่งให้รู้ว่านี่คือทางเดินพิเศษหลบเพดาน
-                                            lastComputeTime = os.clock()
+                                    local checkCeil = workspace:Raycast(headPos, Vector3.new(0, 20, 0), rayParams)
+                                    
+                                    if checkCeil then
+                                        -- ติดเพดาน: ใช้โหมด โดนัทขอบน้ำตาล!
+                                        local edgePos = scanAndMapCeiling(currentPos, targetPos)
+                                        if edgePos then
+                                            path:ComputeAsync(currentPos, edgePos)
+                                            if path.Status == Enum.PathStatus.Success then
+                                                currentWaypoints = path:GetWaypoints()
+                                                currentWaypointIndex = 2
+                                                isFollowingCustomPath = true
+                                            end
                                         end
                                     else
-                                        -- ถ้าไม่ติดเพดานเลย ให้สร้างบล็อกกระโดดขึ้นตรงๆ
+                                        -- ท้องฟ้าโล่ง: สร้างเส้นทางกระโดดขึ้นตรงๆ
                                         currentWaypoints = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
                                         if #currentWaypoints > 0 then
                                             isFollowingCustomPath = true
                                             currentWaypointIndex = 1
-                                            lastComputeTime = os.clock()
                                         end
                                     end
                                 end
 
-                                -- Priority 3: ถ้าทุกอย่างพังหมด ถึงจะยอมใช้ระบบ Probing ชนกำแพงมั่ว
+                                -- Priority 3: ถ้าทุกอย่างพังหมด ถึงจะยอมใช้ระบบเดินคลำทางกำแพง
                                 if #currentWaypoints == 0 then
                                     isProbing = true
                                 end
                             end
                             
-                            -- [Debug Visual] วาดจุดอ้อม
+                            -- วาดเส้นทางจุดสีฟ้า/เหลือง/เขียว ของ Waypoint หลัก
                             if debugEnabled and #currentWaypoints > 0 then
                                 clearVisuals()
                                 for _, wp in ipairs(currentWaypoints) do
@@ -420,7 +451,7 @@ task.spawn(function()
                             end
                         end
                         
-                        -- Execution ของระบบเดิน
+                        -- ระบบสั่งเดินตาม Waypoint ที่คำนวณไว้
                         if isProbing then
                             local probeDir = getProbingDirection(myRoot, targetPos)
                             if probeDir then
