@@ -510,10 +510,11 @@ task.spawn(function()
                 end
 
                 -- =======================================================
-                -- [ตรวจสอบเงื่อนไขเป้าหมายหนีออกจากโซน (แกน Y เปลี่ยนแปลงหนัก)]
+                -- [ตรวจสอบเงื่อนไขเป้าหมายหนีออกจากโซน (แกน Y ร่วงตกลงมา)]
                 -- =======================================================
                 if _G.TraceState.Locked and _G.TraceState.LockedTargetY then
-                    if math.abs(targetPos.Y - _G.TraceState.LockedTargetY) > 10 then
+                    -- ปล่อยให้กระโดดขึ้นได้ แต่ถ้าร่วงลงไปต่ำกว่าจุดเริ่มเกิน 15 บล็อก ถือว่าเป้าหมายหนีลงพื้นแล้ว
+                    if targetPos.Y < _G.TraceState.LockedTargetY - 15 then
                         clearIncompleteTrace()
                     end
                 end
@@ -633,7 +634,8 @@ task.spawn(function()
                         end
                     else
                         moveWithAvoidance(myHuman, flatTarget)
-                        if os.clock() - st.LastMoveTick > 10 then 
+                        -- ยืดเวลาจาก 10 เป็น 15 วินาที เพื่อให้มีเวลาเดินตึกใหญ่ๆ
+                        if os.clock() - st.LastMoveTick > 15 then 
                             clearIncompleteTrace() 
                         end 
                     end
