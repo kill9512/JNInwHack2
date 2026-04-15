@@ -48,7 +48,7 @@ _G.TraceState = {
     Points = {},
     MaxDistFromStart = 0,
     LastMoveTick = 0,
-    LastProgressTick = 0, -- [NEW] ใช้จับเวลา 5 วินาทีเมื่อติดแหง็ก
+    LastProgressTick = 0, -- [NEW] ตัวจับเวลา 5 วินาทีแก้บัคติดขัด
     LastFwdDir = nil 
 }
 
@@ -56,7 +56,8 @@ _G.TraceState = {
 local function clearVisuals()
     for _, v in pairs(workspace.Terrain:GetChildren()) do
         if v.Name == "WP_Debug" or v.Name == "DirectTrace" or v.Name == "ProbeTrace" 
-        or string.find(v.Name, "Debug_Edge") or string.find(v.Name, "Debug_Ceil") then 
+        or string.find(v.Name, "Debug_Edge") or string.find(v.Name, "Debug_Ceil") 
+        or string.find(v.Name, "TraceTrail_") then 
             v:Destroy() 
         end
     end
@@ -256,13 +257,16 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
             Vector3.new(step,0,-step), Vector3.new(-step,0,step)
         }
         local validSteps = {}
-        local visualYellows = {}
+        local visualYellows = {} 
 
         for _, offset in ipairs(neighbors) do
             local testXZ = currentPos + offset
             local floorY = getRealFloorY(testXZ)
             
-            if math.abs(floorY - currentPos.Y) > 8 then continue end
+            -- [แก้ไข] ห้ามวางบล็อกลงบนขอนไม้/วัตถุที่สูงกว่าระดับเอวเด็ดขาด
+            if floorY - currentPos.Y > 2.5 then continue end
+            if currentPos.Y - floorY > 8 then continue end
+
             local testPos = Vector3.new(testXZ.X, floorY, testXZ.Z)
             
             if st.StepCount > 15 and st.MaxDistFromStart > 15 and st.StartPos then
@@ -287,10 +291,9 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                 
                 local pathBlocked = false
                 if dirToTest.Magnitude > 0 then
-                    -- [แก้ปัญหาขอนไม้] เรดาร์ระดับเข่าและเอว ถ้ายิงโดน = กระโดดไม่พ้น/ของสูง ห้ามเดินไปตรงนี้!
-                    local kneeHit = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), dirToTest * distToTest, rayParams)
-                    local waistHit = workspace:Raycast(currentPos + Vector3.new(0, 3.5, 0), dirToTest * distToTest, rayParams)
-                    if kneeHit or waistHit then
+                    -- [แก้ไข] ใช้แค่เรดาร์ระดับเอวก็พอ ไม่เช็คหัวแล้ว
+                    local bodyHit = workspace:Raycast(currentPos + Vector3.new(0, 3.0, 0), dirToTest * distToTest, rayParams)
+                    if bodyHit then
                         pathBlocked = true
                     end
                 end
@@ -687,15 +690,46 @@ task.spawn(function()
                         st.MaxDistFromStart = distFromStart
                     end
                     
-                    if distToTarget < 4.5 or isStuck then
-                        table.insert(st.Visited, st.TargetPos)
-                        table.insert(st.Points, st.TargetPos)
-                        st.StepCount = st.StepCount + 1
+                    -- [แก้ไข] เช็ค Timeout ถ้านิ่งเกิน 5 วิ (หาทางไม่ได้/ติดขัด) บังคับ Dodge เข้าตึก!
+                    if os.clock() - st.LastProgressTick > 5.0 then
+                        local fwd = st.LastFwdDir or Vector3.new(1,0,0)
+                        local rightDir = (CFrame.Angles(0, math.rad(-90), 0) * fwd).Unit
+                        local leftDir = (CFrame.Angles(0, math.rad(90), 0) * fwd).Unit
+                        
+                        local reqH = math.max(20, targetPos.Y - currentPos.Y + 5)
+                        local rightCeil = workspace:Raycast(currentPos + rightDir * 5 + Vector3.new(0,1,0), Vector3.new(0, reqH, 0), rayParams)
+                        local leftCeil = workspace:Raycast(currentPos + leftDir * 5 + Vector3.new(0,1,0), Vector3.new(0, reqH, 0), rayParams)
+                        
+                        local dodgeDir = fwd
+                        if rightCeil and not leftCeil then dodgeDir = rightDir
+                        elseif leftCeil and not rightCeil then dodgeDir = leftDir
+                        elseif rightCeil and leftCeil then dodgeDir = rightDir
+                        else dodgeDir = rightDir end 
+                        
+                        local dodgePos = currentPos + (dodgeDir * 8)
+                        updateDebug("DirectTrace", currentPos, dodgePos, Color3.fromRGB(255, 0, 255))
+                        
+                        -- แทรก Waypoint ให้มันเดินพุ่งเข้าตึกชั่วคราว
+                        currentWaypoints = {{Position = dodgePos, Action = Enum.PathWaypointAction.Walk}}
+                        currentWaypointIndex = 1
+                        isFollowingCustomPath = true
+                        
+                        -- ล้าง Trace ทิ้ง เพื่อให้เข้าลูป 'ตรวจเพดาน' ใหม่ในรอบถัดไป
+                        clearIncompleteTrace()
+                        return
+                    end
+                    
+                    if distToTarget < 3.5 or isStuck then
+                        if distToTarget < 3.5 then
+                            st.LastProgressTick = os.clock() -- [รีเซ็ตเวลา 5 วิ เมื่อเดินถึงจุด]
+                            table.insert(st.Visited, st.TargetPos)
+                            table.insert(st.Points, st.TargetPos)
+                            st.StepCount = st.StepCount + 1
+                        end
 
                         if st.Phase == "MoveToEdge" then
                             st.Phase = "Tracing"
                             st.StartPos = currentPos
-                            st.LastProgressTick = os.clock() -- เริ่มจับเวลาแก้บัค
                         end
 
                         if st.Phase == "Tracing" then
@@ -726,41 +760,14 @@ task.spawn(function()
 
                             if nextData then
                                 st.TargetPos = nextData.pos
-                                st.LastMoveTick = os.clock()
-                                st.LastProgressTick = os.clock()
                             else
-                                -- [NEW] Forced Dodge เข้าตึก ถ้าหาทางไปต่อไม่ได้เกิน 5 วิ
-                                if os.clock() - st.LastProgressTick > 5 then
-                                    local fwd = st.LastFwdDir or Vector3.new(1,0,0)
-                                    local rightDir = (CFrame.Angles(0, math.rad(-90), 0) * fwd).Unit
-                                    local leftDir = (CFrame.Angles(0, math.rad(90), 0) * fwd).Unit
-                                    
-                                    local rightHit = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), rightDir * 10, rayParams)
-                                    local leftHit = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), leftDir * 10, rayParams)
-                                    
-                                    local dodgeDir = fwd
-                                    if rightHit and not leftHit then
-                                        dodgeDir = (CFrame.Angles(0, math.rad(-45), 0) * fwd).Unit
-                                    elseif leftHit and not rightHit then
-                                        dodgeDir = (CFrame.Angles(0, math.rad(45), 0) * fwd).Unit
-                                    else
-                                        dodgeDir = (CFrame.Angles(0, math.rad(45), 0) * fwd).Unit 
-                                    end
-                                    
-                                    st.TargetPos = currentPos + (dodgeDir * 8)
-                                    st.LastProgressTick = os.clock()
-                                    st.LastMoveTick = os.clock()
-                                else
-                                    myRoot.CFrame = myRoot.CFrame * CFrame.Angles(0, math.rad(45), 0)
-                                    forceJump(myHuman)
-                                end
+                                -- หาทางไม่ได้ แต่ยังไม่ครบ 5 วิ ให้หัน 90 องศาแล้วกระโดดดิ้นแก้ขัด
+                                myRoot.CFrame = myRoot.CFrame * CFrame.Angles(0, math.rad(90), 0)
+                                forceJump(myHuman)
                             end
                         end
                     else
                         moveWithAvoidance(myHuman, flatTarget)
-                        if os.clock() - st.LastMoveTick > 15 then 
-                            clearIncompleteTrace() 
-                        end 
                     end
                     return 
                 end
@@ -852,12 +859,6 @@ task.spawn(function()
                                 isFollowingCustomPath = false
                                 updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0))
                                 moveWithAvoidance(myHuman, flatTargetPos)
-
-                                local chestRay = workspace:Raycast(currentPos, flatDir * 4, rayParams)
-                                local floorDropRay = workspace:Raycast(currentPos + (flatDir * 4) + Vector3.new(0, 1, 0), Vector3.new(0, -10, 0), rayParams)
-                                if chestRay and chestRay.Distance < 3 and not floorDropRay then
-                                    forceJump(myHuman)
-                                end
                             end
                         end
                         
@@ -905,7 +906,7 @@ task.spawn(function()
                                                 _G.TraceState.MaxDistFromStart = 0
                                                 _G.TraceState.FailCount = 0
                                                 _G.TraceState.LastFwdDir = nil
-                                                _G.TraceState.LastMoveTick = os.clock()
+                                                _G.TraceState.LastProgressTick = os.clock() -- [รีเซ็ตนาฬิกาตอนเริ่มลัดเลาะ]
                                             end
                                         else
                                             currentWaypoints = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
