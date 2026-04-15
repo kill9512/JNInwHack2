@@ -35,48 +35,21 @@ _G.PatrolIndex = 1
 -- ระบบความจำสถานที่
 _G.BuildingMemories = _G.BuildingMemories or {}
 
--- สถานะระบบลัดเลาะขอบ
-_G.TraceState = {
-    Active = false,
-    Locked = false,
-    LockedTargetY = nil,
-    Phase = "None",
-    TargetPos = nil,
-    StartPos = nil,
-    StepCount = 0,
-    Visited = {},
-    Points = {},
-    MaxDistFromStart = 0,
-    LastMoveTick = 0,
-    StuckTick = 0, 
-    LastFwdDir = nil 
-}
-
 -- --- Debug Visualization ---
 local function clearVisuals()
     for _, v in pairs(workspace.Terrain:GetChildren()) do
-        if v.Name == "WP_Debug" or v.Name == "DirectTrace" or v.Name == "ProbeTrace" 
-        or string.find(v.Name, "Debug_Edge") or string.find(v.Name, "Debug_Ceil") 
-        or string.find(v.Name, "TraceTrail_") then 
+        if v.Name == "WP_Debug" or v.Name == "DirectTrace" or string.find(v.Name, "Laser_Trace") then 
             v:Destroy() 
         end
     end
 end
 
-local function clearIncompleteTrace()
+local function clearMemoryAndTrace()
+    _G.BuildingMemories = {}
+    clearVisuals()
     for _, v in pairs(workspace.Terrain:GetChildren()) do
-        if string.find(v.Name, "TraceTrail_") then v:Destroy() end
+        if string.find(v.Name, "MemPillar_") or string.find(v.Name, "MemArea_") then v:Destroy() end
     end
-    _G.TraceState.Active = false
-    _G.TraceState.Locked = false
-    _G.TraceState.LockedTargetY = nil
-    _G.TraceState.Phase = "None"
-    _G.TraceState.StepCount = 0
-    _G.TraceState.Visited = {}
-    _G.TraceState.Points = {}
-    _G.TraceState.MaxDistFromStart = 0
-    _G.TraceState.StuckTick = 0
-    _G.TraceState.LastFwdDir = nil
 end
 
 local function updateDebug(name, startPos, endPos, color)
@@ -197,187 +170,81 @@ local function checkCeilingAround(pos, height)
     return false
 end
 
-local function crossScanForEdge(startPos, maxCheckHeight, targetPos)
-    local step = 6 
-    local maxRadius = 45 
-    local dirs = { Vector3.new(1,0,0), Vector3.new(-1,0,0), Vector3.new(0,0,1), Vector3.new(0,0,-1) }
-    local endpoints = {}
-
-    for _, dir in ipairs(dirs) do
-        for d = step, maxRadius, step do
-            local testXZ = startPos + (dir * d)
-            local floorY = getRealFloorY(testXZ)
-            
-            if math.abs(floorY - startPos.Y) > 5 then continue end
-
-            local checkPos = Vector3.new(testXZ.X, floorY, testXZ.Z)
-            local rayOrigin = checkPos + Vector3.new(0, 1, 0)
-            local hasCeiling = workspace:Raycast(rayOrigin, Vector3.new(0, maxCheckHeight, 0), rayParams)
-            
-            if hasCeiling then
-                table.insert(endpoints, checkPos)
-                break 
-            end
-        end
+-- =========================================================================
+-- [NEW ALGORITHM]: LASER FLOOD-FILL TRACER (แทนที่โหมดลัดเลาะเดิมทั้งหมด)
+-- บอทยืนนิ่งๆ แล้วยิ่งเลเซอร์กระจายตัวออกไปตามเพดานเพื่อคำนวณขอบตึกในพริบตา!
+-- =========================================================================
+local function floodFillRoofInstantly(startPos, maxCheckHeight)
+    local step = 6          -- ระยะก้าวของเลเซอร์
+    local maxNodes = 250    -- จำกัดจำนวนบล็อกเพื่อกันแลค
+    local maxRadius = 100   -- ระยะไกลสุดที่เลเซอร์จะวิ่งไป
+    local queue = {startPos}
+    local visited = {}
+    local roofNodes = {}
+    
+    -- ล้างภาพเลเซอร์เก่า
+    for _, v in pairs(workspace.Terrain:GetChildren()) do
+        if string.find(v.Name, "Laser_Trace") then v:Destroy() end
     end
 
-    local bestEdge = nil
-    local bestDist = math.huge
-    for _, edgePos in ipairs(endpoints) do
-        local d = (edgePos - targetPos).Magnitude
-        if d < bestDist then
-            bestDist = d
-            bestEdge = edgePos
-        end
-    end
-    return bestEdge
-end
+    local startKey = math.floor(startPos.X/step)..","..math.floor(startPos.Z/step)
+    visited[startKey] = true
+    
+    local nodeCount = 0
 
--- [อัปเกรด] Dynamic Beam Stepping (ยิงบีมลัดเลาะความเร็วสูง)
-local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
-    local st = _G.TraceState
-    
-    -- รัศมีก้าวยาว 15 (Beam), ก้าวกลาง 8 (โค้ง), ก้าวสั้น 4 (แคบ/หักศอก)
-    local radiiToTry = {15, 8, 4} 
-    
-    local fwdDir = st.LastFwdDir or Vector3.new(1, 0, 0)
-    if #st.Visited >= 2 then
-        local p1 = st.Visited[#st.Visited-1]
-        local p2 = currentPos
-        local moveDiffXZ = Vector3.new(p2.X, 0, p2.Z) - Vector3.new(p1.X, 0, p1.Z)
+    while #queue > 0 and nodeCount < maxNodes do
+        local curr = table.remove(queue, 1)
+        table.insert(roofNodes, curr)
+        nodeCount = nodeCount + 1
         
-        if moveDiffXZ.Magnitude > 2.0 then
-            fwdDir = moveDiffXZ.Unit
-            st.LastFwdDir = fwdDir
+        -- โชว์เลเซอร์สีเขียววาดบนพื้นที่ใต้เพดาน
+        if debugEnabled then
+            local pg = Instance.new("Part")
+            pg.Name = "Laser_Trace_"..nodeCount
+            pg.Size = Vector3.new(step*0.8, 0.5, step*0.8)
+            pg.Position = curr + Vector3.new(0, 2, 0)
+            pg.Anchored = true; pg.CanCollide = false; pg.CanQuery = false
+            pg.Transparency = 0.5; pg.Color = Color3.fromRGB(0, 255, 0)
+            pg.Material = Enum.Material.Neon; pg.Parent = workspace.Terrain
         end
-    end
-
-    for _, step in ipairs(radiiToTry) do
-        local neighbors = { 
-            Vector3.new(step,0,0), Vector3.new(-step,0,0), 
-            Vector3.new(0,0,step), Vector3.new(0,0,-step),
-            Vector3.new(step,0,step), Vector3.new(-step,0,-step),
-            Vector3.new(step,0,-step), Vector3.new(-step,0,step)
+        
+        -- ยิงเลเซอร์กระจาย 4 ทิศทาง (ขยายแนวราบเหมือนน้ำท่วม)
+        local neighbors = {
+            Vector3.new(step, 0, 0), Vector3.new(-step, 0, 0),
+            Vector3.new(0, 0, step), Vector3.new(0, 0, -step)
         }
-        local validSteps = {}
-        local visualYellows = {} 
-
-        for _, offset in ipairs(neighbors) do
-            local testXZ = currentPos + offset
-            local floorY = getRealFloorY(testXZ)
+        
+        for _, off in ipairs(neighbors) do
+            local testXZ = curr + off
             
-            -- กฎระดับเอว ห้ามโดดขึ้นของสูงเกิน
-            if floorY - currentPos.Y > 2.5 then continue end
-            if currentPos.Y - floorY > 8 then continue end 
-            
-            local testPos = Vector3.new(testXZ.X, floorY, testXZ.Z)
-            
-            if st.StepCount > 15 and st.MaxDistFromStart > 15 and st.StartPos then
-                local distToStart = (Vector2.new(testPos.X, testPos.Z) - Vector2.new(st.StartPos.X, st.StartPos.Z)).Magnitude
-                -- ระยะบรรจบลูปขึ้นอยู่กับระยะก้าว เพื่อให้ Beam จบลูปได้ง่ายขึ้น
-                if distToStart < math.max(6, step * 0.8) then 
-                    return {pos = testPos, closedLoop = true}
-                end
+            -- ห้ามเลเซอร์วิ่งทะลุเขตที่กำหนด
+            if (Vector3.new(testXZ.X, 0, testXZ.Z) - Vector3.new(startPos.X, 0, startPos.Z)).Magnitude > maxRadius then
+                continue
             end
-
-            -- กันหลอนเดินย้อนทางเดิม
-            local visited = false
-            for i, v in ipairs(st.Visited) do
-                local distXZ = (Vector2.new(v.X, v.Z) - Vector2.new(testPos.X, testPos.Z)).Magnitude
-                local checkRadius = math.max(3.0, step * 0.4) 
-                if i >= #st.Visited - 2 then checkRadius = 2.0 end 
-                if distXZ < checkRadius then visited = true; break end
-            end
-
-            if not visited then
-                local dirToTest = (testPos - currentPos).Unit
-                local distToTest = (testPos - currentPos).Magnitude
+            
+            local key = math.floor(testXZ.X/step)..","..math.floor(testXZ.Z/step)
+            
+            -- ถ้ายังไม่เคยวิ่งไปจุดนั้น
+            if not visited[key] then
+                visited[key] = true
+                local floorY = getRealFloorY(testXZ)
                 
-                local pathBlocked = false
-                if dirToTest.Magnitude > 0 then
-                    local bodyHit = workspace:Raycast(currentPos + Vector3.new(0, 3.0, 0), dirToTest * distToTest, rayParams)
-                    if bodyHit then pathBlocked = true end
-                    
-                    -- ถ้ายิง Beam (step 15) ต้องเช็คตลอดเส้นทางว่าเพดานไม่แหว่ง
-                    if step > 10 and not pathBlocked then
-                        local midPos = currentPos + (dirToTest * (distToTest * 0.5))
-                        local midFloorY = getRealFloorY(midPos)
-                        local midCeil = workspace:Raycast(Vector3.new(midPos.X, midFloorY+1, midPos.Z), Vector3.new(0, maxCheckHeight, 0), rayParams)
-                        if not midCeil then pathBlocked = true end
-                    end
-                end
-
-                if not pathBlocked then
+                -- เช็คว่าพื้นไม่ต่างระดับเกินไป (หลบการโดดลงเหว/ตึกอื่น)
+                if math.abs(floorY - startPos.Y) <= 8 then
+                    local testPos = Vector3.new(testXZ.X, floorY, testXZ.Z)
+                    -- เช็คว่า "ยังมีเพดานอยู่ไหม"
                     local hasCeiling = workspace:Raycast(testPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams)
-
+                    
                     if hasCeiling then
-                        local isNearOutside = false
-                        local outCheckDist = math.max(4, step * 0.6) 
-                        local oChecks = { Vector3.new(outCheckDist,0,0), Vector3.new(-outCheckDist,0,0), Vector3.new(0,0,outCheckDist), Vector3.new(0,0,-outCheckDist) }
-                        
-                        for _, subOff in ipairs(oChecks) do
-                            local outCheckPos = testPos + subOff
-                            local outHasCeiling = workspace:Raycast(outCheckPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams)
-                            
-                            if not outHasCeiling then 
-                                local outFloorY = getRealFloorY(outCheckPos)
-                                if math.abs(outFloorY - floorY) < 10 and (outFloorY - floorY <= 2.5) then
-                                    isNearOutside = true 
-                                    table.insert(visualYellows, outCheckPos)
-                                    break
-                                end
-                            end
-                        end
-
-                        if isNearOutside then
-                            table.insert(validSteps, testPos)
-                        end
+                        -- มีเพดาน! แปลว่ายังอยู่ในตึก เก็บเข้าคิวให้เลเซอร์วิ่งต่อไป
+                        table.insert(queue, testPos)
                     end
                 end
-            end
-        end
-
-        if #validSteps > 0 then
-            local bestStep = nil
-            local bestScore = -math.huge
-
-            for _, pos in ipairs(validSteps) do
-                local dirToPos = (Vector3.new(pos.X, 0, pos.Z) - Vector3.new(currentPos.X, 0, currentPos.Z)).Unit
-                if dirToPos.Magnitude == 0 then dirToPos = Vector3.new(1,0,0) end
-                
-                local score = fwdDir:Dot(dirToPos)
-                
-                -- โบนัสก้าวยาว! ยิง Beam ไปได้ไกลคะแนนจะสูงกว่าก้าวสั้นๆ
-                score = score + (step * 0.1)
-                
-                -- ห้ามเลี้ยวหักศอกเกิน 90 องศา (Score < 0) กันความจำเสื่อมเดินกลับทางเดิม
-                if score > 0.0 then 
-                    if score > bestScore then
-                        bestScore = score
-                        bestStep = pos
-                    end
-                end
-            end
-            
-            if bestStep then
-                if debugEnabled then
-                    for _, yPos in ipairs(visualYellows) do
-                        local py = Instance.new("Part")
-                        py.Name, py.Size, py.Position = "TraceTrail_Yellow", Vector3.new(1.5, 0.5, 1.5), yPos + Vector3.new(0, 2, 0)
-                        py.Anchored, py.CanCollide, py.CanQuery, py.Transparency, py.Color = true, false, false, 0.4, Color3.fromRGB(255, 255, 0)
-                        py.Material, py.Parent = Enum.Material.Neon, workspace.Terrain
-                    end
-                    local pg = Instance.new("Part")
-                    pg.Name, pg.Size, pg.Position = "TraceTrail_Green", Vector3.new(1.5, 0.5, 1.5), bestStep + Vector3.new(0, 2, 0)
-                    pg.Anchored, pg.CanCollide, pg.CanQuery, pg.Transparency, pg.Color = true, false, false, 0.2, Color3.fromRGB(0, 255, 0)
-                    pg.Material, pg.Parent = Enum.Material.Neon, workspace.Terrain
-                end
-                return {pos = bestStep, closedLoop = false} 
             end
         end
     end
-
-    return nil
+    
+    return roofNodes
 end
 
 local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
@@ -517,8 +384,7 @@ MoveSection:NewToggle("Enable Follow", "Start Logic", function(s)
     followEnabled = s 
     if not s then 
         currentWaypoints = {}
-        clearVisuals()
-        clearIncompleteTrace()
+        clearMemoryAndTrace()
         isProbing = false
         isFollowingCustomPath = false 
     end
@@ -530,9 +396,7 @@ end)
 MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
 
 MoveSection:NewButton("Clear Memory", "ล้างความจำตึกและรอยทาง", function() 
-    _G.BuildingMemories = {} 
-    drawMemoryPillars()
-    clearIncompleteTrace()
+    clearMemoryAndTrace()
 end)
 
 -- --- MAIN LOOP ---
@@ -602,23 +466,19 @@ task.spawn(function()
                 end
 
                 -- =======================================================
-                -- [ตรวจสอบเงื่อนไขเป้าหมายหนีออกจากโซน]
-                -- =======================================================
-                if _G.TraceState.Locked and _G.TraceState.LockedTargetY then
-                    local targetFloorY = getRealFloorY(Vector3.new(targetPos.X, targetPos.Y, targetPos.Z))
-                    local buildingHeight = math.max(10, _G.TraceState.LockedTargetY - targetFloorY)
-                    local dropThreshold = math.max(15, buildingHeight * 0.30)
-                    
-                    if targetPos.Y < _G.TraceState.LockedTargetY - dropThreshold then
-                        clearIncompleteTrace()
-                    end
-                end
-
-                -- =======================================================
-                -- [โหมดตรวจสอบ Bounding Box Area]
+                -- [โหมดตรวจสอบ Bounding Box Area & Target Jump Logic]
                 -- =======================================================
                 local inMemory = nil
-                for _, mem in ipairs(_G.BuildingMemories) do
+                for i, mem in ipairs(_G.BuildingMemories) do
+                    -- ถ้าระหว่างหาทางปีน เป้าหมายร่วงลงมาเกิน 30% ให้ลบทิ้ง
+                    local targetFloorY = getRealFloorY(Vector3.new(targetPos.X, targetPos.Y, targetPos.Z))
+                    local buildingHeight = math.max(10, mem.TargetY - targetFloorY)
+                    if targetPos.Y < mem.TargetY - (buildingHeight * 0.30) then
+                        table.remove(_G.BuildingMemories, i)
+                        clearVisuals()
+                        break
+                    end
+                    
                     if targetPos.X >= mem.MinX - 15 and targetPos.X <= mem.MaxX + 15 and
                        targetPos.Z >= mem.MinZ - 15 and targetPos.Z <= mem.MaxZ + 15 then
                         inMemory = mem
@@ -641,10 +501,6 @@ task.spawn(function()
                             if _G.PatrolIndex > 4 then _G.PatrolIndex = 1 end
                         end
                         
-                        local lookCenter = Vector3.new(inMemory.Center.X, currentPos.Y, inMemory.Center.Z)
-                        if (lookCenter - currentPos).Magnitude > 1 then
-                            myRoot.CFrame = CFrame.lookAt(currentPos, lookCenter)
-                        end
                         moveWithAvoidance(myHuman, targetCorner)
 
                         local testWps = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
@@ -681,115 +537,6 @@ task.spawn(function()
                     return 
                 end
 
-                -- =======================================================
-                -- [โหมดลัดเลาะขอบ (Edge Tracing Phase) - Locked]
-                -- =======================================================
-                if _G.TraceState.Locked then
-                    local st = _G.TraceState
-                    local flatTarget = Vector3.new(st.TargetPos.X, currentPos.Y, st.TargetPos.Z)
-                    local distToTarget = (flatTarget - currentPos).Magnitude
-                    
-                    local distFromStart = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(st.StartPos.X, 0, st.StartPos.Z)).Magnitude
-                    if distFromStart > st.MaxDistFromStart then
-                        st.MaxDistFromStart = distFromStart
-                    end
-                    
-                    if distToTarget < 3.5 or isStuck then
-                        table.insert(st.Visited, st.TargetPos)
-                        table.insert(st.Points, st.TargetPos)
-                        st.StepCount = st.StepCount + 1
-
-                        if st.Phase == "MoveToEdge" then
-                            st.Phase = "Tracing"
-                            st.StartPos = currentPos
-                        end
-
-                        if st.Phase == "Tracing" then
-                            local reqH = math.max(20, targetPos.Y - currentPos.Y + 5)
-                            local nextData = getNextEdgeTracingStep(currentPos, reqH, targetPos)
-                            
-                            if nextData and nextData.closedLoop then
-                                local minX, maxX = math.huge, -math.huge
-                                local minZ, maxZ = math.huge, -math.huge
-                                for _, p in ipairs(st.Points) do
-                                    if p.X < minX then minX = p.X end
-                                    if p.X > maxX then maxX = p.X end
-                                    if p.Z < minZ then minZ = p.Z end
-                                    if p.Z > maxZ then maxZ = p.Z end
-                                end
-                                
-                                local center = Vector3.new((minX+maxX)/2, currentPos.Y, (minZ+maxZ)/2)
-                                table.insert(_G.BuildingMemories, {
-                                    MinX = minX, MaxX = maxX, MinZ = minZ, MaxZ = maxZ,
-                                    Center = center,
-                                    HasPillar = false, 
-                                    ClimbSpot = nil,
-                                    TargetY = targetPos.Y
-                                })
-                                clearIncompleteTrace() 
-                                return
-                            end
-
-                            if nextData then
-                                st.TargetPos = nextData.pos
-                                st.LastMoveTick = os.clock()
-                                st.StuckTick = 0
-                            else
-                                -- [แก้ไข] Smart Indoor Dodge (เสกบล็อกเขียวอ้อมเข้าในตึก)
-                                if st.StuckTick == 0 then st.StuckTick = os.clock() end
-                                
-                                if os.clock() - st.StuckTick > 5.0 then -- รอ 5 วินาที
-                                    local fwd = st.LastFwdDir or Vector3.new(1,0,0)
-                                    local reqHeight = math.max(20, targetPos.Y - currentPos.Y + 5)
-                                    
-                                    local rightDir = (CFrame.Angles(0, math.rad(-90), 0) * fwd).Unit
-                                    local leftDir = (CFrame.Angles(0, math.rad(90), 0) * fwd).Unit
-                                    
-                                    -- ยิงเรดาร์หาว่าตึก(เพดาน)อยู่ฝั่งไหน
-                                    local rightCeil = workspace:Raycast(currentPos + rightDir*8 + Vector3.new(0,1,0), Vector3.new(0, reqHeight, 0), rayParams)
-                                    local leftCeil = workspace:Raycast(currentPos + leftDir*8 + Vector3.new(0,1,0), Vector3.new(0, reqHeight, 0), rayParams)
-                                    
-                                    local dodgeDir = nil
-                                    -- บังคับว่าเป้าหมายใหม่ต้องมีเพดานตึกอยู่ข้างบน 100%
-                                    if rightCeil then dodgeDir = rightDir
-                                    elseif leftCeil then dodgeDir = leftDir
-                                    end 
-                                    
-                                    if dodgeDir then
-                                        local dodgePos = currentPos + (dodgeDir * 10)
-                                        dodgePos = Vector3.new(dodgePos.X, getRealFloorY(dodgePos), dodgePos.Z)
-                                        
-                                        st.TargetPos = dodgePos
-                                        st.LastFwdDir = dodgeDir
-                                        st.StuckTick = 0
-                                        st.LastMoveTick = os.clock()
-                                        
-                                        if debugEnabled then
-                                            local pg = Instance.new("Part")
-                                            pg.Name = "TraceTrail_Green"
-                                            pg.Size = Vector3.new(2, 0.5, 2)
-                                            pg.Position = dodgePos + Vector3.new(0, 2, 0)
-                                            pg.Anchored = true; pg.CanCollide = false; pg.CanQuery = false
-                                            pg.Transparency = 0.2; pg.Color = Color3.fromRGB(0, 255, 0)
-                                            pg.Material = Enum.Material.Neon; pg.Parent = workspace.Terrain
-                                        end
-                                    else
-                                        -- ถ้าหาตึกมุดไม่เจอเลยจริงๆ ถึงจะยอมยกเลิก (ตันทุกทาง)
-                                        clearIncompleteTrace()
-                                    end
-                                end
-                            end
-                        end
-                    else
-                        moveWithAvoidance(myHuman, flatTarget)
-                        if os.clock() - st.LastMoveTick > 15 then 
-                            clearIncompleteTrace() 
-                        end 
-                    end
-                    return 
-                end
-                -- =======================================================
-
                 if isFollowingCustomPath and #currentWaypoints > 0 then
                     if (targetPos - lastTargetPos).Magnitude > 15 then
                         isFollowingCustomPath = false
@@ -822,7 +569,7 @@ task.spawn(function()
                 end
 
                 -- =======================================================
-                -- ลำดับการตรวจสอบหลัก
+                -- ลำดับการตรวจสอบหลัก (ไม่สนใจลัดเลาะแล้ว ใช้ Laser ทันที)
                 -- =======================================================
                 if hDist > followDistance or math.abs(vDist) > 5 then
                     
@@ -907,23 +654,28 @@ task.spawn(function()
                                     if hDist < 15 then
                                         local requiredHeightCheck = math.max(20, targetPos.Y - currentPos.Y + 5)
                                         
+                                        -- [ระบบเลเซอร์คำนวณ 0.01 วิ] เข้าใกล้ปุ๊บ สแกนปั๊บ!
                                         if checkCeilingAround(currentPos, requiredHeightCheck) then
-                                            local edgeStart = crossScanForEdge(currentPos, requiredHeightCheck, targetPos)
-                                            if edgeStart then
-                                                _G.TraceState.Active = true
-                                                _G.TraceState.Locked = true
-                                                _G.TraceState.LockedTargetY = targetPos.Y 
+                                            local roofNodes = floodFillRoofInstantly(currentPos, requiredHeightCheck)
+                                            if #roofNodes > 0 then
+                                                local minX, maxX = math.huge, -math.huge
+                                                local minZ, maxZ = math.huge, -math.huge
+                                                for _, p in ipairs(roofNodes) do
+                                                    if p.X < minX then minX = p.X end
+                                                    if p.X > maxX then maxX = p.X end
+                                                    if p.Z < minZ then minZ = p.Z end
+                                                    if p.Z > maxZ then maxZ = p.Z end
+                                                end
+                                                local center = Vector3.new((minX+maxX)/2, currentPos.Y, (minZ+maxZ)/2)
                                                 
-                                                _G.TraceState.Phase = "MoveToEdge"
-                                                _G.TraceState.TargetPos = edgeStart
-                                                _G.TraceState.StartPos = currentPos
-                                                _G.TraceState.Visited = {}
-                                                _G.TraceState.Points = {}
-                                                _G.TraceState.StepCount = 0
-                                                _G.TraceState.MaxDistFromStart = 0
-                                                _G.TraceState.FailCount = 0
-                                                _G.TraceState.LastFwdDir = nil
-                                                _G.TraceState.LastMoveTick = os.clock()
+                                                table.insert(_G.BuildingMemories, {
+                                                    MinX = minX, MaxX = maxX, MinZ = minZ, MaxZ = maxZ,
+                                                    Center = center,
+                                                    HasPillar = false,
+                                                    ClimbSpot = nil,
+                                                    TargetY = targetPos.Y
+                                                })
+                                                -- ไม่ต้องลัดเลาะแล้ว ได้ข้อมูล Bounding Box ครบถ้วนทันที!
                                             end
                                         else
                                             currentWaypoints = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
