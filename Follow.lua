@@ -38,7 +38,8 @@ _G.BuildingMemories = _G.BuildingMemories or {}
 -- --- Debug Visualization ---
 local function clearVisuals()
     for _, v in pairs(workspace.Terrain:GetChildren()) do
-        if v.Name == "WP_Debug" or v.Name == "DirectTrace" or v.Name == "ProbeTrace" then 
+        if v.Name == "WP_Debug" or v.Name == "DirectTrace" or v.Name == "ProbeTrace" 
+        or string.find(v.Name, "Debug_Edge") or string.find(v.Name, "Debug_Ceil") then 
             v:Destroy() 
         end
     end
@@ -64,8 +65,8 @@ local function drawMemoryPillars()
         local nameArea = "MemArea_"..i
         local a = Instance.new("Part")
         a.Name = nameArea
-        local sizeX = math.max(10, mem.MaxX - mem.MinX + 5)
-        local sizeZ = math.max(10, mem.MaxZ - mem.MinZ + 5)
+        local sizeX = math.max(10, mem.MaxX - mem.MinX + 10)
+        local sizeZ = math.max(10, mem.MaxZ - mem.MinZ + 10)
         a.Size = Vector3.new(sizeX, 2, sizeZ)
         a.Position = mem.Center + Vector3.new(0, 1, 0)
         a.Anchored, a.CanCollide, a.CanQuery = true, false, false
@@ -73,6 +74,7 @@ local function drawMemoryPillars()
         a.Color = Color3.fromRGB(0, 255, 0)
         a.Parent = workspace.Terrain
 
+        -- ปักเสาสีฟ้า เมื่อพบจุดปีนแล้ว
         if mem.HasPillar and mem.ClimbSpot then
             local namePillar = "MemPillar_"..i
             local p = Instance.new("Part")
@@ -115,19 +117,29 @@ local function moveWithAvoidance(humanoid, pos)
     humanoid:MoveTo(pos)
 end
 
+local function checkCeilingAround(pos, height)
+    local offsets = { Vector3.new(0,0,0), Vector3.new(3,0,0), Vector3.new(-3,0,0), Vector3.new(0,0,3), Vector3.new(0,0,-3) }
+    for _, off in ipairs(offsets) do
+        if workspace:Raycast(pos + off + Vector3.new(0, 1, 0), Vector3.new(0, height, 0), rayParams) then return true end
+    end
+    return false
+end
+
 local function hasHeadroom(pos)
     local checkRay = workspace:Raycast(pos + Vector3.new(0, 1, 0), Vector3.new(0, 6, 0), rayParams)
     return checkRay == nil 
 end
 
--- ระบบสแกนหลังคา (กางกระดาษแล้วตัดขอบ)
+-- =======================================================
+-- [NEW] ระบบสแกนหลังคาเป้าหมาย (Roof Scanner) แบบ 4 ทิศกากบาท
+-- =======================================================
 local function scanRoofBounds(targetPos)
     local bounds = {
         minX = targetPos.X, maxX = targetPos.X,
         minZ = targetPos.Z, maxZ = targetPos.Z
     }
-    local step = 4      -- ความละเอียดในการสแกน
-    local maxScan = 60  -- รัศมีสูงสุดในการหากำแพงตึก
+    local step = 4
+    local maxScan = 60
     
     local directions = {
         {dir = Vector3.new(1,0,0), key = "maxX", sign = 1},
@@ -143,25 +155,14 @@ local function scanRoofBounds(targetPos)
             local rayOrigin = testPos + Vector3.new(0, 3, 0)
             local floorRay = workspace:Raycast(rayOrigin, Vector3.new(0, -6, 0), rayParams)
             
-            -- ถ้าไม่เจอพื้น หรือพื้นหล่นต่ำกว่าเป้าหมายเกิน 3 บล็อก ถือว่าเป็นขอบตึก
             if not floorRay or floorRay.Position.Y < targetPos.Y - 3 then
-                if d.dir.X ~= 0 then
-                    bounds[d.key] = targetPos.X + ((dist - step/2) * d.sign)
-                else
-                    bounds[d.key] = targetPos.Z + ((dist - step/2) * d.sign)
-                end
+                bounds[d.key] = targetPos[d.key == "maxX" or d.key == "minX" and "X" or "Z"] + ((dist - step/2) * d.sign)
                 edgeFound = true
                 break
             end
         end
-        
-        -- ถ้าสแกนจนสุดแล้วยังไม่เจอขอบ ก็ล็อกขนาดกล่องไว้ที่ maxScan
         if not edgeFound then
-            if d.dir.X ~= 0 then
-                bounds[d.key] = targetPos.X + (maxScan * d.sign)
-            else
-                bounds[d.key] = targetPos.Z + (maxScan * d.sign)
-            end
+            bounds[d.key] = targetPos[d.key == "maxX" or d.key == "minX" and "X" or "Z"] + (maxScan * d.sign)
         end
     end
     
@@ -393,18 +394,21 @@ task.spawn(function()
                 -- =======================================================
                 local inMemory = nil
                 for _, mem in ipairs(_G.BuildingMemories) do
-                    -- เช็คว่าผู้เล่นเป้าหมายยังคงยืนอยู่บนหลังคานี้หรือไม่
-                    if targetPos.X >= mem.MinX - 10 and targetPos.X <= mem.MaxX + 10 and
-                       targetPos.Z >= mem.MinZ - 10 and targetPos.Z <= mem.MaxZ + 10 and
-                       math.abs(targetPos.Y - mem.TargetY) < 10 then
-                        inMemory = mem
-                        break
+                    -- เช็คว่าผู้เล่นเป้าหมายอยู่ในอาณาเขตกล่องหรือไม่
+                    if targetPos.X >= mem.MinX - 15 and targetPos.X <= mem.MaxX + 15 and
+                       targetPos.Z >= mem.MinZ - 15 and targetPos.Z <= mem.MaxZ + 15 then
+                        
+                        -- เช็คแกน Y ด้วย เผื่อผู้เล่นตกตึก
+                        if math.abs(targetPos.Y - mem.TargetY) < 10 then
+                            inMemory = mem
+                            break
+                        end
                     end
                 end
 
                 if inMemory then
                     if not inMemory.HasPillar then
-                        -- เดินตระเวน 4 มุมรอบ Bounding Box เพื่อหาจุดปีน
+                        -- เดินตระเวนรอบ Bounding Box หาจุดปีน
                         local corners = {
                             Vector3.new(inMemory.MinX - 5, currentPos.Y, inMemory.MinZ - 5),
                             Vector3.new(inMemory.MaxX + 5, currentPos.Y, inMemory.MinZ - 5),
@@ -419,23 +423,27 @@ task.spawn(function()
                         end
                         moveWithAvoidance(myHuman, targetCorner)
 
+                        -- ยิงเรดาร์จำลองการปีนหาความสูง
                         local testWps = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
                         local highestY = currentPos.Y
                         for _, wp in ipairs(testWps) do 
                             if wp.Position.Y > highestY then highestY = wp.Position.Y end 
                         end
                         
+                        -- หากปีนถึงเป้าหมายได้ ให้ปักเสาฟ้าและจำจุดปีน
                         if highestY >= inMemory.TargetY - 10 then
                             inMemory.HasPillar = true
                             inMemory.ClimbSpot = currentPos
                         end
                     else
+                        -- มีเสาฟ้าแล้ว พุ่งเข้าหาเสาฟ้า
                         local distToPillar = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(inMemory.ClimbSpot.X, 0, inMemory.ClimbSpot.Z)).Magnitude
                         
                         if distToPillar > 3 then
                             updateDebug("DirectTrace", currentPos, inMemory.ClimbSpot, Color3.fromRGB(0, 0, 255))
                             moveWithAvoidance(myHuman, inMemory.ClimbSpot)
                         else
+                            -- ถึงเสา หันหน้าเข้าตึกและปีน
                             local lookPos = Vector3.new(inMemory.Center.X, currentPos.Y, inMemory.Center.Z)
                             myRoot.CFrame = CFrame.lookAt(currentPos, lookPos)
                             
@@ -453,9 +461,6 @@ task.spawn(function()
                     return 
                 end
 
-                -- =======================================================
-                -- [รันตาม Waypoint ถ้ามีการสร้างไว้]
-                -- =======================================================
                 if isFollowingCustomPath and #currentWaypoints > 0 then
                     if (targetPos - lastTargetPos).Magnitude > 15 then
                         isFollowingCustomPath = false
@@ -553,7 +558,7 @@ task.spawn(function()
                             end
                         end
                         
-                    -- [3] มองไม่เห็น + เดินอ้อม (Pathfinding)
+                    -- [3] มองไม่เห็น + เดินอ้อม
                     else
                         if os.clock() - lastComputeTime > 0.5 or (targetPos - lastTargetPos).Magnitude > 5 then
                             lastComputeTime = os.clock()
@@ -576,37 +581,39 @@ task.spawn(function()
                                     end
                                 end
                             else
-                                -- [4] อ้อมไม่ได้ หรือ ติดกำแพง (isStuck)
+                                -- [4] เดินอ้อมตัน (isStuck) -> ตรวจเพดาน(เข้าใกล้เป้าหมายก่อน) -> สแกนสร้าง Bounding Box
                                 local canUseCustomPaths = (_G.CustomPathFailTick == nil) or (os.clock() - _G.CustomPathFailTick > 4)
 
                                 if canUseCustomPaths then
-                                    -- ถ้าระยะเกิน 30 บล็อก ให้เดินเข้าหา X,Z ก่อน
-                                    if hDist > 30 then
+                                    if hDist < 15 then
+                                        local requiredHeightCheck = math.max(20, targetPos.Y - currentPos.Y + 5)
+                                        
+                                        -- ถ้ายืนใต้ตึก
+                                        if checkCeilingAround(currentPos, requiredHeightCheck) then
+                                            -- สแกนกางกระดาษสร้าง Bounding Box สีเขียวทันที
+                                            local roofBounds = scanRoofBounds(targetPos)
+                                            table.insert(_G.BuildingMemories, {
+                                                MinX = roofBounds.minX, 
+                                                MaxX = roofBounds.maxX, 
+                                                MinZ = roofBounds.minZ, 
+                                                MaxZ = roofBounds.maxZ,
+                                                Center = roofBounds.Center,
+                                                HasPillar = false, 
+                                                ClimbSpot = nil,
+                                                TargetY = targetPos.Y
+                                            })
+                                        else
+                                            -- ไม่ติดเพดาน -> ปีน
+                                            currentWaypoints = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
+                                            if #currentWaypoints > 0 then
+                                                isFollowingCustomPath = true
+                                                currentWaypointIndex = 1
+                                            end
+                                        end
+                                    else
                                         local flatTargetPos = Vector3.new(targetPos.X, currentPos.Y, targetPos.Z)
                                         updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(0, 255, 255))
                                         moveWithAvoidance(myHuman, flatTargetPos)
-                                        
-                                    -- ถ้าระยะใกล้แล้ว และเป้าหมายอยู่ข้างบน! (เงื่อนไขสแกนหลังคา)
-                                    elseif targetPos.Y > currentPos.Y + 5 then
-                                        -- สร้าง Bounding Box สีเขียว ทันที!
-                                        local roofBounds = scanRoofBounds(targetPos)
-                                        table.insert(_G.BuildingMemories, {
-                                            MinX = roofBounds.minX, 
-                                            MaxX = roofBounds.maxX, 
-                                            MinZ = roofBounds.minZ, 
-                                            MaxZ = roofBounds.maxZ,
-                                            Center = roofBounds.Center,
-                                            HasPillar = false, 
-                                            ClimbSpot = nil,
-                                            TargetY = targetPos.Y
-                                        })
-                                    else
-                                        -- เป้าหมายไม่ได้อยู่สูงกว่า หรืออยู่ชั้นเดียวกัน ให้ปีนแบบปกติ
-                                        currentWaypoints = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
-                                        if #currentWaypoints > 0 then
-                                            isFollowingCustomPath = true
-                                            currentWaypointIndex = 1
-                                        end
                                     end
                                 else
                                     isProbing = false
