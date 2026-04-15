@@ -166,7 +166,7 @@ local function checkCeilingAround(pos, height)
 end
 
 -- =========================================================================
--- [ร่างเทพวิชาเถาวัลย์] Center Snap: หาแกนกลางวัตถุแล้วปักเสาฟ้าให้ตรงเป๊ะ!
+-- [ร่างเทพวิชาเถาวัลย์] Surface Sweep Radar: ปาดเลเซอร์ซ้ายขวาหาแกนกลางบันได!
 -- =========================================================================
 local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
     local params = OverlapParams.new()
@@ -211,20 +211,46 @@ local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
                 end
                 
                 if canClimb then
-                    -- [หัวใจสำคัญ Center Snap] ดึงแกนกลาง X, Z ของบันไดออกมาตรงๆ!
-                    local objCenter = p.Position
+                    -- [หัวใจใหม่]: เรดาร์ปาดหน้าเค้ก (Surface Sweep)
+                    local hitPos = baseWallRay.Position
                     local normal = baseWallRay.Normal
-                    local bestClimbPos
-                    local ladderCenter = Vector3.new(objCenter.X, node.Y, objCenter.Z)
                     
-                    -- ถ้ากำแพงใหญ่เกินไป ให้ปักที่จุดยิงโดน (ป้องกันมุดเข้ากลางตึก)
-                    if p.Size.X > 15 or p.Size.Z > 15 then
-                        bestClimbPos = baseWallRay.Position + (normal * 2.5)
-                        ladderCenter = baseWallRay.Position - (normal * 2) 
-                    else
-                        -- ถ้าเป็นบันไดหรือเสา ให้ปักหน้า "จุดศูนย์กลาง" เป๊ะๆ!
-                        bestClimbPos = ladderCenter + (normal * 2.5)
+                    -- สร้าง Vector ขนานกับกำแพงเพื่อปาดซ้าย-ขวา
+                    local rightDir = Vector3.new(0, 1, 0):Cross(normal).Unit
+                    if rightDir.Magnitude == 0 then rightDir = Vector3.new(1,0,0) end
+                    local leftDir = -rightDir
+                    
+                    -- ยิงเลเซอร์กวาดหา "ขอบขวาสุด" ของบันได
+                    local rightEdge = hitPos
+                    for d = 0.5, 10, 0.5 do
+                        local origin = hitPos + (rightDir * d) + (normal * 2)
+                        local checkRay = workspace:Raycast(origin, -normal * 4, rayParams)
+                        -- ถ้ายังเจอกำแพงที่หันหน้าทางเดียวกัน แปลว่ายังอยู่บนบันได
+                        if checkRay and checkRay.Normal:Dot(normal) > 0.9 then
+                            rightEdge = checkRay.Position
+                        else 
+                            break 
+                        end
                     end
+                    
+                    -- ยิงเลเซอร์กวาดหา "ขอบซ้ายสุด" ของบันได
+                    local leftEdge = hitPos
+                    for d = 0.5, 10, 0.5 do
+                        local origin = hitPos + (leftDir * d) + (normal * 2)
+                        local checkRay = workspace:Raycast(origin, -normal * 4, rayParams)
+                        if checkRay and checkRay.Normal:Dot(normal) > 0.9 then
+                            leftEdge = checkRay.Position
+                        else 
+                            break 
+                        end
+                    end
+                    
+                    -- แกนกลางบันไดที่แท้จริง = (ซ้ายสุด + ขวาสุด) / 2
+                    local trueCenter = (leftEdge + rightEdge) / 2
+                    local ladderCenter = Vector3.new(trueCenter.X, node.Y, trueCenter.Z)
+                    
+                    -- ปักเสาฟ้าลอยออกมากำแพง 2.5 บล็อกตรงแกนกลางเป๊ะๆ
+                    local bestClimbPos = ladderCenter + (normal * 2.5)
                     
                     return bestClimbPos, ladderCenter
                 end
@@ -447,7 +473,7 @@ task.spawn(function()
                 end
 
                 -- =======================================================
-                -- [โหมดตรวจสอบ Bounding Box Area & Target Jump Logic]
+                -- [โหมดตรวจสอบ Bounding Box Area]
                 -- =======================================================
                 local inMemory = nil
                 for i, mem in ipairs(_G.BuildingMemories) do
@@ -474,14 +500,13 @@ task.spawn(function()
                             updateDebug("DirectTrace", currentPos, inMemory.ClimbSpot, Color3.fromRGB(0, 0, 255))
                             moveWithAvoidance(myHuman, inMemory.ClimbSpot)
                         else
-                            -- [THE FIX] หันหน้าเข้าหา "แกนกลางของบันไดเป๊ะๆ" เพื่อเกาะ!
+                            -- [Center Snap] หันหน้าเข้าหา "แกนกลางของบันไดเป๊ะๆ" เพื่อเกาะ!
                             local targetWall = inMemory.LadderCenter or inMemory.Center
                             local lookPos = Vector3.new(targetWall.X, currentPos.Y, targetWall.Z)
                             if (lookPos - currentPos).Magnitude > 0.1 then
                                 myRoot.CFrame = CFrame.lookAt(currentPos, lookPos)
                             end
                             
-                            -- ดันตัวเข้ากำแพงเพื่อปีนขึ้น!
                             local climbDir = (lookPos - currentPos).Unit
                             myHuman:MoveTo(currentPos + climbDir * 5)
                             forceJump(myHuman)
@@ -579,12 +604,6 @@ task.spawn(function()
                                 isFollowingCustomPath = false
                                 updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0))
                                 moveWithAvoidance(myHuman, flatTargetPos)
-
-                                local chestRay = workspace:Raycast(currentPos, flatDir * 4, rayParams)
-                                local floorDropRay = workspace:Raycast(currentPos + (flatDir * 4) + Vector3.new(0, 1, 0), Vector3.new(0, -10, 0), rayParams)
-                                if chestRay and chestRay.Distance < 3 and not floorDropRay then
-                                    forceJump(myHuman)
-                                end
                             end
                         end
                         
@@ -630,7 +649,6 @@ task.spawn(function()
                                                 end
                                                 local center = Vector3.new((minX+maxX)/2, currentPos.Y, (minZ+maxZ)/2)
                                                 
-                                                -- ใช้วิชาเถาวัลย์ หดหาเสาปีนจากจุดเหลือง! แล้วหาแกนกลางเป๊ะๆ
                                                 local climbSpot, ladderCenter = findClimbSpotVineStyle(outerNodes, targetPos.Y, center, myChar)
                                                 
                                                 table.insert(_G.BuildingMemories, {
@@ -642,6 +660,9 @@ task.spawn(function()
                                                     TargetY = targetPos.Y
                                                 })
                                             end
+                                        else
+                                            -- ถ้ายืนโล่งๆ ให้ยิงเถาวัลย์เช็คดูเลย เผื่อมีบันไดลอยๆ
+                                            -- ... (ลบการปีนเดิมที่รวนทิ้งไป ปล่อยให้มันเดินหาเป้าหมายแทน)
                                         end
                                     else
                                         local flatTargetPos = Vector3.new(targetPos.X, currentPos.Y, targetPos.Z)
