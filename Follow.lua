@@ -48,7 +48,8 @@ _G.TraceState = {
     Points = {},
     MaxDistFromStart = 0,
     LastMoveTick = 0,
-    StuckTick = 0, -- [NEW] ใช้จับเวลาตอนหาทางไปต่อไม่ได้
+    FailCount = 0,
+    StuckTick = 0,
     LastFwdDir = nil 
 }
 
@@ -75,6 +76,7 @@ local function clearIncompleteTrace()
     _G.TraceState.Visited = {}
     _G.TraceState.Points = {}
     _G.TraceState.MaxDistFromStart = 0
+    _G.TraceState.FailCount = 0
     _G.TraceState.StuckTick = 0
     _G.TraceState.LastFwdDir = nil
 end
@@ -263,9 +265,8 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
             local testXZ = currentPos + offset
             local floorY = getRealFloorY(testXZ)
             
-            -- [NEW] กฎเหล็ก: ห้ามสร้างบล็อกบนพื้นที่สูงกว่าระดับเอว (2.5) เด็ดขาด
             if floorY - currentPos.Y > 2.5 then continue end
-            if currentPos.Y - floorY > 8 then continue end -- กันตกลึกเกิน
+            if currentPos.Y - floorY > 8 then continue end 
             
             local testPos = Vector3.new(testXZ.X, floorY, testXZ.Z)
             
@@ -292,9 +293,7 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                 local pathBlocked = false
                 if dirToTest.Magnitude > 0 then
                     local bodyHit = workspace:Raycast(currentPos + Vector3.new(0, 3.0, 0), dirToTest * distToTest, rayParams)
-                    if bodyHit then
-                        pathBlocked = true
-                    end
+                    if bodyHit then pathBlocked = true end
                 end
 
                 if not pathBlocked then
@@ -311,7 +310,6 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                             
                             if not outHasCeiling then 
                                 local outFloorY = getRealFloorY(outCheckPos)
-                                -- ห้ามยึดพื้นที่โล่งที่สูงชันเป็นเป้าหมาย
                                 if math.abs(outFloorY - floorY) < 10 and (outFloorY - floorY <= 2.5) then
                                     isNearOutside = true 
                                     table.insert(visualYellows, outCheckPos)
@@ -320,9 +318,7 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                             end
                         end
 
-                        if isNearOutside then
-                            table.insert(validSteps, testPos)
-                        end
+                        if isNearOutside then table.insert(validSteps, testPos) end
                     end
                 end
             end
@@ -730,10 +726,12 @@ task.spawn(function()
                                 st.TargetPos = nextData.pos
                                 st.LastMoveTick = os.clock()
                                 st.StuckTick = 0
+                                st.FailCount = 0
                             else
-                                -- [NEW] ระบบ Forced Dodge บังคับเสกบล็อกเขียวอ้อมเข้าใน เมื่อหาทางไปต่อไม่ได้ 5 วินาที
+                                -- [NEW] Forced Dodge Logic (ทะลวงขอนไม้ยักษ์แบบ Double Step)
                                 if st.StuckTick == 0 then st.StuckTick = os.clock() end
                                 
+                                -- ให้เวลาคิด 5 วินาที ถ้ายังไม่ได้ ให้กระชากหลบ!
                                 if os.clock() - st.StuckTick > 5 then
                                     local fwd = st.LastFwdDir or Vector3.new(1,0,0)
                                     local reqHeight = math.max(20, targetPos.Y - currentPos.Y + 5)
@@ -745,16 +743,31 @@ task.spawn(function()
                                     local leftCeil = workspace:Raycast(currentPos + leftDir*8 + Vector3.new(0,1,0), Vector3.new(0, reqHeight, 0), rayParams)
                                     
                                     local dodgeDir = fwd
-                                    if rightCeil then dodgeDir = rightDir
-                                    elseif leftCeil then dodgeDir = leftDir
-                                    else dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * fwd).Unit end 
+                                    local newFwd = fwd
                                     
-                                    local dodgePos = currentPos + (dodgeDir * 10)
+                                    -- มุดเข้าไปในฝั่งที่เป็นเพดานตึก (ก้าว 2 เท่า = 16 บล็อก)
+                                    if leftCeil then 
+                                        dodgeDir = leftDir
+                                        newFwd = rightDir -- เลี้ยวซ้ายเข้าตึก เข็มทิศบิดขวา 90 องศา (ไม่หันหลัง)
+                                    elseif rightCeil then 
+                                        dodgeDir = rightDir
+                                        newFwd = leftDir -- เลี้ยวขวาเข้าตึก เข็มทิศบิดซ้าย 90 องศา
+                                    else 
+                                        dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * fwd).Unit 
+                                        newFwd = dodgeDir
+                                    end 
+                                    
+                                    local dodgePos = currentPos + (dodgeDir * 16)
                                     dodgePos = Vector3.new(dodgePos.X, getRealFloorY(dodgePos), dodgePos.Z)
                                     
+                                    -- ลงแบล็คลิสต์ทางเก่า (ยัดใส่ Visited) กันเดินย้อนกลับ
+                                    table.insert(st.Visited, currentPos)
+                                    table.insert(st.Visited, currentPos + (dodgeDir * 8))
+                                    
                                     st.TargetPos = dodgePos
-                                    st.LastFwdDir = dodgeDir
+                                    st.LastFwdDir = newFwd
                                     st.StuckTick = 0
+                                    st.FailCount = 0
                                     st.LastMoveTick = os.clock()
                                     
                                     if debugEnabled then
@@ -767,7 +780,7 @@ task.spawn(function()
                                         pg.Material = Enum.Material.Neon; pg.Parent = workspace.Terrain
                                     end
                                 else
-                                    myRoot.CFrame = myRoot.CFrame * CFrame.Angles(0, math.rad(90), 0)
+                                    -- ระหว่าง 5 วินาที ให้กระโดดเบาๆ เพื่อพยายามแก้บัค
                                     forceJump(myHuman)
                                 end
                             end
@@ -913,6 +926,7 @@ task.spawn(function()
                                                 _G.TraceState.Points = {}
                                                 _G.TraceState.StepCount = 0
                                                 _G.TraceState.MaxDistFromStart = 0
+                                                _G.TraceState.FailCount = 0
                                                 _G.TraceState.StuckTick = 0
                                                 _G.TraceState.LastFwdDir = nil
                                                 _G.TraceState.LastMoveTick = os.clock()
