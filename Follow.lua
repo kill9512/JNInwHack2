@@ -48,7 +48,7 @@ _G.TraceState = {
     Points = {},
     MaxDistFromStart = 0,
     LastMoveTick = 0,
-    StuckTick = 0, -- [NEW] ใช้จับเวลาตอนหาทางไปต่อไม่ได้
+    StuckTick = 0,
     LastFwdDir = nil 
 }
 
@@ -263,9 +263,8 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
             local testXZ = currentPos + offset
             local floorY = getRealFloorY(testXZ)
             
-            -- [NEW] กฎเหล็ก: ห้ามสร้างบล็อกบนพื้นที่สูงกว่าระดับเอว (2.5) เด็ดขาด
             if floorY - currentPos.Y > 2.5 then continue end
-            if currentPos.Y - floorY > 8 then continue end -- กันตกลึกเกิน
+            if currentPos.Y - floorY > 8 then continue end 
             
             local testPos = Vector3.new(testXZ.X, floorY, testXZ.Z)
             
@@ -311,7 +310,6 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                             
                             if not outHasCeiling then 
                                 local outFloorY = getRealFloorY(outCheckPos)
-                                -- ห้ามยึดพื้นที่โล่งที่สูงชันเป็นเป้าหมาย
                                 if math.abs(outFloorY - floorY) < 10 and (outFloorY - floorY <= 2.5) then
                                     isNearOutside = true 
                                     table.insert(visualYellows, outCheckPos)
@@ -731,10 +729,10 @@ task.spawn(function()
                                 st.LastMoveTick = os.clock()
                                 st.StuckTick = 0
                             else
-                                -- [NEW] ระบบ Forced Dodge บังคับเสกบล็อกเขียวอ้อมเข้าใน เมื่อหาทางไปต่อไม่ได้ 5 วินาที
+                                -- [NEW] L-Shape Forced Dodge ทะลวงตึก (รอ 2.5 วิ)
                                 if st.StuckTick == 0 then st.StuckTick = os.clock() end
                                 
-                                if os.clock() - st.StuckTick > 5 then
+                                if os.clock() - st.StuckTick > 2.5 then
                                     local fwd = st.LastFwdDir or Vector3.new(1,0,0)
                                     local reqHeight = math.max(20, targetPos.Y - currentPos.Y + 5)
                                     
@@ -749,11 +747,12 @@ task.spawn(function()
                                     elseif leftCeil then dodgeDir = leftDir
                                     else dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * fwd).Unit end 
                                     
-                                    local dodgePos = currentPos + (dodgeDir * 10)
+                                    -- ก้าวเข้าตึก 2 ก้าว (12 studs) + ก้าวเดินหน้าอีก 1 ก้าว (6 studs) หักมุมตัว L
+                                    local dodgePos = currentPos + (dodgeDir * 12) + (fwd * 6)
                                     dodgePos = Vector3.new(dodgePos.X, getRealFloorY(dodgePos), dodgePos.Z)
                                     
                                     st.TargetPos = dodgePos
-                                    st.LastFwdDir = dodgeDir
+                                    st.LastFwdDir = fwd -- ล็อกทิศเดิมไว้ ไม่หันกลับมา 180 องศา
                                     st.StuckTick = 0
                                     st.LastMoveTick = os.clock()
                                     
@@ -767,7 +766,7 @@ task.spawn(function()
                                         pg.Material = Enum.Material.Neon; pg.Parent = workspace.Terrain
                                     end
                                 else
-                                    myRoot.CFrame = myRoot.CFrame * CFrame.Angles(0, math.rad(90), 0)
+                                    -- ลบคำสั่งบังคับหมุนตัวออก แค่กระโดดเฉยๆ
                                     forceJump(myHuman)
                                 end
                             end
@@ -913,7 +912,7 @@ task.spawn(function()
                                                 _G.TraceState.Points = {}
                                                 _G.TraceState.StepCount = 0
                                                 _G.TraceState.MaxDistFromStart = 0
-                                                _G.TraceState.StuckTick = 0
+                                                _G.TraceState.FailCount = 0
                                                 _G.TraceState.LastFwdDir = nil
                                                 _G.TraceState.LastMoveTick = os.clock()
                                             end
