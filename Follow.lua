@@ -48,8 +48,7 @@ _G.TraceState = {
     Points = {},
     MaxDistFromStart = 0,
     LastMoveTick = 0,
-    FailCount = 0,
-    StuckTick = 0,
+    StuckTick = 0, 
     LastFwdDir = nil 
 }
 
@@ -76,7 +75,6 @@ local function clearIncompleteTrace()
     _G.TraceState.Visited = {}
     _G.TraceState.Points = {}
     _G.TraceState.MaxDistFromStart = 0
-    _G.TraceState.FailCount = 0
     _G.TraceState.StuckTick = 0
     _G.TraceState.LastFwdDir = nil
 end
@@ -265,6 +263,7 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
             local testXZ = currentPos + offset
             local floorY = getRealFloorY(testXZ)
             
+            -- กฎเหล็ก: ห้ามวางบล็อกบนของที่สูงกว่าเอว
             if floorY - currentPos.Y > 2.5 then continue end
             if currentPos.Y - floorY > 8 then continue end 
             
@@ -277,11 +276,12 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                 end
             end
 
+            -- [อัปเกรด] เพิ่มรัศมีความจำให้กว้างขึ้น กันเดินกลับทางเดิม
             local visited = false
             for i, v in ipairs(st.Visited) do
                 local distXZ = (Vector2.new(v.X, v.Z) - Vector2.new(testPos.X, testPos.Z)).Magnitude
-                local checkRadius = 4.0 
-                if i >= #st.Visited - 2 then checkRadius = 2.0 end 
+                local checkRadius = 4.5 
+                if i >= #st.Visited - 3 then checkRadius = 2.5 end 
                 
                 if distXZ < checkRadius then visited = true; break end
             end
@@ -293,7 +293,9 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                 local pathBlocked = false
                 if dirToTest.Magnitude > 0 then
                     local bodyHit = workspace:Raycast(currentPos + Vector3.new(0, 3.0, 0), dirToTest * distToTest, rayParams)
-                    if bodyHit then pathBlocked = true end
+                    if bodyHit then
+                        pathBlocked = true
+                    end
                 end
 
                 if not pathBlocked then
@@ -318,7 +320,9 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                             end
                         end
 
-                        if isNearOutside then table.insert(validSteps, testPos) end
+                        if isNearOutside then
+                            table.insert(validSteps, testPos)
+                        end
                     end
                 end
             end
@@ -334,9 +338,11 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                 local dirToPos = (Vector3.new(pos.X, 0, pos.Z) - Vector3.new(currentPos.X, 0, currentPos.Z)).Unit
                 if dirToPos.Magnitude == 0 then dirToPos = Vector3.new(1,0,0) end
                 
-                local score = fwdDir:Dot(dirToPos)
+                local dotScore = fwdDir:Dot(dirToPos)
+                local score = (dotScore * 10) + step
                 
-                if score > -0.2 then 
+                -- ห้ามย้อนกลับเด็ดขาด
+                if dotScore > -0.1 then 
                     if score > bestScore then
                         bestScore = score
                         bestStep = pos
@@ -726,12 +732,10 @@ task.spawn(function()
                                 st.TargetPos = nextData.pos
                                 st.LastMoveTick = os.clock()
                                 st.StuckTick = 0
-                                st.FailCount = 0
                             else
-                                -- [NEW] Forced Dodge Logic (ทะลวงขอนไม้ยักษ์แบบ Double Step)
+                                -- [อัปเกรด] Forced Dodge Logic - เช็คเพดานแล้วกระชาก 2 ก้าว + หันหน้า 90 องศาขนานตึก!
                                 if st.StuckTick == 0 then st.StuckTick = os.clock() end
                                 
-                                -- ให้เวลาคิด 5 วินาที ถ้ายังไม่ได้ ให้กระชากหลบ!
                                 if os.clock() - st.StuckTick > 5 then
                                     local fwd = st.LastFwdDir or Vector3.new(1,0,0)
                                     local reqHeight = math.max(20, targetPos.Y - currentPos.Y + 5)
@@ -739,49 +743,51 @@ task.spawn(function()
                                     local rightDir = (CFrame.Angles(0, math.rad(-90), 0) * fwd).Unit
                                     local leftDir = (CFrame.Angles(0, math.rad(90), 0) * fwd).Unit
                                     
-                                    local rightCeil = workspace:Raycast(currentPos + rightDir*8 + Vector3.new(0,1,0), Vector3.new(0, reqHeight, 0), rayParams)
-                                    local leftCeil = workspace:Raycast(currentPos + leftDir*8 + Vector3.new(0,1,0), Vector3.new(0, reqHeight, 0), rayParams)
+                                    -- ก้าว 2 ก้าว (12 บล็อก) ให้พ้นขอนไม้ใหญ่
+                                    local rightPosXZ = currentPos + (rightDir * 12)
+                                    local leftPosXZ = currentPos + (leftDir * 12)
                                     
-                                    local dodgeDir = fwd
+                                    local rightFloorY = getRealFloorY(rightPosXZ)
+                                    local leftFloorY = getRealFloorY(leftPosXZ)
+                                    
+                                    local rightPos = Vector3.new(rightPosXZ.X, rightFloorY, rightPosXZ.Z)
+                                    local leftPos = Vector3.new(leftPosXZ.X, leftFloorY, leftPosXZ.Z)
+                                    
+                                    -- เรดาร์เช็คว่าฝั่งที่หลบมีเพดานไหม (ต้องมุดเข้าตึกเท่านั้น)
+                                    local rightCeil = workspace:Raycast(rightPos + Vector3.new(0,1,0), Vector3.new(0, reqHeight, 0), rayParams)
+                                    local leftCeil = workspace:Raycast(leftPos + Vector3.new(0,1,0), Vector3.new(0, reqHeight, 0), rayParams)
+                                    
+                                    local dodgePos = nil
                                     local newFwd = fwd
                                     
-                                    -- มุดเข้าไปในฝั่งที่เป็นเพดานตึก (ก้าว 2 เท่า = 16 บล็อก)
-                                    if leftCeil then 
-                                        dodgeDir = leftDir
-                                        newFwd = rightDir -- เลี้ยวซ้ายเข้าตึก เข็มทิศบิดขวา 90 องศา (ไม่หันหลัง)
-                                    elseif rightCeil then 
-                                        dodgeDir = rightDir
-                                        newFwd = leftDir -- เลี้ยวขวาเข้าตึก เข็มทิศบิดซ้าย 90 องศา
-                                    else 
-                                        dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * fwd).Unit 
-                                        newFwd = dodgeDir
-                                    end 
+                                    if leftCeil and not rightCeil then
+                                        dodgePos = leftPos
+                                        newFwd = fwd -- หันหน้าตรง ขนานตึก
+                                    elseif rightCeil and not leftCeil then
+                                        dodgePos = rightPos
+                                        newFwd = fwd 
+                                    elseif leftCeil and rightCeil then
+                                        -- ถ้าเข้าได้ 2 ทาง ให้เอาทางที่ใกล้เป้าหมาย
+                                        if (leftPos - targetPos).Magnitude < (rightPos - targetPos).Magnitude then
+                                            dodgePos = leftPos
+                                            newFwd = fwd
+                                        else
+                                            dodgePos = rightPos
+                                            newFwd = fwd
+                                        end
+                                    end
                                     
-                                    local dodgePos = currentPos + (dodgeDir * 16)
-                                    dodgePos = Vector3.new(dodgePos.X, getRealFloorY(dodgePos), dodgePos.Z)
-                                    
-                                    -- ลงแบล็คลิสต์ทางเก่า (ยัดใส่ Visited) กันเดินย้อนกลับ
-                                    table.insert(st.Visited, currentPos)
-                                    table.insert(st.Visited, currentPos + (dodgeDir * 8))
-                                    
-                                    st.TargetPos = dodgePos
-                                    st.LastFwdDir = newFwd
-                                    st.StuckTick = 0
-                                    st.FailCount = 0
-                                    st.LastMoveTick = os.clock()
-                                    
-                                    if debugEnabled then
-                                        local pg = Instance.new("Part")
-                                        pg.Name = "TraceTrail_Green"
-                                        pg.Size = Vector3.new(2, 0.5, 2)
-                                        pg.Position = dodgePos + Vector3.new(0, 2, 0)
-                                        pg.Anchored = true; pg.CanCollide = false; pg.CanQuery = false
-                                        pg.Transparency = 0.2; pg.Color = Color3.fromRGB(0, 255, 0)
-                                        pg.Material = Enum.Material.Neon; pg.Parent = workspace.Terrain
+                                    if dodgePos then
+                                        st.TargetPos = dodgePos
+                                        st.LastFwdDir = newFwd
+                                        st.Phase = "MoveToEdge" -- รีเซ็ตเข้าโหมดคั่นกลาง ให้ยิงเรดาร์คลำหาทางโล่งใหม่
+                                        st.StuckTick = 0
+                                        st.LastMoveTick = os.clock()
+                                    else
+                                        clearIncompleteTrace() 
                                     end
                                 else
-                                    -- ระหว่าง 5 วินาที ให้กระโดดเบาๆ เพื่อพยายามแก้บัค
-                                    forceJump(myHuman)
+                                    forceJump(myHuman) -- ห้ามหมุน แค่โดดเฉยๆ
                                 end
                             end
                         end
@@ -881,6 +887,12 @@ task.spawn(function()
                                 isFollowingCustomPath = false
                                 updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0))
                                 moveWithAvoidance(myHuman, flatTargetPos)
+
+                                local chestRay = workspace:Raycast(currentPos, flatDir * 4, rayParams)
+                                local floorDropRay = workspace:Raycast(currentPos + (flatDir * 4) + Vector3.new(0, 1, 0), Vector3.new(0, -10, 0), rayParams)
+                                if chestRay and chestRay.Distance < 3 and not floorDropRay then
+                                    forceJump(myHuman)
+                                end
                             end
                         end
                         
@@ -927,7 +939,6 @@ task.spawn(function()
                                                 _G.TraceState.StepCount = 0
                                                 _G.TraceState.MaxDistFromStart = 0
                                                 _G.TraceState.FailCount = 0
-                                                _G.TraceState.StuckTick = 0
                                                 _G.TraceState.LastFwdDir = nil
                                                 _G.TraceState.LastMoveTick = os.clock()
                                             end
