@@ -35,18 +35,19 @@ _G.PatrolIndex = 1
 -- ระบบความจำสถานที่ (Building Memory)
 _G.BuildingMemories = _G.BuildingMemories or {}
 
--- สถานะระบบลัดเลาะขอบ (ใช้ LockedTargetY เป็นตัวชี้วัดหลัก)
+-- สถานะระบบลัดเลาะขอบ 
 _G.TraceState = {
     Active = false,
     Locked = false,
-    LockedTargetY = nil, -- จำความสูงของเป้าหมายตอนเริ่มลัดเลาะ
+    LockedTargetY = nil, 
     Phase = "None",
     TargetPos = nil,
     StartPos = nil,
     StepCount = 0,
     Visited = {},
     Points = {},
-    LastMoveTick = 0
+    LastMoveTick = 0,
+    FailCount = 0 -- ใช้สำหรับนับการเดินติดเพื่อแก้บัค
 }
 
 -- --- Debug Visualization ---
@@ -71,6 +72,7 @@ local function clearIncompleteTrace()
     _G.TraceState.StepCount = 0
     _G.TraceState.Visited = {}
     _G.TraceState.Points = {}
+    _G.TraceState.FailCount = 0
 end
 
 local function updateDebug(name, startPos, endPos, color)
@@ -196,56 +198,9 @@ local function crossScanForEdge(startPos, maxCheckHeight, targetPos)
 end
 
 local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
-    local step = 6
-    local neighbors = { 
-        Vector3.new(step,0,0), Vector3.new(-step,0,0), 
-        Vector3.new(0,0,step), Vector3.new(0,0,-step),
-        Vector3.new(step,0,step), Vector3.new(-step,0,-step),
-        Vector3.new(step,0,-step), Vector3.new(-step,0,step)
-    }
-    local validSteps = {}
-    local visualGreens = {}
     local st = _G.TraceState
-
-    for _, offset in ipairs(neighbors) do
-        local testXZ = currentPos + offset
-        local floorY = getRealFloorY(testXZ)
-        local testPos = Vector3.new(testXZ.X, floorY, testXZ.Z)
-        
-        if st.StepCount > 10 and st.StartPos then
-            local distToStart = (Vector2.new(testPos.X, testPos.Z) - Vector2.new(st.StartPos.X, st.StartPos.Z)).Magnitude
-            if distToStart < 4 then
-                return {pos = testPos, closedLoop = true}
-            end
-        end
-
-        local visited = false
-        for _, v in ipairs(st.Visited) do
-            local distXZ = (Vector2.new(v.X, v.Z) - Vector2.new(testPos.X, testPos.Z)).Magnitude
-            if distXZ < 3.0 then visited = true; break end
-        end
-
-        if not visited then
-            local isWalkable = not workspace:Raycast(testPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams)
-            if isWalkable then
-                local isNearWall = false
-                local wallChecks = { Vector3.new(step,0,0), Vector3.new(-step,0,0), Vector3.new(0,0,step), Vector3.new(0,0,-step) }
-                for _, subOff in ipairs(wallChecks) do
-                    local wallCheckPos = testPos + subOff
-                    local wallRay = workspace:Raycast(wallCheckPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams)
-                    if wallRay then 
-                        isNearWall = true 
-                        table.insert(visualGreens, wallCheckPos)
-                    end
-                end
-                
-                if isNearWall then table.insert(validSteps, testPos) end
-            end
-        end
-    end
-
-    local bestStep = nil
-    local bestScore = -math.huge
+    -- ขยายรัศมีการค้นหาแบบ Dynamic ป้องกันการตันจากบล็อกซ้อน
+    local radiiToTry = {6, 9, 12} 
     
     local fwdDir = Vector3.new(1, 0, 0)
     if #st.Visited >= 2 then
@@ -255,37 +210,98 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
         if fwdDir.Magnitude == 0 then fwdDir = Vector3.new(1,0,0) end
     end
 
-    for _, pos in ipairs(validSteps) do
-        local dirToPos = (Vector3.new(pos.X, 0, pos.Z) - Vector3.new(currentPos.X, 0, currentPos.Z)).Unit
-        if dirToPos.Magnitude == 0 then dirToPos = Vector3.new(1,0,0) end
-        
-        local score = fwdDir:Dot(dirToPos)
-        
-        if score > -0.5 then
-            if score > bestScore then
-                bestScore = score
-                bestStep = pos
+    for _, step in ipairs(radiiToTry) do
+        local neighbors = { 
+            Vector3.new(step,0,0), Vector3.new(-step,0,0), 
+            Vector3.new(0,0,step), Vector3.new(0,0,-step),
+            Vector3.new(step,0,step), Vector3.new(-step,0,-step),
+            Vector3.new(step,0,-step), Vector3.new(-step,0,step)
+        }
+        local validSteps = {}
+        local visualGreens = {}
+
+        for _, offset in ipairs(neighbors) do
+            local testXZ = currentPos + offset
+            local floorY = getRealFloorY(testXZ)
+            local testPos = Vector3.new(testXZ.X, floorY, testXZ.Z)
+            
+            if st.StepCount > 10 and st.StartPos then
+                local distToStart = (Vector2.new(testPos.X, testPos.Z) - Vector2.new(st.StartPos.X, st.StartPos.Z)).Magnitude
+                if distToStart < 6 then -- เพิ่มระยะให้เดินบรรจบง่ายขึ้น
+                    return {pos = testPos, closedLoop = true}
+                end
+            end
+
+            local visited = false
+            for _, v in ipairs(st.Visited) do
+                local distXZ = (Vector2.new(v.X, v.Z) - Vector2.new(testPos.X, testPos.Z)).Magnitude
+                if distXZ < (step * 0.5) then visited = true; break end
+            end
+
+            if not visited then
+                local isWalkable = not workspace:Raycast(testPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams)
+                if isWalkable then
+                    local isNearWall = false
+                    local wallChecks = { Vector3.new(step,0,0), Vector3.new(-step,0,0), Vector3.new(0,0,step), Vector3.new(0,0,-step) }
+                    for _, subOff in ipairs(wallChecks) do
+                        local wallCheckPos = testPos + subOff
+                        if workspace:Raycast(wallCheckPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams) then 
+                            isNearWall = true 
+                            table.insert(visualGreens, wallCheckPos)
+                            break
+                        end
+                    end
+                    if isNearWall then table.insert(validSteps, testPos) end
+                end
             end
         end
+
+        if #validSteps > 0 then
+            local bestStep = nil
+            local bestScore = -math.huge
+            local fallbackStep = nil
+            local fallbackScore = -math.huge
+
+            for _, pos in ipairs(validSteps) do
+                local dirToPos = (Vector3.new(pos.X, 0, pos.Z) - Vector3.new(currentPos.X, 0, currentPos.Z)).Unit
+                if dirToPos.Magnitude == 0 then dirToPos = Vector3.new(1,0,0) end
+                
+                local score = fwdDir:Dot(dirToPos)
+                
+                -- ลอจิกป้องกันเดินย้อนกลับ
+                if score > -0.3 then 
+                    if score > bestScore then
+                        bestScore = score
+                        bestStep = pos
+                    end
+                else -- เก็บไว้เป็นทางเลือกสุดท้าย กรณีเลี้ยวไม่ได้จริงๆ
+                    if score > fallbackScore then
+                        fallbackScore = score
+                        fallbackStep = pos
+                    end
+                end
+            end
+
+            local finalStep = bestStep or fallbackStep
+            
+            if debugEnabled and finalStep then
+                for _, gPos in ipairs(visualGreens) do
+                    local pg = Instance.new("Part")
+                    pg.Name, pg.Size, pg.Position = "TraceTrail_Green", Vector3.new(1.5, 0.5, 1.5), gPos + Vector3.new(0, 2, 0)
+                    pg.Anchored, pg.CanCollide, pg.CanQuery, pg.Transparency, pg.Color = true, false, false, 0.4, Color3.fromRGB(0, 255, 0)
+                    pg.Material, pg.Parent = Enum.Material.Neon, workspace.Terrain
+                end
+                local py = Instance.new("Part")
+                py.Name, py.Size, py.Position = "TraceTrail_Yellow", Vector3.new(1.5, 0.5, 1.5), finalStep + Vector3.new(0, 2, 0)
+                py.Anchored, py.CanCollide, py.CanQuery, py.Transparency, py.Color = true, false, false, 0.2, Color3.fromRGB(255, 255, 0)
+                py.Material, py.Parent = Enum.Material.Neon, workspace.Terrain
+            end
+
+            if finalStep then return {pos = finalStep, closedLoop = false} end
+        end
     end
 
-    if debugEnabled then
-        for _, gPos in ipairs(visualGreens) do
-            local pg = Instance.new("Part")
-            pg.Name, pg.Size, pg.Position = "TraceTrail_Green", Vector3.new(1.5, 0.5, 1.5), gPos + Vector3.new(0, 2, 0)
-            pg.Anchored, pg.CanCollide, pg.CanQuery, pg.Transparency, pg.Color = true, false, false, 0.4, Color3.fromRGB(0, 255, 0)
-            pg.Material, pg.Parent = Enum.Material.Neon, workspace.Terrain
-        end
-
-        if bestStep then
-            local py = Instance.new("Part")
-            py.Name, py.Size, py.Position = "TraceTrail_Yellow", Vector3.new(1.5, 0.5, 1.5), bestStep + Vector3.new(0, 2, 0)
-            py.Anchored, py.CanCollide, py.CanQuery, py.Transparency, py.Color = true, false, false, 0.2, Color3.fromRGB(255, 255, 0)
-            py.Material, py.Parent = Enum.Material.Neon, workspace.Terrain
-        end
-    end
-
-    return bestStep and {pos = bestStep, closedLoop = false} or nil
+    return nil
 end
 
 local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
@@ -510,11 +526,15 @@ task.spawn(function()
                 end
 
                 -- =======================================================
-                -- [ตรวจสอบเงื่อนไขเป้าหมายหนีออกจากโซน (แกน Y ร่วงตกลงมา)]
+                -- [ตรวจสอบเงื่อนไขเป้าหมายหนีออกจากโซน (แกน Y ตก 30%)]
                 -- =======================================================
                 if _G.TraceState.Locked and _G.TraceState.LockedTargetY then
-                    -- ปล่อยให้กระโดดขึ้นได้ แต่ถ้าร่วงลงไปต่ำกว่าจุดเริ่มเกิน 15 บล็อก ถือว่าเป้าหมายหนีลงพื้นแล้ว
-                    if targetPos.Y < _G.TraceState.LockedTargetY - 15 then
+                    local targetFloorY = getRealFloorY(Vector3.new(targetPos.X, targetPos.Y, targetPos.Z))
+                    local buildingHeight = math.max(10, _G.TraceState.LockedTargetY - targetFloorY)
+                    local dropThreshold = math.max(15, buildingHeight * 0.30)
+                    
+                    -- ตกเกิน 30% ถึงจะยกเลิกลัดเลาะ
+                    if targetPos.Y < _G.TraceState.LockedTargetY - dropThreshold then
                         clearIncompleteTrace()
                     end
                 end
@@ -589,7 +609,8 @@ task.spawn(function()
                     local flatTarget = Vector3.new(st.TargetPos.X, currentPos.Y, st.TargetPos.Z)
                     local distToTarget = (flatTarget - currentPos).Magnitude
                     
-                    if distToTarget < 3.5 then
+                    -- ขยายระยะให้แตะเป้าง่ายขึ้น + ลอจิก Stuck Forgiveness (ข้ามถ้าเดินติด)
+                    if distToTarget < 4.5 or isStuck then
                         table.insert(st.Visited, st.TargetPos)
                         table.insert(st.Points, st.TargetPos)
                         st.StepCount = st.StepCount + 1
@@ -628,13 +649,19 @@ task.spawn(function()
                             if nextData then
                                 st.TargetPos = nextData.pos
                                 st.LastMoveTick = os.clock()
+                                st.FailCount = 0
                             else
-                                clearIncompleteTrace()
+                                -- อย่าเพิ่งลบทิ้งทันที ให้ลองกระโดดแก้บัคก่อน
+                                st.FailCount = st.FailCount + 1
+                                if st.FailCount > 20 then
+                                    clearIncompleteTrace()
+                                else
+                                    forceJump(myHuman)
+                                end
                             end
                         end
                     else
                         moveWithAvoidance(myHuman, flatTarget)
-                        -- ยืดเวลาจาก 10 เป็น 15 วินาที เพื่อให้มีเวลาเดินตึกใหญ่ๆ
                         if os.clock() - st.LastMoveTick > 15 then 
                             clearIncompleteTrace() 
                         end 
@@ -779,6 +806,7 @@ task.spawn(function()
                                                 _G.TraceState.Visited = {}
                                                 _G.TraceState.Points = {}
                                                 _G.TraceState.StepCount = 0
+                                                _G.TraceState.FailCount = 0
                                                 _G.TraceState.LastMoveTick = os.clock()
                                             end
                                         else
