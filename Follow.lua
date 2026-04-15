@@ -48,7 +48,8 @@ _G.TraceState = {
     Points = {},
     MaxDistFromStart = 0,
     LastMoveTick = 0,
-    FailCount = 0 
+    FailCount = 0,
+    LastFwdDir = nil -- [NEW] เข็มทิศความจำกันหลอน
 }
 
 -- --- Debug Visualization ---
@@ -75,6 +76,7 @@ local function clearIncompleteTrace()
     _G.TraceState.Points = {}
     _G.TraceState.MaxDistFromStart = 0
     _G.TraceState.FailCount = 0
+    _G.TraceState.LastFwdDir = nil
 end
 
 local function updateDebug(name, startPos, endPos, color)
@@ -130,7 +132,7 @@ local function forceJump(hum)
     end
 end
 
--- [อัปเกรด]: ระบบหลบหลีกที่อนุญาตให้กระโดดขึ้นขอนไม้หรือที่สูง (Super Jump Enabled)
+-- [อัปเกรด]: เพิ่มระยะเรดาร์ความสูง เพื่อให้กล้ากระโดดข้ามขอนไม้/รั้ว
 local function moveWithAvoidance(humanoid, pos)
     local hrp = humanoid.Parent:FindFirstChild("HumanoidRootPart")
     if hrp then
@@ -138,22 +140,19 @@ local function moveWithAvoidance(humanoid, pos)
         local dir = (flatPos - hrp.Position).Unit
         local checkDist = 4 
         local targetWalkPos = pos
-        
-        -- ถ้าระดับ Y ของเป้าหมายสูงกว่าตัวเรานิดหน่อย แปลว่าเป้าหมายอยู่บนขอนไม้/เนิน
-        local isTargetElevated = (pos.Y > hrp.Position.Y + 1.0)
 
         if dir.Magnitude > 0 then
             local lowerRay = workspace:Raycast(hrp.Position - Vector3.new(0, 1.5, 0), dir * checkDist, rayParams)
             local upperRay = workspace:Raycast(hrp.Position + Vector3.new(0, 1, 0), dir * checkDist, rayParams)
             
-            if lowerRay or upperRay or isTargetElevated then
-                -- เช็คกำแพงตันจริงๆ ที่ความสูง 10 บล็อก (ของที่มันกระโดดไม่พ้นแน่นอน)
-                local tooHighRay = workspace:Raycast(hrp.Position + Vector3.new(0, 10, 0), dir * checkDist, rayParams)
-                -- เช็คเพดาน ป้องกันการกระโดดอัดขอบประตู
-                local ceilRay = workspace:Raycast(hrp.Position, Vector3.new(0, 12, 0), rayParams)
+            if lowerRay or upperRay then
+                -- [NEW] เช็คว่ากำแพงสูงเกิน 6 บล็อกไหม ถ้าไม่เกิน คือกระโดดข้ามได้!
+                local tooTallRay = workspace:Raycast(hrp.Position + Vector3.new(0, 6.0, 0), dir * checkDist, rayParams)
+                -- เช็คเพดานกันหัวโขกขอบประตู
+                local ceilRay = workspace:Raycast(hrp.Position + (dir * 2), Vector3.new(0, 7, 0), rayParams)
                 
-                if tooHighRay or ceilRay then
-                    -- ของสูงไป หรือมีขอบประตูขวางหัว -> ใช้ Micro-Dodge หักหลบ
+                if tooTallRay or ceilRay then
+                    -- ของสูงเกินไป หรือ มีขอบประตูขวางข้างบน -> ใช้ Micro-Dodge หักเลี้ยวหลบ
                     _G.MicroDodgeMem = _G.MicroDodgeMem or {Dir = Vector3.new(), Expire = 0}
                     local dodgeDir
                     
@@ -170,11 +169,11 @@ local function moveWithAvoidance(humanoid, pos)
                         elseif not leftRay then dodgeDir = leftDir
                         else dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * dir).Unit end 
                         
-                        _G.MicroDodgeMem = {Dir = dodgeDir, Expire = os.clock() + 0.6}
+                        _G.MicroDodgeMem = {Dir = dodgeDir, Expire = os.clock() + 0.6} 
                     end
                     targetWalkPos = hrp.Position + (dodgeDir * 6)
                 else
-                    -- ของเตี้ยกว่า 10 บล็อก และไม่มีเพดานกดหัว -> โดดใส่ขอนไม้เลยพวก!
+                    -- ของสูงไม่ถึง 6 บล็อก (เช่น ขอนไม้) -> กระโดดข้ามได้เลย!
                     forceJump(humanoid)
                 end
             end
@@ -239,14 +238,20 @@ end
 
 local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
     local st = _G.TraceState
-    local radiiToTry = {4.5, 6.5} 
+    -- [NEW] เพิ่ม 2.5 เพื่อให้หักเบียดเข้ากำแพง/ฐานขอนไม้ เป็นแท่นเหยียบไปต่อ
+    local radiiToTry = {2.5, 4.5, 6.5} 
     
-    local fwdDir = Vector3.new(1, 0, 0)
+    local fwdDir = st.LastFwdDir or Vector3.new(1, 0, 0)
     if #st.Visited >= 2 then
         local p1 = st.Visited[#st.Visited-1]
         local p2 = currentPos
-        fwdDir = (Vector3.new(p2.X, 0, p2.Z) - Vector3.new(p1.X, 0, p1.Z)).Unit
-        if fwdDir.Magnitude == 0 then fwdDir = Vector3.new(1,0,0) end
+        local moveDiff = Vector3.new(p2.X, 0, p2.Z) - Vector3.new(p1.X, 0, p1.Z)
+        
+        -- [NEW] กันหลอน: อัปเดตเข็มทิศเฉพาะตอนก้าวไปข้างหน้าได้เกิน 1.5 บล็อกเท่านั้น
+        if moveDiff.Magnitude > 1.5 then
+            fwdDir = moveDiff.Unit
+            st.LastFwdDir = fwdDir
+        end
     end
 
     for _, step in ipairs(radiiToTry) do
@@ -274,24 +279,27 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
             local visited = false
             for i, v in ipairs(st.Visited) do
                 local distXZ = (Vector2.new(v.X, v.Z) - Vector2.new(testPos.X, testPos.Z)).Magnitude
-                local checkRadius = 3.0 
-                if i >= #st.Visited - 2 then checkRadius = 1.5 end
+                local checkRadius = 2.0 -- ลดลงหน่อยเพื่อให้เลี้ยวตามมุมง่ายขึ้น
+                if i >= #st.Visited - 2 then checkRadius = 1.0 end
                 
                 if distXZ < checkRadius then visited = true; break end
             end
 
             if not visited then
+                -- ยิงเรดาร์ระดับหัว เพื่อกรองท่อนไม้ใหญ่ที่ขวางแนวการมองเห็น
                 local dirToTest = (testPos - currentPos).Unit
                 local distToTest = (testPos - currentPos).Magnitude
                 if dirToTest.Magnitude > 0 then
-                    -- [แก้บัคสำคัญ]: ขยับเรดาร์ขึ้นไปที่ Y+10 ทำให้มันไม่กลัวท่อนไม้/สิ่งกีดขวางเตี้ยๆ และสร้างบล็อกบนนั้นได้
-                    local headObstacleRay = workspace:Raycast(currentPos + Vector3.new(0, 10, 0), dirToTest * distToTest, rayParams)
+                    -- ถ้าระดับความสูง 6 บล็อกไม่มีอะไรบัง แสดงว่ามองเห็นบล็อกเหลืองและโดดไปถึงได้
+                    local headObstacleRay = workspace:Raycast(currentPos + Vector3.new(0, 6.0, 0), dirToTest * distToTest, rayParams)
                     
                     if not headObstacleRay then 
                         local isWalkable = not workspace:Raycast(testPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams)
                         if isWalkable then
                             local isNearWall = false
-                            local wChecks = { Vector3.new(step,0,0), Vector3.new(-step,0,0), Vector3.new(0,0,step), Vector3.new(0,0,-step) }
+                            -- ถ้ารัศมีลองเป็น 2.5 (เบียดกำแพง) ให้ยิงเรดาร์สั้นลง
+                            local wallCheckDist = math.max(3, step) 
+                            local wChecks = { Vector3.new(wallCheckDist,0,0), Vector3.new(-wallCheckDist,0,0), Vector3.new(0,0,wallCheckDist), Vector3.new(0,0,-wallCheckDist) }
                             for _, subOff in ipairs(wChecks) do
                                 local wallCheckPos = testPos + subOff
                                 if workspace:Raycast(wallCheckPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams) then 
@@ -782,40 +790,11 @@ task.spawn(function()
                         local flatTargetPos = Vector3.new(targetPos.X, currentPos.Y, targetPos.Z)
                         local flatDir = (flatTargetPos - currentPos).Unit
                         
-                        if flatDir.Magnitude > 0 then
-                            local fwdRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), flatDir * 6, rayParams)
-                            
-                            if fwdRay then
-                                _G.DodgeMem = _G.DodgeMem or {Dir = Vector3.new(), Expire = 0}
-                                local dodgeDir
-                                
-                                if os.clock() < _G.DodgeMem.Expire then
-                                    dodgeDir = _G.DodgeMem.Dir
-                                else
-                                    local rightDir = (CFrame.Angles(0, math.rad(-60), 0) * flatDir).Unit
-                                    local leftDir = (CFrame.Angles(0, math.rad(60), 0) * flatDir).Unit
-                                    
-                                    local rightRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), rightDir * 8, rayParams)
-                                    local leftRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), leftDir * 8, rayParams)
-                                    
-                                    if not rightRay then dodgeDir = rightDir
-                                    elseif not leftRay then dodgeDir = leftDir
-                                    else dodgeDir = (CFrame.Angles(0, math.rad(120), 0) * flatDir).Unit end 
-                                    
-                                    _G.DodgeMem = {Dir = dodgeDir, Expire = os.clock() + 0.8}
-                                end
-                                
-                                local dodgePos = currentPos + (dodgeDir * 8)
-                                updateDebug("DirectTrace", currentPos, dodgePos, Color3.fromRGB(255, 128, 0))
-                                moveWithAvoidance(myHuman, dodgePos)
-                            else
-                                isProbing = false
-                                currentWaypoints = {}
-                                isFollowingCustomPath = false
-                                updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0))
-                                moveWithAvoidance(myHuman, flatTargetPos)
-                            end
-                        end
+                        isProbing = false
+                        currentWaypoints = {}
+                        isFollowingCustomPath = false
+                        updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0))
+                        moveWithAvoidance(myHuman, flatTargetPos)
                         
                     else
                         if os.clock() - lastComputeTime > 0.5 or (targetPos - lastTargetPos).Magnitude > 5 then
@@ -860,6 +839,7 @@ task.spawn(function()
                                                 _G.TraceState.StepCount = 0
                                                 _G.TraceState.MaxDistFromStart = 0
                                                 _G.TraceState.FailCount = 0
+                                                _G.TraceState.LastFwdDir = nil
                                                 _G.TraceState.LastMoveTick = os.clock()
                                             end
                                         else
