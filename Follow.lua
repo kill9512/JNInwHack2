@@ -32,7 +32,7 @@ local randomTarget = nil
 _G.CustomPathFailTick = 0 
 _G.PatrolIndex = 1 
 
--- ระบบความจำสถานที่
+-- ระบบความจำสถานที่ 
 _G.BuildingMemories = _G.BuildingMemories or {}
 
 -- สถานะระบบลัดเลาะขอบ
@@ -206,8 +206,11 @@ local function crossScanForEdge(startPos, maxCheckHeight, targetPos)
         for d = step, maxRadius, step do
             local testXZ = startPos + (dir * d)
             local floorY = getRealFloorY(testXZ)
-            local checkPos = Vector3.new(testXZ.X, floorY, testXZ.Z)
+            
+            -- ป้องกันแฉลบข้ามตึกตอนสแกนหาขอบครั้งแรก
+            if math.abs(floorY - startPos.Y) > 5 then continue end
 
+            local checkPos = Vector3.new(testXZ.X, floorY, testXZ.Z)
             local rayOrigin = checkPos + Vector3.new(0, 1, 0)
             local upRay = workspace:Raycast(rayOrigin, Vector3.new(0, maxCheckHeight, 0), rayParams)
             
@@ -232,16 +235,18 @@ end
 
 local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
     local st = _G.TraceState
-    local radiiToTry = {4.5, 6.0, 8.0} -- ปรับระยะการก้าวให้สมดุล
+    local radiiToTry = {2.5, 4.5, 6.5} 
     
     local fwdDir = st.LastFwdDir or Vector3.new(1, 0, 0)
     if #st.Visited >= 2 then
         local p1 = st.Visited[#st.Visited-1]
         local p2 = currentPos
-        local moveDiff = Vector3.new(p2.X, 0, p2.Z) - Vector3.new(p1.X, 0, p1.Z)
+        -- [แก้ไข] ใช้พิกัด XZ เท่านั้นในการคำนวณทิศ ป้องกันหมุนลูกข่างตอนกระโดด!
+        local moveDiffXZ = Vector3.new(p2.X, 0, p2.Z) - Vector3.new(p1.X, 0, p1.Z)
         
-        if moveDiff.Magnitude > 3.0 then
-            fwdDir = moveDiff.Unit
+        -- ต้องก้าวเดินไปแนวราบเกิน 2.0 บล็อก ถึงจะอัปเดตเข็มทิศทิศทาง
+        if moveDiffXZ.Magnitude > 2.0 then
+            fwdDir = moveDiffXZ.Unit
             st.LastFwdDir = fwdDir
         end
     end
@@ -259,11 +264,18 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
         for _, offset in ipairs(neighbors) do
             local testXZ = currentPos + offset
             local floorY = getRealFloorY(testXZ)
+            
+            -- [NEW] Anti-Gap Leaping: ป้องกันเรดาร์โดดข้ามร่องตึก
+            if math.abs(floorY - currentPos.Y) > 6 then continue end
+            local midXZ = currentPos + (offset * 0.5)
+            local midFloorY = getRealFloorY(midXZ)
+            if math.abs(midFloorY - currentPos.Y) > 6 then continue end
+
             local testPos = Vector3.new(testXZ.X, floorY, testXZ.Z)
             
             if st.StepCount > 15 and st.MaxDistFromStart > 15 and st.StartPos then
                 local distToStart = (Vector2.new(testPos.X, testPos.Z) - Vector2.new(st.StartPos.X, st.StartPos.Z)).Magnitude
-                if distToStart < 5 then 
+                if distToStart < 6 then 
                     return {pos = testPos, closedLoop = true}
                 end
             end
@@ -271,8 +283,8 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
             local visited = false
             for i, v in ipairs(st.Visited) do
                 local distXZ = (Vector2.new(v.X, v.Z) - Vector2.new(testPos.X, testPos.Z)).Magnitude
-                local checkRadius = 3.5 
-                if i >= #st.Visited - 2 then checkRadius = 2.0 end
+                local checkRadius = 3.0 
+                if i >= #st.Visited - 2 then checkRadius = 1.0 end
                 
                 if distXZ < checkRadius then visited = true; break end
             end
@@ -283,7 +295,7 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                 
                 local pathBlocked = false
                 if dirToTest.Magnitude > 0 then
-                    if workspace:Raycast(currentPos + Vector3.new(0, 2, 0), dirToTest * distToTest, rayParams) then
+                    if workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), dirToTest * distToTest, rayParams) then
                         pathBlocked = true
                     end
                 end
@@ -293,8 +305,7 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
 
                     if not hasCeiling then
                         local isNearWall = false
-                        -- [แก้บัคเหมารวมตึก]: ล็อกระยะการหาเพดานเขียวไว้ที่ 2.5 สตัด เพื่อเบียดเฉพาะตึกที่เลาะอยู่เท่านั้น!
-                        local wallCheckDist = 2.5 
+                        local wallCheckDist = math.max(3, step * 0.8) 
                         local wChecks = { Vector3.new(wallCheckDist,0,0), Vector3.new(-wallCheckDist,0,0), Vector3.new(0,0,wallCheckDist), Vector3.new(0,0,-wallCheckDist) }
                         
                         for _, subOff in ipairs(wChecks) do
@@ -310,23 +321,26 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                         local dropRay = workspace:Raycast(testPos + Vector3.new(0, maxCheckHeight, 0), Vector3.new(0, -maxCheckHeight, 0), rayParams)
                         if dropRay then
                             local obsHeight = dropRay.Position.Y - floorY
-                            if obsHeight > 10.0 then 
-                                hasTallObstacle = true
-                            end
+                            if obsHeight > 10.0 then hasTallObstacle = true end
                         end
 
                         if isNearWall and not hasTallObstacle then
-                            table.insert(validSteps, {pos = testPos, type = "Outside"})
+                            -- แนบ StepSize เข้าไปคำนวณโบนัสคะแนนก้าวยาว
+                            table.insert(validSteps, {pos = testPos, type = "Outside", stepSize = step})
                         end
+
                     else
                         local hasBlockedOutside = false
                         local wChecks = { Vector3.new(step,0,0), Vector3.new(-step,0,0), Vector3.new(0,0,step), Vector3.new(0,0,-step) }
+                        
                         for _, subOff in ipairs(wChecks) do
                             local outCheckXZ = testPos + subOff
                             local outFloorY = getRealFloorY(outCheckXZ)
+                            if math.abs(outFloorY - floorY) > 5 then continue end
+                            
                             local outPos = Vector3.new(outCheckXZ.X, outFloorY, outCheckXZ.Z)
-
                             local outHasCeiling = workspace:Raycast(outPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams)
+                            
                             if not outHasCeiling then
                                 local outDropRay = workspace:Raycast(outPos + Vector3.new(0, maxCheckHeight, 0), Vector3.new(0, -maxCheckHeight, 0), rayParams)
                                 if outDropRay then
@@ -340,7 +354,7 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                         end
 
                         if hasBlockedOutside then
-                            table.insert(validSteps, {pos = testPos, type = "Inside"})
+                            table.insert(validSteps, {pos = testPos, type = "Inside", stepSize = step})
                         end
                     end
                 end
@@ -350,39 +364,52 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
         if #validSteps > 0 then
             local bestStep = nil
             local bestScore = -math.huge
+            local fallbackStep = nil
+            local fallbackScore = -math.huge
 
             for _, vData in ipairs(validSteps) do
                 local pos = vData.pos
                 local dirToPos = (Vector3.new(pos.X, 0, pos.Z) - Vector3.new(currentPos.X, 0, currentPos.Z)).Unit
                 if dirToPos.Magnitude == 0 then dirToPos = Vector3.new(1,0,0) end
                 
-                local score = fwdDir:Dot(dirToPos)
-                if vData.type == "Outside" then score = score + 0.5 end
+                local dotScore = fwdDir:Dot(dirToPos)
                 
-                -- ป้องกันเดินย้อนกลับแบบเด็ดขาด (ห้ามเลี้ยวมุมแหลม)
-                if score >= -0.05 then 
+                -- [NEW] คะแนนรวม = ทิศทาง(สำคัญสุด) + โบนัสพื้นที่โล่ง + โบนัสก้าวยาว(ข้ามเศษเหลี่ยม)
+                local score = (dotScore * 10) + vData.stepSize
+                if vData.type == "Outside" then score = score + 5 end
+                
+                -- อนุญาตให้เลี้ยวได้ถึง 120 องศา (score > -0.5) เพื่อเข้ามุมหักศอก แต่ห้ามเดินกลับหลังหันเด็ดขาด
+                if dotScore > -0.5 then 
                     if score > bestScore then
                         bestScore = score
                         bestStep = pos
                     end
+                else 
+                    if score > fallbackScore then
+                        fallbackScore = score
+                        fallbackStep = pos
+                    end
                 end
             end
 
-            if bestStep then
-                if debugEnabled then
-                    for _, gPos in ipairs(visualGreens) do
-                        local pg = Instance.new("Part")
-                        pg.Name, pg.Size, pg.Position = "TraceTrail_Green", Vector3.new(1.5, 0.5, 1.5), gPos + Vector3.new(0, 2, 0)
-                        pg.Anchored, pg.CanCollide, pg.CanQuery, pg.Transparency, pg.Color = true, false, false, 0.4, Color3.fromRGB(0, 255, 0)
-                        pg.Material, pg.Parent = Enum.Material.Neon, workspace.Terrain
-                    end
-                    local py = Instance.new("Part")
-                    py.Name, py.Size, py.Position = "TraceTrail_Yellow", Vector3.new(1.5, 0.5, 1.5), bestStep + Vector3.new(0, 2, 0)
-                    py.Anchored, py.CanCollide, py.CanQuery, py.Transparency, py.Color = true, false, false, 0.2, Color3.fromRGB(255, 255, 0)
-                    py.Material, py.Parent = Enum.Material.Neon, workspace.Terrain
+            local finalStep = bestStep or fallbackStep
+            
+            if debugEnabled and finalStep then
+                for _, gPos in ipairs(visualGreens) do
+                    local pg = Instance.new("Part")
+                    pg.Name, pg.Size, pg.Position = "TraceTrail_Green", Vector3.new(1.5, 0.5, 1.5), gPos + Vector3.new(0, 2, 0)
+                    pg.Anchored, pg.CanCollide, pg.CanQuery, pg.Transparency, pg.Color = true, false, false, 0.4, Color3.fromRGB(0, 255, 0)
+                    pg.Material, pg.Parent = Enum.Material.Neon, workspace.Terrain
                 end
-                return {pos = bestStep, closedLoop = false} 
+                
+                local pyColor = (bestStep == finalStep and bestScore > 0) and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(255, 150, 0)
+                local py = Instance.new("Part")
+                py.Name, py.Size, py.Position = "TraceTrail_Yellow", Vector3.new(1.5, 0.5, 1.5), finalStep + Vector3.new(0, 2, 0)
+                py.Anchored, py.CanCollide, py.CanQuery, py.Transparency, py.Color = true, false, false, 0.2, pyColor
+                py.Material, py.Parent = Enum.Material.Neon, workspace.Terrain
             end
+
+            if finalStep then return {pos = finalStep, closedLoop = false} end
         end
     end
 
@@ -748,9 +775,7 @@ task.spawn(function()
                                 if st.FailCount > 20 then
                                     clearIncompleteTrace()
                                 else
-                                    -- [แก้บัคหลอนลูกข่าง]: บังคับพุ่งทะลุสิ่งกีดขวางไปข้างหน้าเพื่อตั้งหลัก
-                                    local escapeDir = st.LastFwdDir or myRoot.CFrame.LookVector
-                                    st.TargetPos = currentPos + (escapeDir * 6)
+                                    myRoot.CFrame = myRoot.CFrame * CFrame.Angles(0, math.rad(90), 0)
                                     forceJump(myHuman)
                                 end
                             end
