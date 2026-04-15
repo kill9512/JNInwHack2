@@ -130,7 +130,7 @@ local function forceJump(hum)
     end
 end
 
--- [แก้ไข]: อัปเกรดระบบหลบหลีก ไม่ให้กระโดดอัดท่อนไม้ใหญ่
+-- [แก้ไข]: ป้องกันการกระโดดอัดขอบประตู/ของชิ้นใหญ่
 local function moveWithAvoidance(humanoid, pos)
     local hrp = humanoid.Parent:FindFirstChild("HumanoidRootPart")
     if hrp then
@@ -145,11 +145,13 @@ local function moveWithAvoidance(humanoid, pos)
             local upperRay = workspace:Raycast(hrp.Position + Vector3.new(0, 1, 0), dir * checkDist, rayParams)
             
             if lowerRay or upperRay then
-                -- ยิงเรดาร์ระดับสูงกว่าหัว (เช็คว่าท่อนไม้ใหญ่หรือกำแพงสูงไหม)
-                local headRay = workspace:Raycast(hrp.Position + Vector3.new(0, 3.5, 0), dir * checkDist, rayParams)
+                -- เช็คหัว (ของใหญ่เกินโดดพ้นไหม)
+                local headRay = workspace:Raycast(hrp.Position + Vector3.new(0, 2.5, 0), dir * checkDist, rayParams)
+                -- เช็คเพดานตรงหน้า (ป้องกันโดดแล้วหัวโขกขอบประตู)
+                local ceilRay = workspace:Raycast(hrp.Position + (dir * 2), Vector3.new(0, 5, 0), rayParams)
                 
-                if headRay then
-                    -- ของชิ้นใหญ่ กระโดดไม่พ้น ห้ามกระโดด ให้หักเลี้ยวหลบแทน!
+                if headRay or ceilRay then
+                    -- ของใหญ่ หรือ มีขอบประตูขวางข้างบน -> ห้ามโดดเด็ดขาด! ให้หักเลี้ยว
                     local rightDir = (CFrame.Angles(0, math.rad(-55), 0) * dir).Unit
                     local leftDir = (CFrame.Angles(0, math.rad(55), 0) * dir).Unit
                     
@@ -162,7 +164,7 @@ local function moveWithAvoidance(humanoid, pos)
                         targetWalkPos = hrp.Position + (leftDir * 6)
                     end
                 else
-                    -- ของเตี้ยๆ กระโดดข้ามได้
+                    -- ของเล็กๆ และไม่มีอะไรขวางหัว -> โดดข้ามโลด
                     forceJump(humanoid)
                 end
             end
@@ -193,7 +195,7 @@ end
 
 local function crossScanForEdge(startPos, maxCheckHeight, targetPos)
     local step = 5
-    local maxRadius = 40 -- ลดลงเพื่อไม่ให้ข้ามไปตึกอื่น
+    local maxRadius = 40 
     local dirs = { Vector3.new(1,0,0), Vector3.new(-1,0,0), Vector3.new(0,0,1), Vector3.new(0,0,-1) }
     local endpoints = {}
 
@@ -227,7 +229,6 @@ end
 
 local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
     local st = _G.TraceState
-    -- [แก้ไข]: บีบรัศมีให้แคบลง (4.5 และ 6.5) เพื่อให้เกาะขอบตึกตัวเอง ไม่สแกนไปโดนตึกข้างๆ
     local radiiToTry = {4.5, 6.5} 
     
     local fwdDir = Vector3.new(1, 0, 0)
@@ -237,6 +238,20 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
         fwdDir = (Vector3.new(p2.X, 0, p2.Z) - Vector3.new(p1.X, 0, p1.Z)).Unit
         if fwdDir.Magnitude == 0 then fwdDir = Vector3.new(1,0,0) end
     end
+
+    -- [แก้ไข]: หาตำแหน่งที่ตึก (บล็อกเขียว) ตั้งอยู่ เพื่อบังคับให้มันทิ้งน้ำหนักเบียดเข้าหาตึก
+    local wallDir = Vector3.new(0,0,0)
+    local wallChecks = { Vector3.new(6,0,0), Vector3.new(-6,0,0), Vector3.new(0,0,6), Vector3.new(0,0,-6) }
+    for _, subOff in ipairs(wallChecks) do
+        if workspace:Raycast(currentPos + subOff + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams) then
+            wallDir = wallDir + subOff.Unit
+        end
+    end
+    if wallDir.Magnitude > 0 then wallDir = wallDir.Unit end
+
+    -- ลอจิกหักพวงมาลัยเข้าหากำแพง (Wall Hugging) ทำให้มันไม่เดินเป๋ไปตึกอื่น
+    local idealDir = (fwdDir + (wallDir * 0.6)).Unit
+    if idealDir.Magnitude == 0 then idealDir = fwdDir end
 
     for _, step in ipairs(radiiToTry) do
         local neighbors = { 
@@ -273,8 +288,8 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                 local isWalkable = not workspace:Raycast(testPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams)
                 if isWalkable then
                     local isNearWall = false
-                    local wallChecks = { Vector3.new(step,0,0), Vector3.new(-step,0,0), Vector3.new(0,0,step), Vector3.new(0,0,-step) }
-                    for _, subOff in ipairs(wallChecks) do
+                    local wChecks = { Vector3.new(step,0,0), Vector3.new(-step,0,0), Vector3.new(0,0,step), Vector3.new(0,0,-step) }
+                    for _, subOff in ipairs(wChecks) do
                         local wallCheckPos = testPos + subOff
                         if workspace:Raycast(wallCheckPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams) then 
                             isNearWall = true 
@@ -297,9 +312,10 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                 local dirToPos = (Vector3.new(pos.X, 0, pos.Z) - Vector3.new(currentPos.X, 0, currentPos.Z)).Unit
                 if dirToPos.Magnitude == 0 then dirToPos = Vector3.new(1,0,0) end
                 
-                local score = fwdDir:Dot(dirToPos)
+                -- ใช้ idealDir ที่หักเข้ากำแพงแล้ว มาประเมินหาบล็อกที่สวยที่สุด
+                local score = idealDir:Dot(dirToPos)
                 
-                if score > -0.1 then 
+                if score > -0.2 then 
                     if score > bestScore then
                         bestScore = score
                         bestStep = pos
@@ -556,7 +572,7 @@ task.spawn(function()
                 end
 
                 -- =======================================================
-                -- [ตรวจสอบเงื่อนไขเป้าหมายหนีออกจากโซน]
+                -- [ตรวจสอบเงื่อนไขเป้าหมายหนีออกจากโซน (แกน Y ตก 30%)]
                 -- =======================================================
                 if _G.TraceState.Locked and _G.TraceState.LockedTargetY then
                     local targetFloorY = getRealFloorY(Vector3.new(targetPos.X, targetPos.Y, targetPos.Z))
@@ -648,7 +664,7 @@ task.spawn(function()
                         st.MaxDistFromStart = distFromStart
                     end
                     
-                    if distToTarget < 3.5 or isStuck then
+                    if distToTarget < 4.5 or isStuck then
                         table.insert(st.Visited, st.TargetPos)
                         table.insert(st.Points, st.TargetPos)
                         st.StepCount = st.StepCount + 1
@@ -693,7 +709,6 @@ task.spawn(function()
                                 if st.FailCount > 20 then
                                     clearIncompleteTrace()
                                 else
-                                    -- ลองหันซ้ายขวาเผื่อหลุดบัค
                                     myRoot.CFrame = myRoot.CFrame * CFrame.Angles(0, math.rad(90), 0)
                                     forceJump(myHuman)
                                 end
