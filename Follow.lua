@@ -49,7 +49,11 @@ _G.TraceState = {
     MaxDistFromStart = 0,
     LastMoveTick = 0,
     StuckTick = 0,
-    LastFwdDir = nil 
+    LastFwdDir = nil,
+    -- [NEW] สถานะสำหรับก้าวหลบ 2 จังหวะ
+    DodgeStep = 0,
+    DodgeDir = nil,
+    OriginalFwd = nil
 }
 
 -- --- Debug Visualization ---
@@ -77,6 +81,9 @@ local function clearIncompleteTrace()
     _G.TraceState.MaxDistFromStart = 0
     _G.TraceState.StuckTick = 0
     _G.TraceState.LastFwdDir = nil
+    _G.TraceState.DodgeStep = 0
+    _G.TraceState.DodgeDir = nil
+    _G.TraceState.OriginalFwd = nil
 end
 
 local function updateDebug(name, startPos, endPos, color)
@@ -363,8 +370,8 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                 
                 local pg = Instance.new("Part")
                 pg.Name, pg.Size, pg.Position = "TraceTrail_Green", Vector3.new(1.5, 0.5, 1.5), finalStep + Vector3.new(0, 2, 0)
-                pg.Anchored, pg.CanCollide, pg.CanQuery, pg.Transparency, pg.Color = true, false, false, 0.2, Color3.fromRGB(0, 255, 0)
-                pg.Material, pg.Parent = Enum.Material.Neon, workspace.Terrain
+                pg.Anchored, py.CanCollide, py.CanQuery, py.Transparency, py.Color = true, false, false, 0.2, Color3.fromRGB(0, 255, 0)
+                pg.Material, py.Parent = Enum.Material.Neon, workspace.Terrain
             end
 
             if finalStep then return {pos = finalStep, closedLoop = false} end
@@ -688,6 +695,46 @@ task.spawn(function()
                         st.MaxDistFromStart = distFromStart
                     end
                     
+                    -- [NEW] ถ้าอยู่ในช่วง ForcedDodge (เดิน 2 ก้าว)
+                    if st.Phase == "ForcedDodge" then
+                        if distToTarget < 3.5 or isStuck then
+                            if st.DodgeStep == 1 then
+                                -- ก้าวที่ 2 เต็มๆ ไปทางเดิม
+                                st.DodgeStep = 2
+                                local dodgePos = currentPos + (st.DodgeDir * 8)
+                                st.TargetPos = Vector3.new(dodgePos.X, getRealFloorY(dodgePos), dodgePos.Z)
+                                st.LastMoveTick = os.clock()
+                                
+                                if debugEnabled then
+                                    local py = Instance.new("Part")
+                                    py.Name = "TraceTrail_Yellow"
+                                    py.Size = Vector3.new(1.5, 0.5, 1.5)
+                                    py.Position = st.TargetPos + Vector3.new(0, 2, 0)
+                                    py.Anchored = true; py.CanCollide = false; py.CanQuery = false
+                                    py.Transparency = 0.2; py.Color = Color3.fromRGB(150, 0, 255) -- สีม่วง
+                                    py.Material = Enum.Material.Neon; py.Parent = workspace.Terrain
+                                end
+                            else
+                                -- ก้าวเสร็จแล้ว หันหน้าเข้าหาตึก (ตรงข้ามกับทิศหลบ)
+                                local faceDir = -st.DodgeDir
+                                if myRoot then
+                                    myRoot.CFrame = CFrame.lookAt(currentPos, currentPos + faceDir)
+                                end
+                                
+                                -- คืนสถานะให้เดินเลาะขอบตึกต่อ โดยให้ฟอร์เวิร์ดใหม่พุ่งเข้าตึก
+                                st.Phase = "Tracing"
+                                st.LastFwdDir = faceDir
+                                st.LastMoveTick = os.clock()
+                                st.StuckTick = 0
+                            end
+                        else
+                            moveWithAvoidance(myHuman, flatTarget)
+                            if os.clock() - st.LastMoveTick > 10 then clearIncompleteTrace() end
+                        end
+                        return
+                    end
+                    
+                    -- โหมดลัดเลาะปกติ
                     if distToTarget < 3.5 or isStuck then
                         table.insert(st.Visited, st.TargetPos)
                         table.insert(st.Points, st.TargetPos)
@@ -729,44 +776,44 @@ task.spawn(function()
                                 st.LastMoveTick = os.clock()
                                 st.StuckTick = 0
                             else
-                                -- [NEW] L-Shape Forced Dodge ทะลวงตึก (รอ 2.5 วิ)
+                                -- [NEW] ระบบแก้บัค: นับเวลา 3 วิ แล้วกระชากหลบ 2 ก้าวเข้าตึก
                                 if st.StuckTick == 0 then st.StuckTick = os.clock() end
                                 
-                                if os.clock() - st.StuckTick > 2.5 then
+                                if os.clock() - st.StuckTick > 3 then
                                     local fwd = st.LastFwdDir or Vector3.new(1,0,0)
-                                    local reqHeight = math.max(20, targetPos.Y - currentPos.Y + 5)
                                     
                                     local rightDir = (CFrame.Angles(0, math.rad(-90), 0) * fwd).Unit
                                     local leftDir = (CFrame.Angles(0, math.rad(90), 0) * fwd).Unit
                                     
-                                    local rightCeil = workspace:Raycast(currentPos + rightDir*8 + Vector3.new(0,1,0), Vector3.new(0, reqHeight, 0), rayParams)
-                                    local leftCeil = workspace:Raycast(currentPos + leftDir*8 + Vector3.new(0,1,0), Vector3.new(0, reqHeight, 0), rayParams)
+                                    local rightCeil = workspace:Raycast(currentPos + rightDir*8 + Vector3.new(0,1,0), Vector3.new(0, reqH, 0), rayParams)
+                                    local leftCeil = workspace:Raycast(currentPos + leftDir*8 + Vector3.new(0,1,0), Vector3.new(0, reqH, 0), rayParams)
                                     
                                     local dodgeDir = fwd
                                     if rightCeil then dodgeDir = rightDir
                                     elseif leftCeil then dodgeDir = leftDir
-                                    else dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * fwd).Unit end 
+                                    else dodgeDir = leftDir end 
                                     
-                                    -- ก้าวเข้าตึก 2 ก้าว (12 studs) + ก้าวเดินหน้าอีก 1 ก้าว (6 studs) หักมุมตัว L
-                                    local dodgePos = currentPos + (dodgeDir * 12) + (fwd * 6)
-                                    dodgePos = Vector3.new(dodgePos.X, getRealFloorY(dodgePos), dodgePos.Z)
+                                    st.Phase = "ForcedDodge"
+                                    st.DodgeStep = 1
+                                    st.DodgeDir = dodgeDir
+                                    st.OriginalFwd = fwd
                                     
-                                    st.TargetPos = dodgePos
-                                    st.LastFwdDir = fwd -- ล็อกทิศเดิมไว้ ไม่หันกลับมา 180 องศา
+                                    local dodgePos = currentPos + (dodgeDir * 8)
+                                    st.TargetPos = Vector3.new(dodgePos.X, getRealFloorY(dodgePos), dodgePos.Z)
                                     st.StuckTick = 0
                                     st.LastMoveTick = os.clock()
                                     
                                     if debugEnabled then
-                                        local pg = Instance.new("Part")
-                                        pg.Name = "TraceTrail_Green"
-                                        pg.Size = Vector3.new(2, 0.5, 2)
-                                        pg.Position = dodgePos + Vector3.new(0, 2, 0)
-                                        pg.Anchored = true; pg.CanCollide = false; pg.CanQuery = false
-                                        pg.Transparency = 0.2; pg.Color = Color3.fromRGB(0, 255, 0)
-                                        pg.Material = Enum.Material.Neon; pg.Parent = workspace.Terrain
+                                        local py = Instance.new("Part")
+                                        py.Name = "TraceTrail_Yellow"
+                                        py.Size = Vector3.new(1.5, 0.5, 1.5)
+                                        py.Position = st.TargetPos + Vector3.new(0, 2, 0)
+                                        py.Anchored = true; py.CanCollide = false; py.CanQuery = false
+                                        py.Transparency = 0.2; py.Color = Color3.fromRGB(150, 0, 255) -- สีม่วง
+                                        py.Material = Enum.Material.Neon; py.Parent = workspace.Terrain
                                     end
                                 else
-                                    -- ลบคำสั่งบังคับหมุนตัวออก แค่กระโดดเฉยๆ
+                                    -- รอเวลาครบ 3 วิ ก็โดดสู้ไปก่อน ไม่ต้องหมุนตัว!
                                     forceJump(myHuman)
                                 end
                             end
@@ -855,6 +902,7 @@ task.spawn(function()
                                     elseif not leftRay then dodgeDir = leftDir
                                     else dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * flatDir).Unit end 
                                     
+                                    -- [อัปเกรด]: เพิ่มเวลาความจำ Drop Mode เป็น 2.0 วินาที 
                                     _G.DodgeMem = {Dir = dodgeDir, Expire = os.clock() + 2.0}
                                 end
                                 
@@ -867,6 +915,12 @@ task.spawn(function()
                                 isFollowingCustomPath = false
                                 updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0))
                                 moveWithAvoidance(myHuman, flatTargetPos)
+
+                                local chestRay = workspace:Raycast(currentPos, flatDir * 4, rayParams)
+                                local floorDropRay = workspace:Raycast(currentPos + (flatDir * 4) + Vector3.new(0, 1, 0), Vector3.new(0, -10, 0), rayParams)
+                                if chestRay and chestRay.Distance < 3 and not floorDropRay then
+                                    forceJump(myHuman)
+                                end
                             end
                         end
                         
@@ -912,8 +966,11 @@ task.spawn(function()
                                                 _G.TraceState.Points = {}
                                                 _G.TraceState.StepCount = 0
                                                 _G.TraceState.MaxDistFromStart = 0
-                                                _G.TraceState.FailCount = 0
+                                                _G.TraceState.StuckTick = 0
                                                 _G.TraceState.LastFwdDir = nil
+                                                _G.TraceState.DodgeStep = 0
+                                                _G.TraceState.DodgeDir = nil
+                                                _G.TraceState.OriginalFwd = nil
                                                 _G.TraceState.LastMoveTick = os.clock()
                                             end
                                         else
@@ -924,6 +981,7 @@ task.spawn(function()
                                             end
                                         end
                                     else
+                                        -- [อัปเกรด] พุ่งหาแนวนอนใช้เรดาร์ชุดเดียวกับ Drop Mode
                                         local flatTargetPos = Vector3.new(targetPos.X, currentPos.Y, targetPos.Z)
                                         local flatDir = (flatTargetPos - currentPos).Unit
                                         
