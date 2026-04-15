@@ -35,11 +35,11 @@ _G.PatrolIndex = 1
 -- ระบบความจำสถานที่ (Building Memory)
 _G.BuildingMemories = _G.BuildingMemories or {}
 
--- สถานะระบบลัดเลาะขอบ 
+-- สถานะระบบลัดเลาะขอบ (ใช้ LockedTargetY เป็นตัวชี้วัดหลัก)
 _G.TraceState = {
     Active = false,
     Locked = false,
-    LockedTargetY = nil,
+    LockedTargetY = nil, -- จำความสูงของเป้าหมายตอนเริ่มลัดเลาะ
     Phase = "None",
     TargetPos = nil,
     StartPos = nil,
@@ -510,7 +510,7 @@ task.spawn(function()
                 end
 
                 -- =======================================================
-                -- [ตรวจสอบเงื่อนไขเป้าหมายหนีออกจากโซน (ยกเลิกโหมด Trace ถ้าย้ายแกน Y)]
+                -- [ตรวจสอบเงื่อนไขเป้าหมายหนีออกจากโซน (แกน Y เปลี่ยนแปลงหนัก)]
                 -- =======================================================
                 if _G.TraceState.Locked and _G.TraceState.LockedTargetY then
                     if math.abs(targetPos.Y - _G.TraceState.LockedTargetY) > 10 then
@@ -673,7 +673,7 @@ task.spawn(function()
                 end
 
                 -- =======================================================
-                -- ลำดับการตรวจสอบหลัก 
+                -- ลำดับการตรวจสอบหลัก
                 -- =======================================================
                 if hDist > followDistance or math.abs(vDist) > 5 then
                     
@@ -761,38 +761,35 @@ task.spawn(function()
                                 local canUseCustomPaths = (_G.CustomPathFailTick == nil) or (os.clock() - _G.CustomPathFailTick > 4)
 
                                 if canUseCustomPaths then
-                                    local requiredHeightCheck = math.max(20, targetPos.Y - currentPos.Y + 5)
-
-                                    -- LOGIC อัปเกรด: เช็คเพดาน ไม่ว่าระยะจะไกลแค่ไหน ถ้าชนเพดาน(ใต้ตึก) ก็เริ่มลัดเลาะเลย
-                                    if checkCeilingAround(currentPos, requiredHeightCheck) then
-                                        local edgeStart = crossScanForEdge(currentPos, requiredHeightCheck, targetPos)
-                                        if edgeStart then
-                                            _G.TraceState.Active = true
-                                            _G.TraceState.Locked = true
-                                            _G.TraceState.LockedTargetY = targetPos.Y 
-                                            
-                                            _G.TraceState.Phase = "MoveToEdge"
-                                            _G.TraceState.TargetPos = edgeStart
-                                            _G.TraceState.StartPos = currentPos
-                                            _G.TraceState.Visited = {}
-                                            _G.TraceState.Points = {}
-                                            _G.TraceState.StepCount = 0
-                                            _G.TraceState.LastMoveTick = os.clock()
-                                        end
-                                    else
-                                        -- ถ้าไม่ได้อยู่ใต้เพดาน และยังอยู่ไกล (X,Z > 15) ให้วิ่งแนวนอนเข้าหา
-                                        if hDist > 15 then
-                                            local flatTargetPos = Vector3.new(targetPos.X, currentPos.Y, targetPos.Z)
-                                            updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(0, 255, 255))
-                                            moveWithAvoidance(myHuman, flatTargetPos)
+                                    if hDist < 15 then
+                                        local requiredHeightCheck = math.max(20, targetPos.Y - currentPos.Y + 5)
+                                        
+                                        if checkCeilingAround(currentPos, requiredHeightCheck) then
+                                            local edgeStart = crossScanForEdge(currentPos, requiredHeightCheck, targetPos)
+                                            if edgeStart then
+                                                _G.TraceState.Active = true
+                                                _G.TraceState.Locked = true
+                                                _G.TraceState.LockedTargetY = targetPos.Y 
+                                                
+                                                _G.TraceState.Phase = "MoveToEdge"
+                                                _G.TraceState.TargetPos = edgeStart
+                                                _G.TraceState.StartPos = currentPos
+                                                _G.TraceState.Visited = {}
+                                                _G.TraceState.Points = {}
+                                                _G.TraceState.StepCount = 0
+                                                _G.TraceState.LastMoveTick = os.clock()
+                                            end
                                         else
-                                            -- ถ้าเข้าใกล้ (X,Z < 15) และไม่ติดเพดาน แปลว่าอยู่ข้างๆ ตึก -> เริ่มปีน
                                             currentWaypoints = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
                                             if #currentWaypoints > 0 then
                                                 isFollowingCustomPath = true
                                                 currentWaypointIndex = 1
                                             end
                                         end
+                                    else
+                                        local flatTargetPos = Vector3.new(targetPos.X, currentPos.Y, targetPos.Z)
+                                        updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(0, 255, 255))
+                                        moveWithAvoidance(myHuman, flatTargetPos)
                                     end
                                 else
                                     isProbing = false
