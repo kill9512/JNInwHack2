@@ -35,9 +35,11 @@ _G.PatrolIndex = 1
 -- ระบบความจำสถานที่ (Building Memory)
 _G.BuildingMemories = _G.BuildingMemories or {}
 
--- สถานะระบบลัดเลาะขอบ
+-- สถานะระบบลัดเลาะขอบ (เพิ่ม Locked และ LockedTargetXZZone)
 _G.TraceState = {
     Active = false,
+    Locked = false,
+    LockedTargetXZZone = nil,
     Phase = "None",
     TargetPos = nil,
     StartPos = nil,
@@ -57,6 +59,20 @@ local function clearVisuals()
     end
 end
 
+-- ฟังก์ชันล้างบล็อกลัดเลาะที่ยังไม่เสร็จสมบูรณ์
+local function clearIncompleteTrace()
+    for _, v in pairs(workspace.Terrain:GetChildren()) do
+        if string.find(v.Name, "TraceTrail_") then v:Destroy() end
+    end
+    _G.TraceState.Active = false
+    _G.TraceState.Locked = false
+    _G.TraceState.LockedTargetXZZone = nil
+    _G.TraceState.Phase = "None"
+    _G.TraceState.StepCount = 0
+    _G.TraceState.Visited = {}
+    _G.TraceState.Points = {}
+end
+
 local function updateDebug(name, startPos, endPos, color)
     if not debugEnabled then return end
     local line = workspace.Terrain:FindFirstChild(name) or Instance.new("LineHandleAdornment")
@@ -73,7 +89,7 @@ local function drawMemoryPillars()
     if not debugEnabled then return end
     
     for i, mem in ipairs(_G.BuildingMemories) do
-        -- วาด Bounding Box สีเขียว
+        -- วาด Bounding Box สีเขียว (สิ่งที่วาดเสร็จสมบูรณ์แล้ว)
         local nameArea = "MemArea_"..i
         local a = Instance.new("Part")
         a.Name = nameArea
@@ -183,7 +199,6 @@ end
 
 local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
     local step = 6
-    -- เช็ค 8 ทิศทาง (รวมมุมทแยง) เพื่อให้ไต่ขอบตึกได้ทุกรูปแบบ
     local neighbors = { 
         Vector3.new(step,0,0), Vector3.new(-step,0,0), 
         Vector3.new(0,0,step), Vector3.new(0,0,-step),
@@ -199,7 +214,7 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
         local floorY = getRealFloorY(testXZ)
         local testPos = Vector3.new(testXZ.X, floorY, testXZ.Z)
         
-        -- เช็คว่า Loop กลับมาเจอจุดเริ่มต้นหรือยัง (สร้าง Bounding Box)
+        -- เช็คการ Loop Closed
         if st.StepCount > 10 and st.StartPos then
             local distToStart = (Vector2.new(testPos.X, testPos.Z) - Vector2.new(st.StartPos.X, st.StartPos.Z)).Magnitude
             if distToStart < 4 then
@@ -207,17 +222,17 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
             end
         end
 
+        -- ป้องกันการเดินทับรอย (เพิ่มรัศมีเป็น 3 กันเจอบล็อกเหลื่อมซ้อนกัน)
         local visited = false
         for _, v in ipairs(st.Visited) do
             local distXZ = (Vector2.new(v.X, v.Z) - Vector2.new(testPos.X, testPos.Z)).Magnitude
-            if distXZ < 2 then visited = true; break end
+            if distXZ < 3.0 then visited = true; break end
         end
 
         if not visited then
             local isWalkable = not workspace:Raycast(testPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams)
             if isWalkable then
                 local isNearWall = false
-                -- เช็คบล็อกข้างๆ ใน 4 ทิศหลัก ว่าเป็นกำแพง(เพดานเขียว)ไหม
                 local wallChecks = { Vector3.new(step,0,0), Vector3.new(-step,0,0), Vector3.new(0,0,step), Vector3.new(0,0,-step) }
                 for _, subOff in ipairs(wallChecks) do
                     local wallCheckPos = testPos + subOff
@@ -236,21 +251,31 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
     local bestStep = nil
     local bestScore = -math.huge
     
-    -- ลอจิกรักษาความต่อเนื่อง (เดินไปข้างหน้าตามแนวเดิม ไม่หันกลับ)
+    -- Anti-Backtrack Logic (ตรวจสอบทิศทางเดินหน้า)
     local fwdDir = Vector3.new(1, 0, 0)
     if #st.Visited >= 2 then
-        fwdDir = (currentPos - st.Visited[#st.Visited-1]).Unit
+        local p1 = st.Visited[#st.Visited-1]
+        local p2 = currentPos
+        fwdDir = (Vector3.new(p2.X, 0, p2.Z) - Vector3.new(p1.X, 0, p1.Z)).Unit
+        if fwdDir.Magnitude == 0 then fwdDir = Vector3.new(1,0,0) end
     end
 
     for _, pos in ipairs(validSteps) do
-        local dirToPos = (pos - currentPos).Unit
-        local score = fwdDir:Dot(dirToPos) -- หาบล็อกที่ทิศทางตรงกับแนวการเดินมากที่สุด
-        if score > bestScore then
-            bestScore = score
-            bestStep = pos
+        local dirToPos = (Vector3.new(pos.X, 0, pos.Z) - Vector3.new(currentPos.X, 0, currentPos.Z)).Unit
+        if dirToPos.Magnitude == 0 then dirToPos = Vector3.new(1,0,0) end
+        
+        local score = fwdDir:Dot(dirToPos)
+        
+        -- ถ้าเลี้ยวหักศอกแคบมากๆ จนเหมือนกลับหลังหัน (Score < -0.5) ให้คัดทิ้ง
+        if score > -0.5 then
+            if score > bestScore then
+                bestScore = score
+                bestStep = pos
+            end
         end
     end
 
+    -- ถ้าหาทางเดินหน้าไม่ได้เลยจริงๆ (ตัน) -> ปล่อยให้คืนค่า nil เพื่อทำลายตัวเอง
     if debugEnabled then
         for _, gPos in ipairs(visualGreens) do
             local pg = Instance.new("Part")
@@ -408,9 +433,9 @@ MoveSection:NewToggle("Enable Follow", "Start Logic", function(s)
     if not s then 
         currentWaypoints = {}
         clearVisuals()
+        clearIncompleteTrace()
         isProbing = false
         isFollowingCustomPath = false 
-        _G.TraceState.Active = false
     end
 end)
 MoveSection:NewToggle("Show Path", "Visuals", function(s) 
@@ -422,9 +447,7 @@ MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s e
 MoveSection:NewButton("Clear Memory", "ล้างความจำตึกและรอยทาง", function() 
     _G.BuildingMemories = {} 
     drawMemoryPillars()
-    for _, v in pairs(workspace.Terrain:GetChildren()) do
-        if string.find(v.Name, "TraceTrail_") then v:Destroy() end
-    end
+    clearIncompleteTrace()
 end)
 
 -- --- MAIN LOOP ---
@@ -482,11 +505,12 @@ task.spawn(function()
                 if (currentPos - lastPosition).Magnitude < 1.0 then 
                     if os.clock() - lastMoveTick > 1.5 then 
                         isStuck = true
-                        if isFollowingCustomPath or _G.TraceState.Active then
+                        if isFollowingCustomPath then
                             _G.CustomPathFailTick = os.clock() 
                             isFollowingCustomPath = false
                             currentWaypoints = {}
                         end
+                        -- ไม่ให้ isStuck ทำลาย TraceState หาก Locked = true ปล่อยให้ Trace จัดการตัวเอง
                     end
                 else
                     lastPosition = currentPos
@@ -494,11 +518,23 @@ task.spawn(function()
                 end
 
                 -- =======================================================
-                -- [โหมดตรวจสอบ Bounding Box Area (เฉพาะเมื่อเป้าหมายอยู่ในกล่อง)]
+                -- [ตรวจสอบเงื่อนไขการออกจากโหมดลัดเลาะกลางคัน]
+                -- =======================================================
+                if _G.TraceState.Locked and _G.TraceState.LockedTargetXZZone then
+                    local targetFlat = Vector3.new(targetPos.X, 0, targetPos.Z)
+                    local zoneDist = (targetFlat - _G.TraceState.LockedTargetXZZone).Magnitude
+                    
+                    -- ถ้าเป้าหมายเดินหนีโซนนี้ไปไกลเกิน 25 บล็อก -> ยกเลิกการลัดเลาะแล้วล้างขยะ
+                    if zoneDist > 25 or math.abs(vDist) < 5 then
+                        clearIncompleteTrace()
+                    end
+                end
+
+                -- =======================================================
+                -- [โหมดตรวจสอบ Bounding Box Area]
                 -- =======================================================
                 local inMemory = nil
                 for _, mem in ipairs(_G.BuildingMemories) do
-                    -- เช็คว่าผู้เล่นเป้าหมายอยู่ในอาณาเขตกล่องหรือไม่
                     if targetPos.X >= mem.MinX - 15 and targetPos.X <= mem.MaxX + 15 and
                        targetPos.Z >= mem.MinZ - 15 and targetPos.Z <= mem.MaxZ + 15 then
                         inMemory = mem
@@ -508,7 +544,6 @@ task.spawn(function()
 
                 if inMemory then
                     if not inMemory.HasPillar then
-                        -- เดินตระเวนรอบ Bounding Box หาจุดปีน
                         local corners = {
                             Vector3.new(inMemory.MinX - 5, currentPos.Y, inMemory.MinZ - 5),
                             Vector3.new(inMemory.MaxX + 5, currentPos.Y, inMemory.MinZ - 5),
@@ -523,27 +558,23 @@ task.spawn(function()
                         end
                         moveWithAvoidance(myHuman, targetCorner)
 
-                        -- ยิงเรดาร์จำลองการปีนหาความสูง
                         local testWps = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
                         local highestY = currentPos.Y
                         for _, wp in ipairs(testWps) do 
                             if wp.Position.Y > highestY then highestY = wp.Position.Y end 
                         end
                         
-                        -- หากปีนถึงเป้าหมายได้ ให้ปักเสาฟ้าและจำจุดปีน
                         if highestY >= inMemory.TargetY - 10 then
                             inMemory.HasPillar = true
                             inMemory.ClimbSpot = currentPos
                         end
                     else
-                        -- มีเสาฟ้าแล้ว พุ่งเข้าหาเสาฟ้า
                         local distToPillar = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(inMemory.ClimbSpot.X, 0, inMemory.ClimbSpot.Z)).Magnitude
                         
                         if distToPillar > 3 then
                             updateDebug("DirectTrace", currentPos, inMemory.ClimbSpot, Color3.fromRGB(0, 0, 255))
                             moveWithAvoidance(myHuman, inMemory.ClimbSpot)
                         else
-                            -- ถึงเสา หันหน้าเข้าตึกและปีน
                             local lookPos = Vector3.new(inMemory.Center.X, currentPos.Y, inMemory.Center.Z)
                             myRoot.CFrame = CFrame.lookAt(currentPos, lookPos)
                             
@@ -562,9 +593,9 @@ task.spawn(function()
                 end
 
                 -- =======================================================
-                -- [โหมดลัดเลาะขอบ (Edge Tracing Phase) เดินจนครบรอบ]
+                -- [โหมดลัดเลาะขอบ (Edge Tracing Phase) - Locked]
                 -- =======================================================
-                if _G.TraceState.Active then
+                if _G.TraceState.Locked then
                     local st = _G.TraceState
                     local flatTarget = Vector3.new(st.TargetPos.X, currentPos.Y, st.TargetPos.Z)
                     local distToTarget = (flatTarget - currentPos).Magnitude
@@ -583,7 +614,7 @@ task.spawn(function()
                             local reqH = math.max(20, targetPos.Y - currentPos.Y + 5)
                             local nextData = getNextEdgeTracingStep(currentPos, reqH, targetPos)
                             
-                            -- ถ้าตรวจพบว่าวนกลับมาเจอบล็อกสีเหลืองแรก (Loop Closed)
+                            -- เดินจนบรรจบรอบสร้าง Bounding Box
                             if nextData and nextData.closedLoop then
                                 local minX, maxX = math.huge, -math.huge
                                 local minZ, maxZ = math.huge, -math.huge
@@ -602,7 +633,7 @@ task.spawn(function()
                                     ClimbSpot = nil,
                                     TargetY = targetPos.Y
                                 })
-                                st.Active = false
+                                clearIncompleteTrace() -- เก็บกวาดสิ่งที่วาดไว้ แล้วให้ Bounding box แสดงผลแทน
                                 return
                             end
 
@@ -610,15 +641,17 @@ task.spawn(function()
                                 st.TargetPos = nextData.pos
                                 st.LastMoveTick = os.clock()
                             else
-                                st.Active = false
+                                -- ตันจริงๆ ล้างทิ้ง
+                                clearIncompleteTrace()
                             end
                         end
                     else
                         moveWithAvoidance(myHuman, flatTarget)
-                        -- ให้เวลายาวขึ้น (10 วิ) ป้องกันการหลุดโหมดลัดเลาะตอนเจอก้อนหิน
-                        if os.clock() - st.LastMoveTick > 10 then st.Active = false end 
+                        if os.clock() - st.LastMoveTick > 10 then 
+                            clearIncompleteTrace() -- เดินไม่ถึงสักที (บัคติดขัดนานไป) ยกเลิกการลัดเลาะ
+                        end 
                     end
-                    return
+                    return -- Return เสมอเพื่อให้ระบบ State Lock ทำงานสมบูรณ์
                 end
                 -- =======================================================
 
@@ -673,7 +706,7 @@ task.spawn(function()
                         updateDebug("DirectTrace", currentPos, targetPos, Color3.fromRGB(0, 255, 0)) 
                         moveWithAvoidance(myHuman, targetPos)
                         
-                    -- [2] มองไม่เห็น + อยู่สูงกว่า (โหมด Drop + หลบกำแพงมุมหักศอก)
+                    -- [2] มองไม่เห็น + อยู่สูงกว่า (Drop Mode)
                     elseif vDist < -5 and not isStuck then
                         local flatTargetPos = Vector3.new(targetPos.X, currentPos.Y, targetPos.Z)
                         local flatDir = (flatTargetPos - currentPos).Unit
@@ -682,7 +715,6 @@ task.spawn(function()
                             local fwdRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), flatDir * 6, rayParams)
                             
                             if fwdRay then
-                                -- ใช้ Dodge Memory ป้องกันการสั่นยึกยักที่มุมตึก
                                 _G.DodgeMem = _G.DodgeMem or {Dir = Vector3.new(), Expire = 0}
                                 local dodgeDir
                                 
@@ -699,7 +731,6 @@ task.spawn(function()
                                     elseif not leftRay then dodgeDir = leftDir
                                     else dodgeDir = (CFrame.Angles(0, math.rad(120), 0) * flatDir).Unit end 
                                     
-                                    -- ล็อกทิศทางการหักหลบไว้ 0.8 วิ เพื่อให้เลี้ยวพ้นมุม
                                     _G.DodgeMem = {Dir = dodgeDir, Expire = os.clock() + 0.8}
                                 end
                                 
@@ -744,7 +775,7 @@ task.spawn(function()
                                     end
                                 end
                             else
-                                -- [4] ตรวจเพดานและลัดเลาะ (ต้องเข้าใกล้เป้าหมายในระยะแกน X, Z < 15 ก่อน)
+                                -- [4] เดินอ้อมตัน (isStuck) ตรวจเพดานและล็อกเข้าโหมดลัดเลาะ
                                 local canUseCustomPaths = (_G.CustomPathFailTick == nil) or (os.clock() - _G.CustomPathFailTick > 4)
 
                                 if canUseCustomPaths then
@@ -754,7 +785,11 @@ task.spawn(function()
                                         if checkCeilingAround(currentPos, requiredHeightCheck) then
                                             local edgeStart = crossScanForEdge(currentPos, requiredHeightCheck, targetPos)
                                             if edgeStart then
+                                                -- เปิดใช้งานและทำการ "ล็อก" สถานะโหมดลัดเลาะ
                                                 _G.TraceState.Active = true
+                                                _G.TraceState.Locked = true
+                                                _G.TraceState.LockedTargetXZZone = Vector3.new(targetPos.X, 0, targetPos.Z)
+                                                
                                                 _G.TraceState.Phase = "MoveToEdge"
                                                 _G.TraceState.TargetPos = edgeStart
                                                 _G.TraceState.StartPos = currentPos
@@ -771,7 +806,6 @@ task.spawn(function()
                                             end
                                         end
                                     else
-                                        -- ถ้าระยะห่าง X,Z ยังเกิน 15 ให้เดินตรงแนวราบเข้าไปหาเป้าหมายก่อน
                                         local flatTargetPos = Vector3.new(targetPos.X, currentPos.Y, targetPos.Z)
                                         updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(0, 255, 255))
                                         moveWithAvoidance(myHuman, flatTargetPos)
