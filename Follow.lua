@@ -49,9 +49,7 @@ _G.TraceState = {
     MaxDistFromStart = 0,
     LastMoveTick = 0,
     StuckTick = 0, 
-    LastFwdDir = nil,
-    ForcedDodgeDir = nil, -- [NEW] จำทิศทางที่หลบล่าสุด
-    DodgeStepCount = 0    -- [NEW] นับก้าวที่กำลังหลบ
+    LastFwdDir = nil 
 }
 
 -- --- Debug Visualization ---
@@ -79,8 +77,6 @@ local function clearIncompleteTrace()
     _G.TraceState.MaxDistFromStart = 0
     _G.TraceState.StuckTick = 0
     _G.TraceState.LastFwdDir = nil
-    _G.TraceState.ForcedDodgeDir = nil
-    _G.TraceState.DodgeStepCount = 0
 end
 
 local function updateDebug(name, startPos, endPos, color)
@@ -253,18 +249,6 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
         end
     end
 
-    -- [NEW] ถ้ากำลังอยู่ในช่วง Forced Dodge ให้บังคับเดินไปทิศเดิม 1-2 ก้าว
-    if st.ForcedDodgeDir and st.DodgeStepCount > 0 then
-        local dodgePos = currentPos + (st.ForcedDodgeDir * 6)
-        dodgePos = Vector3.new(dodgePos.X, getRealFloorY(dodgePos), dodgePos.Z)
-        st.DodgeStepCount = st.DodgeStepCount - 1
-        
-        if st.DodgeStepCount == 0 then
-            st.ForcedDodgeDir = nil -- เลิกบังคับหลบ กลับไปสแกนหาบล็อกปกติ
-        end
-        return {pos = dodgePos, closedLoop = false}
-    end
-
     for _, step in ipairs(radiiToTry) do
         local neighbors = { 
             Vector3.new(step,0,0), Vector3.new(-step,0,0), 
@@ -307,9 +291,7 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                 local pathBlocked = false
                 if dirToTest.Magnitude > 0 then
                     local bodyHit = workspace:Raycast(currentPos + Vector3.new(0, 3.0, 0), dirToTest * distToTest, rayParams)
-                    if bodyHit then
-                        pathBlocked = true
-                    end
+                    if bodyHit then pathBlocked = true end
                 end
 
                 if not pathBlocked then
@@ -696,6 +678,26 @@ task.spawn(function()
                 -- =======================================================
                 if _G.TraceState.Locked then
                     local st = _G.TraceState
+                    
+                    if st.Phase == "ForcedDodgeStep2" then
+                        st.Phase = "Tracing"
+                        local dodgePos = currentPos + (st.LastFwdDir * 8)
+                        dodgePos = Vector3.new(dodgePos.X, getRealFloorY(dodgePos), dodgePos.Z)
+                        st.TargetPos = dodgePos
+                        st.LastMoveTick = os.clock()
+                        
+                        if debugEnabled then
+                            local pg = Instance.new("Part")
+                            pg.Name = "TraceTrail_Green"
+                            pg.Size = Vector3.new(2, 0.5, 2)
+                            pg.Position = dodgePos + Vector3.new(0, 2, 0)
+                            pg.Anchored = true; pg.CanCollide = false; pg.CanQuery = false
+                            pg.Transparency = 0.2; pg.Color = Color3.fromRGB(0, 255, 0)
+                            pg.Material = Enum.Material.Neon; pg.Parent = workspace.Terrain
+                        end
+                        return
+                    end
+                    
                     local flatTarget = Vector3.new(st.TargetPos.X, currentPos.Y, st.TargetPos.Z)
                     local distToTarget = (flatTarget - currentPos).Magnitude
                     
@@ -709,9 +711,9 @@ task.spawn(function()
                         table.insert(st.Points, st.TargetPos)
                         st.StepCount = st.StepCount + 1
 
-                        if st.Phase == "MoveToEdge" then
+                        if st.Phase == "MoveToEdge" or st.Phase == "ForcedDodgeStep1" then
                             st.Phase = "Tracing"
-                            st.StartPos = currentPos
+                            if st.Phase == "MoveToEdge" then st.StartPos = currentPos end
                         end
 
                         if st.Phase == "Tracing" then
@@ -745,10 +747,10 @@ task.spawn(function()
                                 st.LastMoveTick = os.clock()
                                 st.StuckTick = 0
                             else
-                                -- [แก้ไข] ไม่เตะหมุนมั่วแล้ว แต่จะจำทิศ Forced Dodge ไว้
+                                -- [NEW] ลอจิกแก้ตัน ยืนนิ่งคิด 2.5 วิ แล้วมุดเข้าตึก 2 ก้าวติดกัน!
                                 if st.StuckTick == 0 then st.StuckTick = os.clock() end
                                 
-                                if os.clock() - st.StuckTick > 5 then
+                                if os.clock() - st.StuckTick > 2.5 then
                                     local fwd = st.LastFwdDir or Vector3.new(1,0,0)
                                     local reqHeight = math.max(20, targetPos.Y - currentPos.Y + 5)
                                     
@@ -766,16 +768,24 @@ task.spawn(function()
                                     local dodgePos = currentPos + (dodgeDir * 8)
                                     dodgePos = Vector3.new(dodgePos.X, getRealFloorY(dodgePos), dodgePos.Z)
                                     
+                                    st.Phase = "ForcedDodgeStep1" -- ล็อกให้ก้าวไปทางเดียวกันอีกรอบ
                                     st.TargetPos = dodgePos
                                     st.LastFwdDir = dodgeDir
-                                    st.ForcedDodgeDir = dodgeDir -- [NEW] บังคับจำทิศทางนี้ไว้ใช้ต่อเนื่อง
-                                    st.DodgeStepCount = 2        -- [NEW] ให้มันฝืนเดินไปทางนี้สัก 2 ก้าว
-                                    
                                     st.StuckTick = 0
                                     st.LastMoveTick = os.clock()
+                                    
+                                    if debugEnabled then
+                                        local pg = Instance.new("Part")
+                                        pg.Name = "TraceTrail_Green"
+                                        pg.Size = Vector3.new(2, 0.5, 2)
+                                        pg.Position = dodgePos + Vector3.new(0, 2, 0)
+                                        pg.Anchored = true; pg.CanCollide = false; pg.CanQuery = false
+                                        pg.Transparency = 0.2; pg.Color = Color3.fromRGB(0, 255, 0)
+                                        pg.Material = Enum.Material.Neon; pg.Parent = workspace.Terrain
+                                    end
                                 else
-                                    -- ลบการ CFrame หมุนตัวออก ปล่อยให้มันค่อยๆ หันเอง
-                                    forceJump(myHuman)
+                                    -- ยืนนิ่งๆ ไม่หมุนเป็นลูกข่าง
+                                    myHuman:MoveTo(currentPos) 
                                 end
                             end
                         end
@@ -875,12 +885,6 @@ task.spawn(function()
                                 isFollowingCustomPath = false
                                 updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0))
                                 moveWithAvoidance(myHuman, flatTargetPos)
-
-                                local chestRay = workspace:Raycast(currentPos, flatDir * 4, rayParams)
-                                local floorDropRay = workspace:Raycast(currentPos + (flatDir * 4) + Vector3.new(0, 1, 0), Vector3.new(0, -10, 0), rayParams)
-                                if chestRay and chestRay.Distance < 3 and not floorDropRay then
-                                    forceJump(myHuman)
-                                end
                             end
                         end
                         
@@ -926,7 +930,7 @@ task.spawn(function()
                                                 _G.TraceState.Points = {}
                                                 _G.TraceState.StepCount = 0
                                                 _G.TraceState.MaxDistFromStart = 0
-                                                _G.TraceState.FailCount = 0
+                                                _G.TraceState.StuckTick = 0
                                                 _G.TraceState.LastFwdDir = nil
                                                 _G.TraceState.LastMoveTick = os.clock()
                                             end
