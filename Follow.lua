@@ -130,13 +130,13 @@ local function forceJump(hum)
     end
 end
 
--- [อัปเกรด]: รวมระบบ Dodge จากโหมด Drop และล็อกระยะเรดาร์ให้กระโดดทัน
+-- [อัปเกรด]: เพิ่ม Micro-Dodge Memory ลดอาการสั่นยึกยัก
 local function moveWithAvoidance(humanoid, pos)
     local hrp = humanoid.Parent:FindFirstChild("HumanoidRootPart")
     if hrp then
         local flatPos = Vector3.new(pos.X, hrp.Position.Y, pos.Z)
         local dir = (flatPos - hrp.Position).Unit
-        local checkDist = 4 -- ฟิกซ์ระยะเรดาร์ไว้ที่ 4 บล็อกเสมอเพื่อไม่ให้ลืมกระโดด
+        local checkDist = 4 
         local targetWalkPos = pos
 
         if dir.Magnitude > 0 then
@@ -148,12 +148,12 @@ local function moveWithAvoidance(humanoid, pos)
                 local ceilRay = workspace:Raycast(hrp.Position + (dir * 2), Vector3.new(0, 5, 0), rayParams)
                 
                 if headRay or ceilRay then
-                    -- ของใหญ่ หรือ มีขอบประตูขวางข้างบน -> ใช้ DodgeMem หักเลี้ยวหลบ!
-                    _G.DodgeMem = _G.DodgeMem or {Dir = Vector3.new(), Expire = 0}
+                    -- ของใหญ่ หรือ มีขอบประตูขวางข้างบน -> ใช้ Micro-DodgeMem หักเลี้ยวหลบเนียนๆ!
+                    _G.MicroDodgeMem = _G.MicroDodgeMem or {Dir = Vector3.new(), Expire = 0}
                     local dodgeDir
                     
-                    if os.clock() < _G.DodgeMem.Expire then
-                        dodgeDir = _G.DodgeMem.Dir
+                    if os.clock() < _G.MicroDodgeMem.Expire then
+                        dodgeDir = _G.MicroDodgeMem.Dir
                     else
                         local rightDir = (CFrame.Angles(0, math.rad(-60), 0) * dir).Unit
                         local leftDir = (CFrame.Angles(0, math.rad(60), 0) * dir).Unit
@@ -163,13 +163,12 @@ local function moveWithAvoidance(humanoid, pos)
                         
                         if not rightRay then dodgeDir = rightDir
                         elseif not leftRay then dodgeDir = leftDir
-                        else dodgeDir = (CFrame.Angles(0, math.rad(120), 0) * dir).Unit end 
+                        else dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * dir).Unit end 
                         
-                        _G.DodgeMem = {Dir = dodgeDir, Expire = os.clock() + 0.8}
+                        _G.MicroDodgeMem = {Dir = dodgeDir, Expire = os.clock() + 0.6} -- จำไว้ 0.6 วิ ให้เดินพ้นเสาเล็กๆ
                     end
                     targetWalkPos = hrp.Position + (dodgeDir * 6)
                 else
-                    -- ของเตี้ยๆ และไม่มีอะไรขวางหัว -> โดดข้ามเลย
                     forceJump(humanoid)
                 end
             end
@@ -244,7 +243,6 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
         if fwdDir.Magnitude == 0 then fwdDir = Vector3.new(1,0,0) end
     end
 
-    -- ปล่อยให้ moveWithAvoidance รับจบเรื่องหลบหลีก ที่นี่แค่หาบล็อกที่อยู่ข้างหน้าตามแนวขอบตึกก็พอ
     for _, step in ipairs(radiiToTry) do
         local neighbors = { 
             Vector3.new(step,0,0), Vector3.new(-step,0,0), 
@@ -277,19 +275,28 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
             end
 
             if not visited then
-                local isWalkable = not workspace:Raycast(testPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams)
-                if isWalkable then
-                    local isNearWall = false
-                    local wChecks = { Vector3.new(step,0,0), Vector3.new(-step,0,0), Vector3.new(0,0,step), Vector3.new(0,0,-step) }
-                    for _, subOff in ipairs(wChecks) do
-                        local wallCheckPos = testPos + subOff
-                        if workspace:Raycast(wallCheckPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams) then 
-                            isNearWall = true 
-                            table.insert(visualGreens, wallCheckPos)
-                            break
+                -- [แก้บัคสำคัญ]: ยิงเรดาร์ Line-of-Sight เช็คว่ามีท่อนไม้ใหญ่ขวางก่อนถึงบล็อกนั้นไหม
+                local dirToTest = (testPos - currentPos).Unit
+                local distToTest = (testPos - currentPos).Magnitude
+                if dirToTest.Magnitude > 0 then
+                    local headObstacleRay = workspace:Raycast(currentPos + Vector3.new(0, 3.5, 0), dirToTest * distToTest, rayParams)
+                    
+                    if not headObstacleRay then -- ถ้าระดับหัวโล่ง (ไม่มีท่อนไม้ขวาง) ให้เช็คต่อ
+                        local isWalkable = not workspace:Raycast(testPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams)
+                        if isWalkable then
+                            local isNearWall = false
+                            local wChecks = { Vector3.new(step,0,0), Vector3.new(-step,0,0), Vector3.new(0,0,step), Vector3.new(0,0,-step) }
+                            for _, subOff in ipairs(wChecks) do
+                                local wallCheckPos = testPos + subOff
+                                if workspace:Raycast(wallCheckPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams) then 
+                                    isNearWall = true 
+                                    table.insert(visualGreens, wallCheckPos)
+                                    break
+                                end
+                            end
+                            if isNearWall then table.insert(validSteps, testPos) end
                         end
                     end
-                    if isNearWall then table.insert(validSteps, testPos) end
                 end
             end
         end
@@ -747,7 +754,7 @@ task.spawn(function()
                 end
 
                 -- =======================================================
-                -- ลำดับการตรวจสอบหลัก (ไม่ใช้ moveWithAvoidance ตรงๆ ในโหมด Drop อีกต่อไป)
+                -- ลำดับการตรวจสอบหลัก
                 -- =======================================================
                 if hDist > followDistance or math.abs(vDist) > 5 then
                     
@@ -766,21 +773,42 @@ task.spawn(function()
                         moveWithAvoidance(myHuman, targetPos)
                         
                     elseif vDist < -5 and not isStuck then
-                        -- โหมด Drop แบบใช้ moveWithAvoidance จัดการทุกอย่าง (มันจะหักหลบและเช็คพื้นให้เอง)
                         local flatTargetPos = Vector3.new(targetPos.X, currentPos.Y, targetPos.Z)
                         local flatDir = (flatTargetPos - currentPos).Unit
                         
-                        isProbing = false
-                        currentWaypoints = {}
-                        isFollowingCustomPath = false
-                        updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0))
-                        moveWithAvoidance(myHuman, flatTargetPos)
-
                         if flatDir.Magnitude > 0 then
-                            local chestRay = workspace:Raycast(currentPos, flatDir * 4, rayParams)
-                            local floorDropRay = workspace:Raycast(currentPos + (flatDir * 4) + Vector3.new(0, 1, 0), Vector3.new(0, -10, 0), rayParams)
-                            if chestRay and chestRay.Distance < 3 and not floorDropRay then
-                                forceJump(myHuman)
+                            -- [อัปเกรด]: เพิ่มเวลาความจำ Drop Mode เป็น 1.5 วินาที หักมุม 75 องศาให้ตีวงกว้างขึ้น
+                            local fwdRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), flatDir * 6, rayParams)
+                            
+                            if fwdRay then
+                                _G.DodgeMem = _G.DodgeMem or {Dir = Vector3.new(), Expire = 0}
+                                local dodgeDir
+                                
+                                if os.clock() < _G.DodgeMem.Expire then
+                                    dodgeDir = _G.DodgeMem.Dir
+                                else
+                                    local rightDir = (CFrame.Angles(0, math.rad(-75), 0) * flatDir).Unit
+                                    local leftDir = (CFrame.Angles(0, math.rad(75), 0) * flatDir).Unit
+                                    
+                                    local rightRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), rightDir * 10, rayParams)
+                                    local leftRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), leftDir * 10, rayParams)
+                                    
+                                    if not rightRay then dodgeDir = rightDir
+                                    elseif not leftRay then dodgeDir = leftDir
+                                    else dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * flatDir).Unit end 
+                                    
+                                    _G.DodgeMem = {Dir = dodgeDir, Expire = os.clock() + 1.5}
+                                end
+                                
+                                local dodgePos = currentPos + (dodgeDir * 10)
+                                updateDebug("DirectTrace", currentPos, dodgePos, Color3.fromRGB(255, 128, 0))
+                                moveWithAvoidance(myHuman, dodgePos)
+                            else
+                                isProbing = false
+                                currentWaypoints = {}
+                                isFollowingCustomPath = false
+                                updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0))
+                                moveWithAvoidance(myHuman, flatTargetPos)
                             end
                         end
                         
