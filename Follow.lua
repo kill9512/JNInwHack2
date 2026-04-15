@@ -30,8 +30,9 @@ local lastMoveTick = os.clock()
 local randomTarget = nil 
 
 _G.CustomPathFailTick = 0 
+_G.PatrolIndex = 1 
 
--- ระบบความจำสถานที่ 
+-- ระบบความจำสถานที่
 _G.BuildingMemories = _G.BuildingMemories or {}
 
 -- --- Debug Visualization ---
@@ -165,14 +166,17 @@ local function checkCeilingAround(pos, height)
 end
 
 -- =========================================================================
--- [วิชาเถาวัลย์ของแท้] ไม่ปีนอากาศ ต้องมีกำแพงให้เกาะตั้งแต่พื้นยันยอด!
+-- [ร่างเทพวิชาเถาวัลย์] Center Snap: หาแกนกลางวัตถุแล้วปักเสาฟ้าให้ตรงเป๊ะ!
 -- =========================================================================
 local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
+    local params = OverlapParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {myChar, workspace.Terrain}
+
     for _, node in ipairs(outerNodes) do
         local heightToTarget = targetY - node.Y
         if heightToTarget < 5 then continue end 
         
-        -- สร้างทิศทางเช็คกำแพง: 4 ทิศหลัก + ทิศพุ่งเข้าหาแกนกลางตึก
         local dirToCenter = (Vector3.new(centerPos.X, node.Y, centerPos.Z) - node).Unit
         if dirToCenter.Magnitude == 0 then dirToCenter = Vector3.new(1,0,0) end
         
@@ -182,60 +186,56 @@ local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
             Vector3.new(0,0,1), Vector3.new(0,0,-1)
         }
         
-        local foundValidClimb = false
-        local bestClimbPos = nil
-        
         for _, dir in ipairs(dirs) do
-            -- ขั้นที่ 1: เช็คว่าที่ระดับฐาน (สูงจากพื้นนิดนึง) มีกำแพง/บันไดให้เริ่มเกาะไหม
-            local baseWallRay = workspace:Raycast(node + Vector3.new(0, 2, 0), dir * 6, rayParams)
+            local baseWallRay = workspace:Raycast(node + Vector3.new(0, 2, 0), dir * 8, rayParams)
             
             if baseWallRay and baseWallRay.Instance then
                 local p = baseWallRay.Instance
                 local topY = p.Position.Y + (p.Size.Y/2)
                 local bottomY = p.Position.Y - (p.Size.Y/2)
                 
-                -- กรณีที่ 1: เป็นชิ้นเดียวลากยาวตั้งแต่พื้นยันยอด (เช่น กำแพงตึกใหญ่ๆ, ทรัสยาวๆ)
+                local canClimb = false
                 if topY >= targetY - 10 and bottomY <= node.Y + 8 then
-                    foundValidClimb = true
-                    bestClimbPos = baseWallRay.Position
-                    break
+                    canClimb = true
                 else
-                    -- กรณีที่ 2: บันได/กำแพงถูกสร้างจากหลายชิ้นต่อกัน (Micro-parts)
-                    -- ใช้วิชาเถาวัลย์ "รูด" เรดาร์ขึ้นไปบนฟ้าทีละ 5 บล็อก ตามแนวกำแพง
-                    local canClimbAllTheWay = true
                     local testY = 5
+                    canClimb = true
                     while testY < heightToTarget - 5 do
-                        local upWallRay = workspace:Raycast(node + Vector3.new(0, testY, 0), dir * 6, rayParams)
+                        local upWallRay = workspace:Raycast(node + Vector3.new(0, testY, 0), dir * 8, rayParams)
                         if not upWallRay then
-                            canClimbAllTheWay = false -- รูดขึ้นไปแล้วเจออากาศ = ขาดตอน! ปีนไม่ได้!
+                            canClimb = false 
                             break
                         end
                         testY = testY + 5
                     end
+                end
+                
+                if canClimb then
+                    -- [หัวใจสำคัญ Center Snap] ดึงแกนกลาง X, Z ของบันไดออกมาตรงๆ!
+                    local objCenter = p.Position
+                    local normal = baseWallRay.Normal
+                    local bestClimbPos
+                    local ladderCenter = Vector3.new(objCenter.X, node.Y, objCenter.Z)
                     
-                    if canClimbAllTheWay then
-                        foundValidClimb = true
-                        bestClimbPos = baseWallRay.Position
-                        break
+                    -- ถ้ากำแพงใหญ่เกินไป ให้ปักที่จุดยิงโดน (ป้องกันมุดเข้ากลางตึก)
+                    if p.Size.X > 15 or p.Size.Z > 15 then
+                        bestClimbPos = baseWallRay.Position + (normal * 2.5)
+                        ladderCenter = baseWallRay.Position - (normal * 2) 
+                    else
+                        -- ถ้าเป็นบันไดหรือเสา ให้ปักหน้า "จุดศูนย์กลาง" เป๊ะๆ!
+                        bestClimbPos = ladderCenter + (normal * 2.5)
                     end
+                    
+                    return bestClimbPos, ladderCenter
                 end
             end
         end
-        
-        if foundValidClimb and bestClimbPos then
-            -- พอหาเจอปุ๊บ ให้ถอยจุดกระโดดออกมาจากกำแพง 2.5 studs ตัวละครจะได้ไม่มุด/เดินติดกำแพง
-            local outDir = (node - bestClimbPos).Unit
-            outDir = Vector3.new(outDir.X, 0, outDir.Z)
-            if outDir.Magnitude == 0 then outDir = Vector3.new(1,0,0) end
-            
-            return bestClimbPos + (outDir * 2.5)
-        end
     end
-    return nil
+    return nil, nil
 end
 
 -- =========================================================================
--- LASER FLOOD-FILL: สแกนหาพื้นที่เขียว (ในร่ม) และพื้นที่เหลือง (ขอบตึก) ในพริบตา
+-- LASER FLOOD-FILL
 -- =========================================================================
 local function floodFillRoofInstantly(startPos, maxCheckHeight)
     local step = 6          
@@ -311,63 +311,6 @@ local function floodFillRoofInstantly(startPos, maxCheckHeight)
     end
     
     return roofNodes, outerNodes
-end
-
-local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
-    local customWaypoints = {}
-    local currentScanPos = startPos
-    local heightToClimb = targetPos.Y - startPos.Y
-    if heightToClimb < 3 then return customWaypoints end
-
-    local params = OverlapParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {myChar, tChar, workspace.Terrain}
-
-    local visited = {}
-    for jump = 1, 30 do 
-        local bestNextPos = nil
-        local bestScore = math.huge
-        local searchCenter = currentScanPos + Vector3.new(0, 6, 0)
-        local partsNearby = workspace:GetPartBoundsInRadius(searchCenter, 15, params)
-        
-        for _, part in ipairs(partsNearby) do
-            if part:IsA("BasePart") and part.CanCollide and part.Transparency < 1 then
-                local rayOrigin = part.Position + Vector3.new(0, (part.Size.Y/2) + 4, 0)
-                local downRay = workspace:Raycast(rayOrigin, Vector3.new(0, -8, 0), rayParams)
-                if downRay then
-                    local hitPos = downRay.Position
-                    local heightDiff = hitPos.Y - currentScanPos.Y
-                    if heightDiff > 0.5 and heightDiff <= 10.0 then
-                        local isVisited = false
-                        for _, v in ipairs(visited) do
-                            if (v - hitPos).Magnitude < 2.5 then isVisited = true; break end
-                        end
-                        
-                        if not isVisited then
-                            local dist2D = (Vector2.new(hitPos.X, hitPos.Z) - Vector2.new(targetPos.X, targetPos.Z)).Magnitude
-                            local score = dist2D - (heightDiff * 15)
-                            if score < bestScore then
-                                bestScore = score; bestNextPos = hitPos
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        
-        if bestNextPos then
-            table.insert(customWaypoints, {Position = bestNextPos, Action = Enum.PathWaypointAction.Jump})
-            table.insert(visited, bestNextPos)
-            currentScanPos = bestNextPos
-            if currentScanPos.Y >= targetPos.Y - 5 then 
-                table.insert(customWaypoints, {Position = targetPos, Action = Enum.PathWaypointAction.Walk})
-                break
-            end
-        else
-            break
-        end
-    end
-    return customWaypoints
 end
 
 local function findPathWithFallback(startPos, targetPos)
@@ -504,7 +447,7 @@ task.spawn(function()
                 end
 
                 -- =======================================================
-                -- [โหมดตรวจสอบ Bounding Box Area]
+                -- [โหมดตรวจสอบ Bounding Box Area & Target Jump Logic]
                 -- =======================================================
                 local inMemory = nil
                 for i, mem in ipairs(_G.BuildingMemories) do
@@ -531,18 +474,17 @@ task.spawn(function()
                             updateDebug("DirectTrace", currentPos, inMemory.ClimbSpot, Color3.fromRGB(0, 0, 255))
                             moveWithAvoidance(myHuman, inMemory.ClimbSpot)
                         else
-                            local lookPos = Vector3.new(inMemory.Center.X, currentPos.Y, inMemory.Center.Z)
-                            myRoot.CFrame = CFrame.lookAt(currentPos, lookPos)
-                            
-                            local climbWps = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
-                            if #climbWps > 0 then
-                                currentWaypoints = climbWps
-                                currentWaypointIndex = 1
-                                isFollowingCustomPath = true
-                            else
-                                myHuman:MoveTo(currentPos + myRoot.CFrame.LookVector * 5)
-                                forceJump(myHuman)
+                            -- [THE FIX] หันหน้าเข้าหา "แกนกลางของบันไดเป๊ะๆ" เพื่อเกาะ!
+                            local targetWall = inMemory.LadderCenter or inMemory.Center
+                            local lookPos = Vector3.new(targetWall.X, currentPos.Y, targetWall.Z)
+                            if (lookPos - currentPos).Magnitude > 0.1 then
+                                myRoot.CFrame = CFrame.lookAt(currentPos, lookPos)
                             end
+                            
+                            -- ดันตัวเข้ากำแพงเพื่อปีนขึ้น!
+                            local climbDir = (lookPos - currentPos).Unit
+                            myHuman:MoveTo(currentPos + climbDir * 5)
+                            forceJump(myHuman)
                         end
                     else
                         _G.BuildingMemories = {}
@@ -637,6 +579,12 @@ task.spawn(function()
                                 isFollowingCustomPath = false
                                 updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0))
                                 moveWithAvoidance(myHuman, flatTargetPos)
+
+                                local chestRay = workspace:Raycast(currentPos, flatDir * 4, rayParams)
+                                local floorDropRay = workspace:Raycast(currentPos + (flatDir * 4) + Vector3.new(0, 1, 0), Vector3.new(0, -10, 0), rayParams)
+                                if chestRay and chestRay.Distance < 3 and not floorDropRay then
+                                    forceJump(myHuman)
+                                end
                             end
                         end
                         
@@ -669,7 +617,6 @@ task.spawn(function()
                                         local requiredHeightCheck = math.max(20, targetPos.Y - currentPos.Y + 5)
                                         
                                         if checkCeilingAround(currentPos, requiredHeightCheck) then
-                                            -- สแกนรวดเดียวจบ ได้พื้นที่เขียว/เหลืองมาเพียบ
                                             local roofNodes, outerNodes = floodFillRoofInstantly(currentPos, requiredHeightCheck)
                                             
                                             if #roofNodes > 0 then
@@ -683,22 +630,17 @@ task.spawn(function()
                                                 end
                                                 local center = Vector3.new((minX+maxX)/2, currentPos.Y, (minZ+maxZ)/2)
                                                 
-                                                -- ใช้วิชาเถาวัลย์ หดหาเสาปีนจากจุดเหลือง!
-                                                local climbSpot = findClimbSpotVineStyle(outerNodes, targetPos.Y, center, myChar)
+                                                -- ใช้วิชาเถาวัลย์ หดหาเสาปีนจากจุดเหลือง! แล้วหาแกนกลางเป๊ะๆ
+                                                local climbSpot, ladderCenter = findClimbSpotVineStyle(outerNodes, targetPos.Y, center, myChar)
                                                 
                                                 table.insert(_G.BuildingMemories, {
                                                     MinX = minX, MaxX = maxX, MinZ = minZ, MaxZ = maxZ,
                                                     Center = center,
                                                     HasPillar = (climbSpot ~= nil),
                                                     ClimbSpot = climbSpot,
+                                                    LadderCenter = ladderCenter,
                                                     TargetY = targetPos.Y
                                                 })
-                                            end
-                                        else
-                                            currentWaypoints = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
-                                            if #currentWaypoints > 0 then
-                                                isFollowingCustomPath = true
-                                                currentWaypointIndex = 1
                                             end
                                         end
                                     else
