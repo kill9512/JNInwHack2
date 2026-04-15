@@ -130,7 +130,7 @@ local function forceJump(hum)
     end
 end
 
--- [อัปเกรด]: เพิ่ม Micro-Dodge Memory ลดอาการสั่นยึกยัก
+-- [อัปเกรด]: ระบบหลบหลีกที่อนุญาตให้กระโดดขึ้นขอนไม้หรือที่สูง (Super Jump Enabled)
 local function moveWithAvoidance(humanoid, pos)
     local hrp = humanoid.Parent:FindFirstChild("HumanoidRootPart")
     if hrp then
@@ -138,17 +138,22 @@ local function moveWithAvoidance(humanoid, pos)
         local dir = (flatPos - hrp.Position).Unit
         local checkDist = 4 
         local targetWalkPos = pos
+        
+        -- ถ้าระดับ Y ของเป้าหมายสูงกว่าตัวเรานิดหน่อย แปลว่าเป้าหมายอยู่บนขอนไม้/เนิน
+        local isTargetElevated = (pos.Y > hrp.Position.Y + 1.0)
 
         if dir.Magnitude > 0 then
             local lowerRay = workspace:Raycast(hrp.Position - Vector3.new(0, 1.5, 0), dir * checkDist, rayParams)
             local upperRay = workspace:Raycast(hrp.Position + Vector3.new(0, 1, 0), dir * checkDist, rayParams)
             
-            if lowerRay or upperRay then
-                local headRay = workspace:Raycast(hrp.Position + Vector3.new(0, 2.5, 0), dir * checkDist, rayParams)
-                local ceilRay = workspace:Raycast(hrp.Position + (dir * 2), Vector3.new(0, 5, 0), rayParams)
+            if lowerRay or upperRay or isTargetElevated then
+                -- เช็คกำแพงตันจริงๆ ที่ความสูง 10 บล็อก (ของที่มันกระโดดไม่พ้นแน่นอน)
+                local tooHighRay = workspace:Raycast(hrp.Position + Vector3.new(0, 10, 0), dir * checkDist, rayParams)
+                -- เช็คเพดาน ป้องกันการกระโดดอัดขอบประตู
+                local ceilRay = workspace:Raycast(hrp.Position, Vector3.new(0, 12, 0), rayParams)
                 
-                if headRay or ceilRay then
-                    -- ของใหญ่ หรือ มีขอบประตูขวางข้างบน -> ใช้ Micro-DodgeMem หักเลี้ยวหลบเนียนๆ!
+                if tooHighRay or ceilRay then
+                    -- ของสูงไป หรือมีขอบประตูขวางหัว -> ใช้ Micro-Dodge หักหลบ
                     _G.MicroDodgeMem = _G.MicroDodgeMem or {Dir = Vector3.new(), Expire = 0}
                     local dodgeDir
                     
@@ -165,10 +170,11 @@ local function moveWithAvoidance(humanoid, pos)
                         elseif not leftRay then dodgeDir = leftDir
                         else dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * dir).Unit end 
                         
-                        _G.MicroDodgeMem = {Dir = dodgeDir, Expire = os.clock() + 0.6} -- จำไว้ 0.6 วิ ให้เดินพ้นเสาเล็กๆ
+                        _G.MicroDodgeMem = {Dir = dodgeDir, Expire = os.clock() + 0.6}
                     end
                     targetWalkPos = hrp.Position + (dodgeDir * 6)
                 else
+                    -- ของเตี้ยกว่า 10 บล็อก และไม่มีเพดานกดหัว -> โดดใส่ขอนไม้เลยพวก!
                     forceJump(humanoid)
                 end
             end
@@ -275,13 +281,13 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
             end
 
             if not visited then
-                -- [แก้บัคสำคัญ]: ยิงเรดาร์ Line-of-Sight เช็คว่ามีท่อนไม้ใหญ่ขวางก่อนถึงบล็อกนั้นไหม
                 local dirToTest = (testPos - currentPos).Unit
                 local distToTest = (testPos - currentPos).Magnitude
                 if dirToTest.Magnitude > 0 then
-                    local headObstacleRay = workspace:Raycast(currentPos + Vector3.new(0, 3.5, 0), dirToTest * distToTest, rayParams)
+                    -- [แก้บัคสำคัญ]: ขยับเรดาร์ขึ้นไปที่ Y+10 ทำให้มันไม่กลัวท่อนไม้/สิ่งกีดขวางเตี้ยๆ และสร้างบล็อกบนนั้นได้
+                    local headObstacleRay = workspace:Raycast(currentPos + Vector3.new(0, 10, 0), dirToTest * distToTest, rayParams)
                     
-                    if not headObstacleRay then -- ถ้าระดับหัวโล่ง (ไม่มีท่อนไม้ขวาง) ให้เช็คต่อ
+                    if not headObstacleRay then 
                         local isWalkable = not workspace:Raycast(testPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams)
                         if isWalkable then
                             local isNearWall = false
@@ -777,7 +783,6 @@ task.spawn(function()
                         local flatDir = (flatTargetPos - currentPos).Unit
                         
                         if flatDir.Magnitude > 0 then
-                            -- [อัปเกรด]: เพิ่มเวลาความจำ Drop Mode เป็น 1.5 วินาที หักมุม 75 องศาให้ตีวงกว้างขึ้น
                             local fwdRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), flatDir * 6, rayParams)
                             
                             if fwdRay then
@@ -787,20 +792,20 @@ task.spawn(function()
                                 if os.clock() < _G.DodgeMem.Expire then
                                     dodgeDir = _G.DodgeMem.Dir
                                 else
-                                    local rightDir = (CFrame.Angles(0, math.rad(-75), 0) * flatDir).Unit
-                                    local leftDir = (CFrame.Angles(0, math.rad(75), 0) * flatDir).Unit
+                                    local rightDir = (CFrame.Angles(0, math.rad(-60), 0) * flatDir).Unit
+                                    local leftDir = (CFrame.Angles(0, math.rad(60), 0) * flatDir).Unit
                                     
-                                    local rightRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), rightDir * 10, rayParams)
-                                    local leftRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), leftDir * 10, rayParams)
+                                    local rightRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), rightDir * 8, rayParams)
+                                    local leftRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), leftDir * 8, rayParams)
                                     
                                     if not rightRay then dodgeDir = rightDir
                                     elseif not leftRay then dodgeDir = leftDir
-                                    else dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * flatDir).Unit end 
+                                    else dodgeDir = (CFrame.Angles(0, math.rad(120), 0) * flatDir).Unit end 
                                     
-                                    _G.DodgeMem = {Dir = dodgeDir, Expire = os.clock() + 1.5}
+                                    _G.DodgeMem = {Dir = dodgeDir, Expire = os.clock() + 0.8}
                                 end
                                 
-                                local dodgePos = currentPos + (dodgeDir * 10)
+                                local dodgePos = currentPos + (dodgeDir * 8)
                                 updateDebug("DirectTrace", currentPos, dodgePos, Color3.fromRGB(255, 128, 0))
                                 moveWithAvoidance(myHuman, dodgePos)
                             else
