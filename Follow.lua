@@ -35,7 +35,7 @@ _G.PatrolIndex = 1
 -- ระบบความจำสถานที่ (Building Memory)
 _G.BuildingMemories = _G.BuildingMemories or {}
 
--- สถานะระบบลัดเลาะขอบ 
+-- สถานะระบบลัดเลาะขอบ
 _G.TraceState = {
     Active = false,
     Locked = false,
@@ -46,8 +46,9 @@ _G.TraceState = {
     StepCount = 0,
     Visited = {},
     Points = {},
+    MaxDistFromStart = 0, -- [NEW] ใช้ป้องกันการหลอนคิดว่าครบรอบ
     LastMoveTick = 0,
-    FailCount = 0 -- ใช้สำหรับนับการเดินติดเพื่อแก้บัค
+    FailCount = 0 
 }
 
 -- --- Debug Visualization ---
@@ -72,6 +73,7 @@ local function clearIncompleteTrace()
     _G.TraceState.StepCount = 0
     _G.TraceState.Visited = {}
     _G.TraceState.Points = {}
+    _G.TraceState.MaxDistFromStart = 0
     _G.TraceState.FailCount = 0
 end
 
@@ -199,7 +201,6 @@ end
 
 local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
     local st = _G.TraceState
-    -- ขยายรัศมีการค้นหาแบบ Dynamic ป้องกันการตันจากบล็อกซ้อน
     local radiiToTry = {6, 9, 12} 
     
     local fwdDir = Vector3.new(1, 0, 0)
@@ -225,17 +226,22 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
             local floorY = getRealFloorY(testXZ)
             local testPos = Vector3.new(testXZ.X, floorY, testXZ.Z)
             
-            if st.StepCount > 10 and st.StartPos then
+            -- [แก้บัค] ต้องเดินไกลกว่า 15 บล็อกก่อน ถึงจะยอมให้บรรจบลูป
+            if st.StepCount > 15 and st.MaxDistFromStart > 15 and st.StartPos then
                 local distToStart = (Vector2.new(testPos.X, testPos.Z) - Vector2.new(st.StartPos.X, st.StartPos.Z)).Magnitude
-                if distToStart < 6 then -- เพิ่มระยะให้เดินบรรจบง่ายขึ้น
+                if distToStart < 6 then 
                     return {pos = testPos, closedLoop = true}
                 end
             end
 
+            -- [แก้บัค] กันการเดินทับเส้นทางเก่า
             local visited = false
-            for _, v in ipairs(st.Visited) do
+            for i, v in ipairs(st.Visited) do
                 local distXZ = (Vector2.new(v.X, v.Z) - Vector2.new(testPos.X, testPos.Z)).Magnitude
-                if distXZ < (step * 0.5) then visited = true; break end
+                local checkRadius = 3.5 
+                if i >= #st.Visited - 2 then checkRadius = 2.0 end -- ยอมให้เดินใกล้จุดล่าสุดได้เพื่อเลี้ยว
+                
+                if distXZ < checkRadius then visited = true; break end
             end
 
             if not visited then
@@ -268,13 +274,12 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                 
                 local score = fwdDir:Dot(dirToPos)
                 
-                -- ลอจิกป้องกันเดินย้อนกลับ
-                if score > -0.3 then 
+                if score > -0.1 then -- ห้ามเลี้ยวหักศอกเกิน 90 องศากลับหลัง
                     if score > bestScore then
                         bestScore = score
                         bestStep = pos
                     end
-                else -- เก็บไว้เป็นทางเลือกสุดท้าย กรณีเลี้ยวไม่ได้จริงๆ
+                else 
                     if score > fallbackScore then
                         fallbackScore = score
                         fallbackStep = pos
@@ -357,7 +362,8 @@ local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
             if baseDir.Magnitude == baseDir.Magnitude then
                 for _, angle in ipairs({0, 20, -20}) do
                     local dir = (CFrame.Angles(0, math.rad(angle), 0) * baseDir).Unit
-                    local wallRay = workspace:Raycast(currentScanPos + Vector3.new(0, 2, 0), dir * 10, rayParams)
+                    -- [แก้บัค] เพิ่มระยะเรดาร์จาก 10 เป็น 15 เพื่อหาตึกให้เจอตอน Patrol
+                    local wallRay = workspace:Raycast(currentScanPos + Vector3.new(0, 2, 0), dir * 15, rayParams)
                     if wallRay and wallRay.Instance.CanCollide then
                         local climbPos = wallRay.Position + Vector3.new(0, 6, 0) + (wallRay.Normal * 1.5)
                         if hasHeadroom(climbPos) then
@@ -533,7 +539,6 @@ task.spawn(function()
                     local buildingHeight = math.max(10, _G.TraceState.LockedTargetY - targetFloorY)
                     local dropThreshold = math.max(15, buildingHeight * 0.30)
                     
-                    -- ตกเกิน 30% ถึงจะยกเลิกลัดเลาะ
                     if targetPos.Y < _G.TraceState.LockedTargetY - dropThreshold then
                         clearIncompleteTrace()
                     end
@@ -565,6 +570,12 @@ task.spawn(function()
                             _G.PatrolIndex = _G.PatrolIndex + 1
                             if _G.PatrolIndex > 4 then _G.PatrolIndex = 1 end
                         end
+                        
+                        -- [แก้บัค] หันหน้าเข้าหาตึกตอนเดินตระเวน เพื่อให้เรดาร์ยิงเข้าหากำแพงได้แม่นยำ
+                        local lookCenter = Vector3.new(inMemory.Center.X, currentPos.Y, inMemory.Center.Z)
+                        if (lookCenter - currentPos).Magnitude > 1 then
+                            myRoot.CFrame = CFrame.lookAt(currentPos, lookCenter)
+                        end
                         moveWithAvoidance(myHuman, targetCorner)
 
                         local testWps = computeVerticalClimbPath(currentPos, targetPos, myChar, target.Character)
@@ -573,7 +584,8 @@ task.spawn(function()
                             if wp.Position.Y > highestY then highestY = wp.Position.Y end 
                         end
                         
-                        if highestY >= inMemory.TargetY - 10 then
+                        -- [ปรับลดความเข้มงวด] ให้ระยะ Tolerance กว้างขึ้นเป็น -15 เผื่อตึกปีนยาก
+                        if highestY >= inMemory.TargetY - 15 then
                             inMemory.HasPillar = true
                             inMemory.ClimbSpot = currentPos
                         end
@@ -609,7 +621,12 @@ task.spawn(function()
                     local flatTarget = Vector3.new(st.TargetPos.X, currentPos.Y, st.TargetPos.Z)
                     local distToTarget = (flatTarget - currentPos).Magnitude
                     
-                    -- ขยายระยะให้แตะเป้าง่ายขึ้น + ลอจิก Stuck Forgiveness (ข้ามถ้าเดินติด)
+                    -- เก็บสถิติระยะห่างไกลสุดที่เคยเดินมา
+                    local distFromStart = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(st.StartPos.X, 0, st.StartPos.Z)).Magnitude
+                    if distFromStart > st.MaxDistFromStart then
+                        st.MaxDistFromStart = distFromStart
+                    end
+                    
                     if distToTarget < 4.5 or isStuck then
                         table.insert(st.Visited, st.TargetPos)
                         table.insert(st.Points, st.TargetPos)
@@ -651,7 +668,6 @@ task.spawn(function()
                                 st.LastMoveTick = os.clock()
                                 st.FailCount = 0
                             else
-                                -- อย่าเพิ่งลบทิ้งทันที ให้ลองกระโดดแก้บัคก่อน
                                 st.FailCount = st.FailCount + 1
                                 if st.FailCount > 20 then
                                     clearIncompleteTrace()
@@ -806,6 +822,7 @@ task.spawn(function()
                                                 _G.TraceState.Visited = {}
                                                 _G.TraceState.Points = {}
                                                 _G.TraceState.StepCount = 0
+                                                _G.TraceState.MaxDistFromStart = 0
                                                 _G.TraceState.FailCount = 0
                                                 _G.TraceState.LastMoveTick = os.clock()
                                             end
