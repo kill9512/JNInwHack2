@@ -48,7 +48,7 @@ _G.TraceState = {
     Points = {},
     MaxDistFromStart = 0,
     LastMoveTick = 0,
-    StuckTick = 0, 
+    StuckTick = 0,
     LastFwdDir = nil 
 }
 
@@ -291,7 +291,9 @@ local function getNextEdgeTracingStep(currentPos, maxCheckHeight, targetPos)
                 local pathBlocked = false
                 if dirToTest.Magnitude > 0 then
                     local bodyHit = workspace:Raycast(currentPos + Vector3.new(0, 3.0, 0), dirToTest * distToTest, rayParams)
-                    if bodyHit then pathBlocked = true end
+                    if bodyHit then
+                        pathBlocked = true
+                    end
                 end
 
                 if not pathBlocked then
@@ -678,26 +680,6 @@ task.spawn(function()
                 -- =======================================================
                 if _G.TraceState.Locked then
                     local st = _G.TraceState
-                    
-                    if st.Phase == "ForcedDodgeStep2" then
-                        st.Phase = "Tracing"
-                        local dodgePos = currentPos + (st.LastFwdDir * 8)
-                        dodgePos = Vector3.new(dodgePos.X, getRealFloorY(dodgePos), dodgePos.Z)
-                        st.TargetPos = dodgePos
-                        st.LastMoveTick = os.clock()
-                        
-                        if debugEnabled then
-                            local pg = Instance.new("Part")
-                            pg.Name = "TraceTrail_Green"
-                            pg.Size = Vector3.new(2, 0.5, 2)
-                            pg.Position = dodgePos + Vector3.new(0, 2, 0)
-                            pg.Anchored = true; pg.CanCollide = false; pg.CanQuery = false
-                            pg.Transparency = 0.2; pg.Color = Color3.fromRGB(0, 255, 0)
-                            pg.Material = Enum.Material.Neon; pg.Parent = workspace.Terrain
-                        end
-                        return
-                    end
-                    
                     local flatTarget = Vector3.new(st.TargetPos.X, currentPos.Y, st.TargetPos.Z)
                     local distToTarget = (flatTarget - currentPos).Magnitude
                     
@@ -711,9 +693,9 @@ task.spawn(function()
                         table.insert(st.Points, st.TargetPos)
                         st.StepCount = st.StepCount + 1
 
-                        if st.Phase == "MoveToEdge" or st.Phase == "ForcedDodgeStep1" then
+                        if st.Phase == "MoveToEdge" then
                             st.Phase = "Tracing"
-                            if st.Phase == "MoveToEdge" then st.StartPos = currentPos end
+                            st.StartPos = currentPos
                         end
 
                         if st.Phase == "Tracing" then
@@ -747,7 +729,7 @@ task.spawn(function()
                                 st.LastMoveTick = os.clock()
                                 st.StuckTick = 0
                             else
-                                -- [NEW] ลอจิกแก้ตัน ยืนนิ่งคิด 2.5 วิ แล้วมุดเข้าตึก 2 ก้าวติดกัน!
+                                -- [NEW] L-Shape Forced Dodge ทะลวงตึก (รอ 2.5 วิ)
                                 if st.StuckTick == 0 then st.StuckTick = os.clock() end
                                 
                                 if os.clock() - st.StuckTick > 2.5 then
@@ -765,12 +747,12 @@ task.spawn(function()
                                     elseif leftCeil then dodgeDir = leftDir
                                     else dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * fwd).Unit end 
                                     
-                                    local dodgePos = currentPos + (dodgeDir * 8)
+                                    -- ก้าวเข้าตึก 2 ก้าว (12 studs) + ก้าวเดินหน้าอีก 1 ก้าว (6 studs) หักมุมตัว L
+                                    local dodgePos = currentPos + (dodgeDir * 12) + (fwd * 6)
                                     dodgePos = Vector3.new(dodgePos.X, getRealFloorY(dodgePos), dodgePos.Z)
                                     
-                                    st.Phase = "ForcedDodgeStep1" -- ล็อกให้ก้าวไปทางเดียวกันอีกรอบ
                                     st.TargetPos = dodgePos
-                                    st.LastFwdDir = dodgeDir
+                                    st.LastFwdDir = fwd -- ล็อกทิศเดิมไว้ ไม่หันกลับมา 180 องศา
                                     st.StuckTick = 0
                                     st.LastMoveTick = os.clock()
                                     
@@ -784,8 +766,8 @@ task.spawn(function()
                                         pg.Material = Enum.Material.Neon; pg.Parent = workspace.Terrain
                                     end
                                 else
-                                    -- ยืนนิ่งๆ ไม่หมุนเป็นลูกข่าง
-                                    myHuman:MoveTo(currentPos) 
+                                    -- ลบคำสั่งบังคับหมุนตัวออก แค่กระโดดเฉยๆ
+                                    forceJump(myHuman)
                                 end
                             end
                         end
@@ -930,7 +912,7 @@ task.spawn(function()
                                                 _G.TraceState.Points = {}
                                                 _G.TraceState.StepCount = 0
                                                 _G.TraceState.MaxDistFromStart = 0
-                                                _G.TraceState.StuckTick = 0
+                                                _G.TraceState.FailCount = 0
                                                 _G.TraceState.LastFwdDir = nil
                                                 _G.TraceState.LastMoveTick = os.clock()
                                             end
