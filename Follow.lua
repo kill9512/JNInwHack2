@@ -84,7 +84,8 @@ local function drawMemoryPillars()
             local namePillar = "MemPillar_"..i
             local p = Instance.new("Part")
             p.Name = namePillar
-            local targetY = mem.TargetY
+            -- [THE FIX]: เสาฟ้าสูงเลยเป้าหมายไปอีก 5 Studs
+            local targetY = mem.TargetY + 5 
             local bottomY = mem.ClimbSpot.Y
             local h = math.max(10, math.abs(targetY - bottomY))
             p.Size = Vector3.new(2, h, 2)
@@ -166,7 +167,7 @@ local function checkCeilingAround(pos, height)
 end
 
 -- =========================================================================
--- [วิชาเถาวัลย์]
+-- [วิชาเถาวัลย์อวตาร] ทะลวงเนื้อ + เช็ครัศมีแบบ Volume!
 -- =========================================================================
 local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
     local params = OverlapParams.new()
@@ -213,17 +214,20 @@ local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
                 if canClimb then
                     local objCenter = p.Position
                     local normal = baseWallRay.Normal
-                    local bestClimbPos
                     local ladderCenter = Vector3.new(objCenter.X, node.Y, objCenter.Z)
                     
                     if p.Size.X > 15 or p.Size.Z > 15 then
-                        bestClimbPos = baseWallRay.Position + (normal * 2.5)
-                        ladderCenter = baseWallRay.Position - (normal * 2) 
-                    else
-                        bestClimbPos = ladderCenter + (normal * 2.5)
+                        ladderCenter = Vector3.new(baseWallRay.Position.X, node.Y, baseWallRay.Position.Z)
                     end
                     
-                    return bestClimbPos, ladderCenter, normal
+                    local outwardDir = (Vector3.new(node.X, 0, node.Z) - Vector3.new(ladderCenter.X, 0, ladderCenter.Z)).Unit
+                    if outwardDir.Magnitude == 0 then outwardDir = Vector3.new(1,0,0) end
+                    
+                    -- [THE FIX] ดันเสาฟ้าให้ "มุดเข้าไปในเนื้อบันได" 1.5 Studs! 
+                    -- แทนที่จะถอยออกมา 2.5 ตอนนี้มันจะทะลวงเข้าไปเลย รับรองเกาะติด 100%
+                    local bestClimbPos = ladderCenter - (outwardDir * 1.5)
+                    
+                    return bestClimbPos, ladderCenter, outwardDir
                 end
             end
         end
@@ -506,14 +510,26 @@ task.spawn(function()
                 local inMemory = nil
                 for i, mem in ipairs(_G.BuildingMemories) do
                     
-                    if currentPos.Y >= mem.TargetY - 5 then
-                        table.remove(_G.BuildingMemories, i)
-                        clearVisuals()
-                        break
-                    end
-                    
                     local targetFloorY = getRealFloorY(Vector3.new(targetPos.X, targetPos.Y, targetPos.Z))
                     local buildingHeight = math.max(10, mem.TargetY - targetFloorY)
+                    
+                    -- [THE FIX] เช็คว่าถ้าตัวผู้เล่น (currentPos) ปีนขึ้นมาถึงยอดตึกแล้ว ให้ลบความจำทิ้ง!
+                    -- แต่ก่อนลบทิ้ง ให้เดินหักหัวพุ่งเข้าหาแพลตฟอร์มก่อน!
+                    if currentPos.Y >= mem.TargetY - 2 then
+                        -- หักหน้าเข้าหาเป้าหมายและพุ่งตัวไปยืนบนพื้นให้เต็มสองเท้า
+                        local pushDir = (Vector3.new(targetPos.X, currentPos.Y, targetPos.Z) - currentPos).Unit
+                        if pushDir.Magnitude > 0 then
+                            myHuman:MoveTo(currentPos + (pushDir * 10))
+                        end
+                        
+                        -- หน่วงเวลา 1.5 วิ ให้มันเดินเหยียบพื้นเสร็จก่อน แล้วค่อยล้างความจำ
+                        task.delay(1.5, function()
+                            table.remove(_G.BuildingMemories, i)
+                            clearVisuals()
+                        end)
+                        return -- จบลอจิกตรงนี้ ปล่อยให้มันเดินขึ้นแพลตฟอร์ม
+                    end
+
                     if targetPos.Y < mem.TargetY - (buildingHeight * 0.30) then
                         table.remove(_G.BuildingMemories, i)
                         clearVisuals()
@@ -539,8 +555,7 @@ task.spawn(function()
                         local setupPos = inMemory.LadderCenter + (outwardDir * 15)
                         setupPos = Vector3.new(setupPos.X, inMemory.OriginalClimbSpot.Y, setupPos.Z)
                         
-                        -- [THE FIX]: เล็งไปที่ยอดเสาฟ้าตรงๆ
-                        local topTarget = Vector3.new(inMemory.ClimbSpot.X, inMemory.TargetY, inMemory.ClimbSpot.Z)
+                        local topTarget = Vector3.new(inMemory.ClimbSpot.X, inMemory.TargetY + 5, inMemory.ClimbSpot.Z)
 
                         if inMemory.ClimbPhase == "Aligning" then
                             local distToSetup = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(setupPos.X, 0, setupPos.Z)).Magnitude
@@ -556,7 +571,6 @@ task.spawn(function()
                         elseif inMemory.ClimbPhase == "Climbing" then
                             updateDebug("DirectTrace", currentPos, topTarget, Color3.fromRGB(255, 0, 255)) 
                             
-                            -- ล็อกคอหันหน้าเข้าหาตึกตลอดเวลา! ห้ามโหมดอื่นแย่ง
                             local faceDir = -outwardDir
                             if faceDir.Magnitude == 0 then faceDir = Vector3.new(1,0,0) end
                             local lookPos = currentPos + faceDir * 5
@@ -570,9 +584,15 @@ task.spawn(function()
                                 elseif inMemory.ProbeState == "Right" then
                                     inMemory.ProbeOffset = inMemory.ProbeOffset + 1.5 
                                     local testPos = inMemory.OriginalClimbSpot + (inMemory.LadderRight * inMemory.ProbeOffset)
-                                    local hit = workspace:Raycast(testPos + Vector3.new(0,2,0), -outwardDir * 8, rayParams)
                                     
-                                    if not hit then
+                                    -- [THE FIX] เช็คแบบ Volume! ใช้ทรงกลมสแกนหาบันไดผ่านช่องว่าง
+                                    local hitParts = workspace:GetPartBoundsInRadius(testPos + Vector3.new(0,2,0), 3, rayParams)
+                                    local stillTouching = false
+                                    for _, p in ipairs(hitParts) do
+                                        if p.CanCollide then stillTouching = true; break end
+                                    end
+                                    
+                                    if not stillTouching then
                                         inMemory.RightEdge = inMemory.ProbeOffset - 1.5
                                         inMemory.ProbeState = "Left"
                                         inMemory.ProbeOffset = 0
@@ -584,9 +604,14 @@ task.spawn(function()
                                 elseif inMemory.ProbeState == "Left" then
                                     inMemory.ProbeOffset = inMemory.ProbeOffset - 1.5
                                     local testPos = inMemory.OriginalClimbSpot + (inMemory.LadderRight * inMemory.ProbeOffset)
-                                    local hit = workspace:Raycast(testPos + Vector3.new(0,2,0), -outwardDir * 8, rayParams)
                                     
-                                    if not hit then
+                                    local hitParts = workspace:GetPartBoundsInRadius(testPos + Vector3.new(0,2,0), 3, rayParams)
+                                    local stillTouching = false
+                                    for _, p in ipairs(hitParts) do
+                                        if p.CanCollide then stillTouching = true; break end
+                                    end
+                                    
+                                    if not stillTouching then
                                         inMemory.LeftEdge = inMemory.ProbeOffset + 1.5
                                         inMemory.ProbeState = "Center"
                                     else
@@ -602,10 +627,10 @@ task.spawn(function()
                                 end
                             end
 
-                            -- [THE FIX]: พุ่งชาร์จทะลุเสาฟ้า ลึกเข้าไปอีก 5 Studs เพื่อดันตัวให้ติดกำแพง และ "ไม่กระโดด"
+                            -- พุ่งชาร์จทะลุเสาฟ้า ลึกเข้าไปอีก 5 Studs เพื่อดันตัวให้ติดกำแพงเต็มๆ!
                             local chargeTarget = topTarget + (faceDir * 5)
                             myHuman:MoveTo(chargeTarget)
-                            -- forceJump(myHuman) -- ปิดการกระโดด ให้เดินชนเพื่อไต่ขึ้นธรรมชาติ
+                            -- ไม่ใช้ forceJump ปล่อยให้มันเดินไต่ขึ้นแบบธรรมชาติ
                         end
                     else
                         _G.BuildingMemories = {}
