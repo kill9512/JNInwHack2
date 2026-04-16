@@ -35,6 +35,23 @@ _G.PatrolIndex = 1
 -- ระบบความจำสถานที่
 _G.BuildingMemories = _G.BuildingMemories or {}
 
+-- สถานะระบบลัดเลาะขอบ
+_G.TraceState = {
+    Active = false,
+    Locked = false,
+    LockedTargetY = nil,
+    Phase = "None",
+    TargetPos = nil,
+    StartPos = nil,
+    StepCount = 0,
+    Visited = {},
+    Points = {},
+    MaxDistFromStart = 0,
+    LastMoveTick = 0,
+    FailCount = 0,
+    LastFwdDir = nil 
+}
+
 -- --- Debug Visualization ---
 local function clearVisuals()
     for _, v in pairs(workspace.Terrain:GetChildren()) do
@@ -468,42 +485,47 @@ task.spawn(function()
                 -- =======================================================
                 if inMemory then
                     if inMemory.HasPillar and inMemory.ClimbSpot then
-                        local distToPillar = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(inMemory.ClimbSpot.X, 0, inMemory.ClimbSpot.Z)).Magnitude
+                        local normal = inMemory.LadderNormal or Vector3.new(1,0,0)
+                        local climbSpot = inMemory.ClimbSpot
                         
-                        -- [เล็งเป้าหมายไปที่ยอดเสา!]
-                        local topTarget = Vector3.new(inMemory.ClimbSpot.X, inMemory.TargetY, inMemory.ClimbSpot.Z)
+                        -- [NEW] สร้าง "จุดตั้งหลัก (Approach Spot)" ห่างจากหน้าบันได 5 บล็อก
+                        local approachPos = climbSpot + (normal * 5)
+                        
+                        local distToApproach = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(approachPos.X, 0, approachPos.Z)).Magnitude
+                        local distToPillar = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(climbSpot.X, 0, climbSpot.Z)).Magnitude
+                        
+                        -- เล็งเป้าที่ยอดเสาฟ้า
+                        local topTarget = Vector3.new(climbSpot.X, inMemory.TargetY, climbSpot.Z)
 
-                        -- ระยะห่าง 15 บล็อก คือ ปิดระบบ Dodge เดินมุ่งเป้าอย่างเดียว
-                        if distToPillar > 3 then
-                            updateDebug("DirectTrace", currentPos, topTarget, Color3.fromRGB(0, 0, 255))
+                        -- ถ้ายืนห่างจากจุดตั้งหลัก และยังไม่ได้แนบเสา
+                        if distToApproach > 3 and distToPillar > 4.5 then
+                            updateDebug("DirectTrace", currentPos, approachPos, Color3.fromRGB(0, 0, 255))
                             
                             inMemory.MaxClimbY = currentPos.Y
                             inMemory.ClimbFailTick = os.clock()
                             
-                            if distToPillar < 15 then
-                                myHuman:MoveTo(inMemory.ClimbSpot)
-                                forceJump(myHuman)
+                            if distToApproach < 15 then
+                                -- ถ้าอยู่ใกล้แล้ว เดินตรงๆ ไม่ต้องหลบหลีกให้เสียเวลา
+                                myHuman:MoveTo(approachPos)
                             else
-                                moveWithAvoidance(myHuman, inMemory.ClimbSpot)
+                                moveWithAvoidance(myHuman, approachPos)
                             end
                         else
-                            -- [ถึงหน้าเสาฟ้าแล้ว เริ่มปีนและสไลด์คลำหาขอบ!]
+                            -- [ยืนอยู่หน้าเสาแล้ว เริ่มปีนและคลำขอบ!]
                             updateDebug("DirectTrace", currentPos, topTarget, Color3.fromRGB(255, 0, 255))
                             
                             inMemory.MaxClimbY = inMemory.MaxClimbY or currentPos.Y
                             inMemory.ClimbFailTick = inMemory.ClimbFailTick or os.clock()
                             
-                            -- ถ้าความสูงเพิ่ม = ปีนถูกทาง รีเซ็ตระบบคลำ
                             if currentPos.Y > inMemory.MaxClimbY + 1 then
                                 inMemory.MaxClimbY = currentPos.Y
                                 inMemory.ClimbFailTick = os.clock() 
                                 inMemory.ProbeState = "None" 
                             end
 
-                            -- ถ้ากระโดดอยู่ที่เดิม 3 วินาที (Y ไม่เพิ่ม) ให้เริ่มสไลด์
+                            -- ถ้ากระโดดติดแหง็กเกิน 3 วิ
                             if currentPos.Y < inMemory.OriginalClimbSpot.Y + 10 then
                                 if os.clock() - (inMemory.ClimbFailTick or os.clock()) > 3 then
-                                    
                                     if inMemory.ProbeState == "None" then
                                         inMemory.ProbeState = "Right"
                                         inMemory.ProbeOffset = 0
@@ -511,7 +533,7 @@ task.spawn(function()
                                     elseif inMemory.ProbeState == "Right" then
                                         inMemory.ProbeOffset = inMemory.ProbeOffset + 1.5
                                         local testPos = inMemory.OriginalClimbSpot + (inMemory.LadderRight * inMemory.ProbeOffset)
-                                        local hit = workspace:Raycast(testPos + Vector3.new(0,2,0), -inMemory.LadderNormal * 6, rayParams)
+                                        local hit = workspace:Raycast(testPos + Vector3.new(0,2,0), -normal * 6, rayParams)
                                         
                                         if not hit then
                                             inMemory.RightEdge = inMemory.ProbeOffset - 1.5
@@ -519,13 +541,13 @@ task.spawn(function()
                                             inMemory.ProbeOffset = 0
                                         else
                                             inMemory.ClimbSpot = testPos
-                                            inMemory.ClimbFailTick = os.clock() - 1 -- ให้เวลา 2 วิเพื่อลองปีนจุดใหม่
+                                            inMemory.ClimbFailTick = os.clock() - 1 
                                         end
                                         
                                     elseif inMemory.ProbeState == "Left" then
                                         inMemory.ProbeOffset = inMemory.ProbeOffset - 1.5
                                         local testPos = inMemory.OriginalClimbSpot + (inMemory.LadderRight * inMemory.ProbeOffset)
-                                        local hit = workspace:Raycast(testPos + Vector3.new(0,2,0), -inMemory.LadderNormal * 6, rayParams)
+                                        local hit = workspace:Raycast(testPos + Vector3.new(0,2,0), -normal * 6, rayParams)
                                         
                                         if not hit then
                                             inMemory.LeftEdge = inMemory.ProbeOffset + 1.5
@@ -536,7 +558,6 @@ task.spawn(function()
                                         end
                                         
                                     elseif inMemory.ProbeState == "Center" then
-                                        -- ได้ขอบซ้ายขวาแล้ว ผ่ากลางเลย!
                                         local mid = ((inMemory.RightEdge or 0) + (inMemory.LeftEdge or 0)) / 2
                                         inMemory.ClimbSpot = inMemory.OriginalClimbSpot + (inMemory.LadderRight * mid)
                                         inMemory.ProbeState = "Done"
@@ -545,8 +566,8 @@ task.spawn(function()
                                 end
                             end
 
-                            -- บังคับหันหน้าเข้าหากำแพงตรงๆ (ย้อนรอย Normal ที่คลำได้)
-                            local faceDir = -(inMemory.LadderNormal or Vector3.new(1,0,0))
+                            -- บังคับหันหน้าเข้าหากำแพง (ย้อนทิศ Normal)
+                            local faceDir = -normal
                             if faceDir.Magnitude == 0 then faceDir = Vector3.new(1,0,0) end
                             
                             local lookPos = currentPos + faceDir * 5
