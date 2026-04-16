@@ -32,9 +32,8 @@ local randomTarget = nil
 _G.CustomPathFailTick = 0 
 _G.PatrolIndex = 1 
 
--- ระบบความจำสถานที่ถาวร
+-- ระบบความจำสถานที่ (ไม่ลบเองแล้ว จำตลอดกาล)
 _G.BuildingMemories = _G.BuildingMemories or {}
-_G.AreaCounter = _G.AreaCounter or 0
 
 -- --- Debug Visualization ---
 local function clearVisuals()
@@ -52,7 +51,7 @@ local function drawMemoryPillars()
     if not debugEnabled then return end
     
     for i, mem in ipairs(_G.BuildingMemories) do
-        local nameArea = "MemArea_"..mem.Name
+        local nameArea = "MemArea_"..i
         local a = Instance.new("Part")
         a.Name = nameArea
         local sizeX = math.max(10, mem.MaxX - mem.MinX + 10)
@@ -65,7 +64,7 @@ local function drawMemoryPillars()
         a.Parent = workspace.Terrain
 
         if mem.HasPillar and mem.ClimbSpot then
-            local namePillar = "MemPillar_"..mem.Name
+            local namePillar = "MemPillar_"..i
             local p = Instance.new("Part")
             p.Name = namePillar
             local targetY = mem.TargetY
@@ -79,6 +78,15 @@ local function drawMemoryPillars()
             p.Parent = workspace.Terrain
         end
     end
+end
+
+local function updateDebug(name, startPos, endPos, color)
+    if not debugEnabled then return end
+    local line = workspace.Terrain:FindFirstChild(name) or Instance.new("LineHandleAdornment")
+    line.Name, line.Thickness, line.Transparency = name, 3, 0.4
+    line.Adornee, line.AlwaysOnTop = workspace.Terrain, true
+    line.Color3, line.Length = color, (startPos - endPos).Magnitude
+    line.CFrame, line.Parent = CFrame.lookAt(startPos, endPos), workspace.Terrain
 end
 
 -- --- Helper Functions ---
@@ -114,7 +122,6 @@ local function moveWithAvoidance(humanoid, pos)
                     else
                         local rightDir = (CFrame.Angles(0, math.rad(-60), 0) * dir).Unit
                         local leftDir = (CFrame.Angles(0, math.rad(60), 0) * dir).Unit
-                        
                         local rightRay = workspace:Raycast(hrp.Position + Vector3.new(0, 1.5, 0), rightDir * 6, rayParams)
                         local leftRay = workspace:Raycast(hrp.Position + Vector3.new(0, 1.5, 0), leftDir * 6, rayParams)
                         
@@ -141,16 +148,8 @@ local function getRealFloorY(pos)
     if ray then return ray.Position.Y else return pos.Y end
 end
 
-local function checkCeilingAround(pos, height)
-    local offsets = { Vector3.new(0,0,0), Vector3.new(3,0,0), Vector3.new(-3,0,0), Vector3.new(0,0,3), Vector3.new(0,0,-3) }
-    for _, off in ipairs(offsets) do
-        if workspace:Raycast(pos + off + Vector3.new(0, 1, 0), Vector3.new(0, height, 0), rayParams) then return true end
-    end
-    return false
-end
-
 -- =========================================================================
--- [THE MAGIC] วิชาระเบิดรัศมี (Dynamic Box Expansion) + แกน 90 องศา
+-- [อัปเกรดใหม่] วิชาระเบิดรัศมี (Dynamic Sphere Expansion) หาแกนบันไดแท้ 100%
 -- =========================================================================
 local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
     local params = OverlapParams.new()
@@ -195,40 +194,43 @@ local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
                 end
                 
                 if canClimb then
-                    -- [ระเบิดรัศมี] ขยายกล่องออกไปจนกว่าจะครอบคลุมบันไดทั้งชิ้น!
-                    local ladderCenter = p.Position
-                    local searchSize = Vector3.new(4, 15, 4) 
-                    local searchCFrame = CFrame.new(ladderCenter + Vector3.new(0, 7.5, 0))
+                    local objCenter = p.Position
+                    local normal = baseWallRay.Normal
+                    local ladderCenter = Vector3.new(objCenter.X, node.Y, objCenter.Z)
+                    
+                    -- [THE FIX] ระเบิดรัศมีไปเรื่อยๆ จนกว่าจะไม่เจอชิ้นส่วนเพิ่ม
+                    local searchSize = Vector3.new(4, 10, 4) 
+                    local searchCFrame = CFrame.new(ladderCenter + Vector3.new(0, 5, 0)) 
                     local collectedParts = {}
-                    local lastCount = 0
+                    local lastPartCount = 0
                     
-                    local minX, maxX = math.huge, -math.huge
-                    local minZ, maxZ = math.huge, -math.huge
-                    
-                    for step = 1, 15 do
-                        searchSize = searchSize + Vector3.new(3, 0, 3)
+                    for step = 1, 20 do -- ระเบิดได้สูงสุด 20 รอบ (กว้างมาก)
+                        searchSize = searchSize + Vector3.new(2, 0, 2)
                         local partsInBox = workspace:GetPartBoundsInBox(searchCFrame, searchSize, params)
                         
-                        local currentCount = 0
-                        collectedParts = {}
+                        local tempParts = {}
+                        local validCount = 0
                         for _, foundPart in ipairs(partsInBox) do
                             if foundPart:IsA("BasePart") and foundPart.CanCollide and foundPart.Transparency < 1 then
-                                -- กรองไม่ให้กลืนพื้นยักษ์หรือกำแพงตึกหลักเข้าไป
                                 if foundPart.Size.X < 50 and foundPart.Size.Z < 50 then
-                                    table.insert(collectedParts, foundPart)
-                                    currentCount = currentCount + 1
+                                    table.insert(tempParts, foundPart)
+                                    validCount = validCount + 1
                                 end
                             end
                         end
                         
-                        -- ถ้ายอดรวมไม่เพิ่มขึ้นแล้ว แสดงว่ากลืนบันไดหมดแล้ว!
-                        if currentCount == lastCount and currentCount > 0 then
+                        if validCount > 0 then collectedParts = tempParts end
+                        
+                        -- ถ้าระเบิดวงกว้างขึ้น แต่จำนวนชิ้นส่วนที่เจอยังเท่าเดิม แปลว่ากลืนหมดแล้ว! หยุดขยาย
+                        if validCount == lastPartCount and validCount > 0 then
                             break
                         end
-                        lastCount = currentCount
+                        lastPartCount = validCount
                     end
                     
-                    -- หาแกนกลางสัมบูรณ์
+                    -- หาค่าเฉลี่ย Min/Max จากชิ้นส่วนทั้งหมดที่กลืนมาได้
+                    local minX, maxX = math.huge, -math.huge
+                    local minZ, maxZ = math.huge, -math.huge
                     for _, cp in ipairs(collectedParts) do
                         local pos = cp.Position
                         local halfX = cp.Size.X / 2
@@ -244,32 +246,17 @@ local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
                         local trueCenterZ = (minZ + maxZ) / 2
                         ladderCenter = Vector3.new(trueCenterX, node.Y, trueCenterZ)
                         
-                        -- เซฟตี้: ถ้าขนาดมันใหญ่กว่าบันไดปกติ (ไปกลืนตึก) ให้ยกเลิกการกลืน
-                        if (maxX - minX) > 25 or (maxZ - minZ) > 25 then
+                        if (maxX - minX) > 20 or (maxZ - minZ) > 20 then
                             ladderCenter = Vector3.new(baseWallRay.Position.X, node.Y, baseWallRay.Position.Z)
-                            ladderCenter = ladderCenter - (baseWallRay.Normal * 2) 
-                            
-                            minX, maxX = ladderCenter.X - 2, ladderCenter.X + 2
-                            minZ, maxZ = ladderCenter.Z - 2, ladderCenter.Z + 2
+                            ladderCenter = ladderCenter - (normal * 2) 
                         end
                     end
                     
-                    -- [ระบบล็อกแกนตั้งฉาก (Axis Snapping)]
-                    local dx = node.X - ladderCenter.X
-                    local dz = node.Z - ladderCenter.Z
-                    local outwardDir = Vector3.new(0,0,0)
-                    local offsetDist = 2.5
+                    local outwardDir = (Vector3.new(node.X, 0, node.Z) - Vector3.new(ladderCenter.X, 0, ladderCenter.Z)).Unit
+                    if outwardDir.Magnitude == 0 then outwardDir = Vector3.new(1,0,0) end
                     
-                    -- เลือกว่าจะตั้งเสาออกไปทางแกน X หรือ Z (ห้ามเฉียง)
-                    if math.abs(dx) > math.abs(dz) then
-                        outwardDir = Vector3.new(math.sign(dx), 0, 0)
-                        offsetDist = math.max(2.5, (maxX - minX)/2 + 1.5) -- เผื่อระยะขอบบันได
-                    else
-                        outwardDir = Vector3.new(0, 0, math.sign(dz))
-                        offsetDist = math.max(2.5, (maxZ - minZ)/2 + 1.5)
-                    end
-                    
-                    local bestClimbPos = ladderCenter + (outwardDir * offsetDist)
+                    -- จุดปักเสา = แกนกลางเป๊ะๆ + ถอยออกมาทางพื้นที่โล่ง
+                    local bestClimbPos = ladderCenter + (outwardDir * 2.5)
                     return bestClimbPos, ladderCenter, outwardDir
                 end
             end
@@ -278,9 +265,6 @@ local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
     return nil, nil, nil
 end
 
--- =========================================================================
--- LASER FLOOD-FILL
--- =========================================================================
 local function floodFillRoofInstantly(startPos, maxCheckHeight)
     local step = 6          
     local maxNodes = 300    
@@ -378,11 +362,14 @@ local function findPathWithFallback(startPos, targetPos)
     return {} 
 end
 
--- --- UI AREA MANAGEMENT ---
+-- =========================================================================
+-- [NEW] UI Area Manager (จัดการความจำ)
+-- =========================================================================
 Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP", "Random"}, function(m) 
     SelectedMode = m 
     if m == "Random" then randomTarget = nil end 
 end)
+
 Section:NewTextBox("Search Player", "พิมพ์ชื่อ หรือ Display Name", function(txt)
     local lowerTxt = txt:lower()
     for _, p in pairs(Players:GetPlayers()) do 
@@ -393,6 +380,7 @@ Section:NewTextBox("Search Player", "พิมพ์ชื่อ หรือ Di
         end
     end
 end)
+
 local drop = Section:NewDropdown("Select Target", "User", {}, function(s) SelectedPlayerName = s:match("@([^%)]+)") end)
 local function refreshList()
     local t = {"None (Off)"}
@@ -401,9 +389,42 @@ local function refreshList()
     end
     drop:Refresh(t)
 end
-Section:NewButton("Refresh List", "Update", refreshList)
+Section:NewButton("Refresh Target List", "Update", refreshList)
 refreshList()
 
+-- [NEW SECTION] สำหรับจัดการความจำ
+local MemorySection = Tab:NewSection("Area Memory Manager")
+
+local areaDropdown = MemorySection:NewDropdown("Stored Areas", "Select Area", {"None"}, function(v) end)
+local function refreshAreaList()
+    local t = {}
+    for i, _ in ipairs(_G.BuildingMemories) do 
+        table.insert(t, "Area " .. i) 
+    end
+    if #t == 0 then table.insert(t, "None") end
+    areaDropdown:Refresh(t)
+end
+
+MemorySection:NewButton("Refresh Area List", "อัปเดตรายชื่อ Area ที่จำไว้", refreshAreaList)
+
+MemorySection:NewTextBox("Delete Specific Area (ID)", "พิมพ์เลข Area (เช่น 1, 2) เพื่อลบ", function(txt)
+    local id = tonumber(txt)
+    if id and _G.BuildingMemories[id] then
+        table.remove(_G.BuildingMemories, id)
+        clearVisuals()
+        drawMemoryPillars()
+        refreshAreaList()
+    end
+end)
+
+MemorySection:NewButton("Clear ALL Memories", "ล้างความจำตึกทั้งหมด", function()
+    _G.BuildingMemories = {}
+    clearVisuals()
+    drawMemoryPillars()
+    refreshAreaList()
+end)
+
+-- Navigation Settings
 local MoveSection = Tab:NewSection("Navigation Control")
 MoveSection:NewToggle("Enable Follow", "Start Logic", function(s) 
     followEnabled = s 
@@ -415,43 +436,10 @@ MoveSection:NewToggle("Enable Follow", "Start Logic", function(s)
 end)
 MoveSection:NewToggle("Show Path", "Visuals", function(s) 
     debugEnabled = s 
-    if not s then clearVisuals() end
+    if not s then clearVisuals() else drawMemoryPillars() end
 end)
 MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
 
--- [NEW] โซนจัดการหน่วยความจำ
-local AreaSection = Tab:NewSection("Saved Areas Memory")
-local areaDropdown = AreaSection:NewDropdown("Saved Areas", "List of saved building areas", {"None"}, function(v) end)
-
-local function refreshAreaList()
-    local t = {}
-    for _, mem in ipairs(_G.BuildingMemories) do
-        table.insert(t, mem.Name)
-    end
-    if #t == 0 then table.insert(t, "None") end
-    areaDropdown:Refresh(t)
-end
-
-AreaSection:NewButton("Refresh Area List", "Update dropdown", refreshAreaList)
-
-AreaSection:NewTextBox("Delete Area by Name", "Type name exactly (e.g., Area 1)", function(txt)
-    for i = #_G.BuildingMemories, 1, -1 do
-        if _G.BuildingMemories[i].Name:lower() == txt:lower() then
-            table.remove(_G.BuildingMemories, i)
-            refreshAreaList()
-            clearVisuals()
-            print("Deleted Memory: " .. txt)
-            break
-        end
-    end
-end)
-
-AreaSection:NewButton("Clear ALL Areas", "Wipe all saved memory", function() 
-    _G.BuildingMemories = {}
-    _G.AreaCounter = 0
-    refreshAreaList()
-    clearVisuals()
-end)
 
 -- --- MAIN LOOP ---
 task.spawn(function()
@@ -520,22 +508,12 @@ task.spawn(function()
                 end
 
                 -- =======================================================
-                -- [โหมดตรวจสอบ Bounding Box Area] (ไม่ลบความจำพร่ำเพรื่อแล้ว!)
+                -- [โหมดตรวจสอบ Bounding Box Area]
                 -- =======================================================
                 local inMemory = nil
                 for i, mem in ipairs(_G.BuildingMemories) do
                     
-                    -- ถ้ายืนอยู่บนหิ้ง/หลังคาแล้ว (ระดับเดียวกัน) ให้เมิน Area นี้ไปไล่ล่าผู้เล่นแทน
-                    if currentPos.Y >= mem.TargetY - 4 then
-                        continue
-                    end
-                    
-                    -- ถ้าเป้าหมายโดดลงพื้นไปแล้ว ก็เมิน Area นี้เช่นกัน
-                    local targetFloorY = getRealFloorY(Vector3.new(targetPos.X, targetPos.Y, targetPos.Z))
-                    local buildingHeight = math.max(10, mem.TargetY - targetFloorY)
-                    if targetPos.Y < mem.TargetY - (buildingHeight * 0.30) then
-                        continue
-                    end
+                    -- [ยกเลิกการลบ Area] ความจำฝังใจตลอดกาล จนกว่าผู้เล่นจะกดลบใน UI เอง!
                     
                     if targetPos.X >= mem.MinX - 15 and targetPos.X <= mem.MaxX + 15 and
                        targetPos.Z >= mem.MinZ - 15 and targetPos.Z <= mem.MaxZ + 15 then
@@ -552,12 +530,10 @@ task.spawn(function()
                         
                         inMemory.ClimbPhase = inMemory.ClimbPhase or "Aligning"
                         
-                        -- เวกเตอร์ชี้ออกจากแกนกลางบันไดแบบล็อก 90 องศาเป๊ะๆ
                         local outwardDir = inMemory.LadderOutward or Vector3.new(1,0,0)
                         local setupPos = inMemory.LadderCenter + (outwardDir * 15)
                         setupPos = Vector3.new(setupPos.X, inMemory.OriginalClimbSpot.Y, setupPos.Z)
                         
-                        -- ยอดเป้าหมายสูงเลยตึก + ดึงเข้าใน 6 บล็อก (ดึงตัวขึ้นแพลตฟอร์ม)
                         local vaultPos = Vector3.new(inMemory.ClimbSpot.X, inMemory.TargetY + 5, inMemory.ClimbSpot.Z) + (-outwardDir * 6)
 
                         if inMemory.ClimbPhase == "Aligning" then
@@ -585,6 +561,9 @@ task.spawn(function()
                                 forceJump(myHuman)
                             end
                         end
+                    else
+                        -- กรณีที่ตึกนั้นปีนไม่ได้จริงๆ บอทจะยืนเอ๋อ ไม่ทำอะไร (รอผู้เล่นลบความจำ)
+                        myHuman:MoveTo(currentPos)
                     end
                     return 
                 end
@@ -721,17 +700,8 @@ task.spawn(function()
                                                 local center = Vector3.new((minX+maxX)/2, currentPos.Y, (minZ+maxZ)/2)
                                                 
                                                 local climbSpot, ladderCenter, outwardDir = findClimbSpotVineStyle(outerNodes, targetPos.Y, center, myChar)
-                                                
-                                                local ladderRight = Vector3.new(1,0,0)
-                                                if outwardDir then
-                                                    ladderRight = outwardDir:Cross(Vector3.new(0,1,0)).Unit
-                                                    if ladderRight.Magnitude == 0 then ladderRight = Vector3.new(1,0,0) end
-                                                end
 
-                                                -- บันทึกตึกใหม่ พร้อม Area Name!
-                                                _G.AreaCounter = _G.AreaCounter + 1
                                                 table.insert(_G.BuildingMemories, {
-                                                    Name = "Area " .. _G.AreaCounter,
                                                     MinX = minX, MaxX = maxX, MinZ = minZ, MaxZ = maxZ,
                                                     Center = center,
                                                     HasPillar = (climbSpot ~= nil),
@@ -744,7 +714,8 @@ task.spawn(function()
                                                     ClimbFailTick = os.clock(),
                                                     TargetY = targetPos.Y
                                                 })
-                                                refreshAreaList() -- อัปเดต UI ใหม่อัตโนมัติ
+                                                
+                                                refreshAreaList() -- อัปเดต UI ตอนจำตึกใหม่
                                             end
                                         end
                                     else
