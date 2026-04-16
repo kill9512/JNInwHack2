@@ -35,23 +35,6 @@ _G.PatrolIndex = 1
 -- ระบบความจำสถานที่
 _G.BuildingMemories = _G.BuildingMemories or {}
 
--- สถานะระบบลัดเลาะขอบ
-_G.TraceState = {
-    Active = false,
-    Locked = false,
-    LockedTargetY = nil,
-    Phase = "None",
-    TargetPos = nil,
-    StartPos = nil,
-    StepCount = 0,
-    Visited = {},
-    Points = {},
-    MaxDistFromStart = 0,
-    LastMoveTick = 0,
-    FailCount = 0,
-    LastFwdDir = nil 
-}
-
 -- --- Debug Visualization ---
 local function clearVisuals()
     for _, v in pairs(workspace.Terrain:GetChildren()) do
@@ -110,18 +93,6 @@ local function drawMemoryPillars()
             p.Transparency, p.Material = 0.4, Enum.Material.Neon
             p.Color = Color3.fromRGB(0, 150, 255) 
             p.Parent = workspace.Terrain
-            
-            -- [NEW DEBUG] โชว์จุดตั้งหลักสีส้ม
-            if mem.SetupSpot then
-                local sName = "MemSetup_"..i
-                local sPart = workspace.Terrain:FindFirstChild(sName) or Instance.new("Part")
-                sPart.Name = sName
-                sPart.Size = Vector3.new(2, 2, 2)
-                sPart.Position = mem.SetupSpot + Vector3.new(0, 1, 0)
-                sPart.Anchored = true; sPart.CanCollide = false; sPart.CanQuery = false
-                sPart.Transparency = 0.3; sPart.Color = Color3.fromRGB(255, 128, 0)
-                sPart.Material = Enum.Material.Neon; sPart.Parent = workspace.Terrain
-            end
         end
     end
 end
@@ -195,7 +166,7 @@ local function checkCeilingAround(pos, height)
 end
 
 -- =========================================================================
--- [วิชาเถาวัลย์ของแท้]
+-- [วิชาเถาวัลย์] คืนค่า LadderNormal ออกมาด้วยเพื่อใช้เป็นแกนอ้างอิงในการสไลด์
 -- =========================================================================
 local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
     local params = OverlapParams.new()
@@ -246,10 +217,10 @@ local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
                     local ladderCenter = Vector3.new(objCenter.X, node.Y, objCenter.Z)
                     
                     if p.Size.X > 15 or p.Size.Z > 15 then
-                        bestClimbPos = baseWallRay.Position + (normal * 2.0)
+                        bestClimbPos = baseWallRay.Position + (normal * 2.5)
                         ladderCenter = baseWallRay.Position - (normal * 2) 
                     else
-                        bestClimbPos = ladderCenter + (normal * 2.0)
+                        bestClimbPos = ladderCenter + (normal * 2.5)
                     end
                     
                     return bestClimbPos, ladderCenter, normal
@@ -419,7 +390,7 @@ task.spawn(function()
                 if not randomTarget or not randomTarget.Parent or not randomTarget.Character or not randomTarget.Character:FindFirstChild("Humanoid") or randomTarget.Character.Humanoid.Health <= 0 then
                     local validPlayers = {}
                     for _, p in pairs(Players:GetPlayers()) do
-                        if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health > 0 then
+                        if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") and p.Character.Health > 0 then
                             table.insert(validPlayers, p)
                         end
                     end
@@ -482,9 +453,6 @@ task.spawn(function()
                     if targetPos.Y < mem.TargetY - (buildingHeight * 0.30) then
                         table.remove(_G.BuildingMemories, i)
                         clearVisuals()
-                        for _, v in pairs(workspace.Terrain:GetChildren()) do
-                            if string.find(v.Name, "MemSetup_") then v:Destroy() end
-                        end
                         break
                     end
                     
@@ -496,93 +464,86 @@ task.spawn(function()
                 end
 
                 -- =======================================================
-                -- [โหมดเข้าหาเสาฟ้า & ระบบตั้งหลักก่อนชาร์จ!]
+                -- [โหมดเข้าหาเสาฟ้า: ตั้งหลัก -> พุ่งชาร์จ -> สไลด์โยก]
                 -- =======================================================
                 if inMemory then
-                    if inMemory.HasPillar and inMemory.ClimbSpot and inMemory.SetupSpot then
+                    if inMemory.HasPillar and inMemory.ClimbSpot then
                         
-                        if inMemory.Phase == "GoToSetup" then
-                            -- ระยะห่างจากจุดตั้งหลัก (SetupSpot)
-                            local distToSetup = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(inMemory.SetupSpot.X, 0, inMemory.SetupSpot.Z)).Magnitude
+                        -- [NEW] State Machine สำหรับการเข้าทำ
+                        inMemory.ClimbPhase = inMemory.ClimbPhase or "Aligning"
+                        
+                        local normal = inMemory.LadderNormal or Vector3.new(1,0,0)
+                        -- คำนวณจุดตั้งหลัก: ดึงออกมา 15 Studs (~5 บล็อก) ในพื้นที่โล่ง
+                        local setupPos = inMemory.OriginalClimbSpot + (normal * 15) 
+                        local topTarget = Vector3.new(inMemory.ClimbSpot.X, inMemory.TargetY, inMemory.ClimbSpot.Z)
+
+                        if inMemory.ClimbPhase == "Aligning" then
+                            -- เฟส 1: เดินถอยมาตั้งหลักที่พื้นที่โล่งก่อน
+                            local distToSetup = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(setupPos.X, 0, setupPos.Z)).Magnitude
+                            updateDebug("DirectTrace", currentPos, setupPos, Color3.fromRGB(255, 165, 0)) -- สีส้ม=กำลังตั้งหลัก
                             
-                            if distToSetup > 3.0 then
-                                -- เดินไปจุดตั้งหลักก่อน
-                                updateDebug("DirectTrace", currentPos, inMemory.SetupSpot, Color3.fromRGB(255, 128, 0))
-                                moveWithAvoidance(myHuman, inMemory.SetupSpot)
+                            if distToSetup > 4 then
+                                moveWithAvoidance(myHuman, setupPos)
                             else
-                                -- ถึงจุดตั้งหลักแล้ว! สับสวิตช์เป็นโหมดชาร์จชน!
-                                inMemory.Phase = "Charging"
-                                inMemory.MaxClimbY = currentPos.Y
+                                -- ถึงจุดตั้งหลักแล้ว เข้าเฟสชาร์จ!
+                                inMemory.ClimbPhase = "Climbing"
                                 inMemory.ClimbFailTick = os.clock()
                             end
                             
-                        elseif inMemory.Phase == "Charging" then
-                            -- [THE FIX]: เล็งเป้าที่ยอดเสาฟ้า!
-                            local topTarget = Vector3.new(inMemory.ClimbSpot.X, inMemory.TargetY, inMemory.ClimbSpot.Z)
-                            updateDebug("DirectTrace", currentPos, topTarget, Color3.fromRGB(255, 0, 255))
+                        elseif inMemory.ClimbPhase == "Climbing" then
+                            -- เฟส 2: พุ่งชาร์จเข้าใส่เสาฟ้า และกระโดด!
+                            updateDebug("DirectTrace", currentPos, topTarget, Color3.fromRGB(255, 0, 255)) -- สีม่วง=ชาร์จ
                             
-                            inMemory.MaxClimbY = inMemory.MaxClimbY or currentPos.Y
-                            inMemory.ClimbFailTick = inMemory.ClimbFailTick or os.clock()
-                            
-                            -- ถ้าความสูงเพิ่ม = ปีนถูกทาง รีเซ็ตระบบคลำ
-                            if currentPos.Y > inMemory.MaxClimbY + 1.0 then
-                                inMemory.MaxClimbY = currentPos.Y
-                                inMemory.ClimbFailTick = os.clock() 
-                                inMemory.ProbeState = "None" 
-                            end
-
-                            -- ถ้ากระโดดอยู่ที่เดิม 2.5 วินาที (Y ไม่เพิ่ม) ให้เริ่มสไลด์เสาคลำหาขอบ!
-                            if currentPos.Y < inMemory.OriginalClimbSpot.Y + 15 then
-                                if os.clock() - (inMemory.ClimbFailTick or os.clock()) > 2.5 then
+                            -- [NEW] ระบบสไลด์โยก (Turbo Probing) โยกทุกๆ 3 วิถ้าติด
+                            if os.clock() - (inMemory.ClimbFailTick or os.clock()) > 3 then
+                                if inMemory.ProbeState == "None" then
+                                    inMemory.ProbeState = "Right"
+                                    inMemory.ProbeOffset = 0
                                     
-                                    if inMemory.ProbeState == "None" then
-                                        inMemory.ProbeState = "Right"
+                                elseif inMemory.ProbeState == "Right" then
+                                    inMemory.ProbeOffset = inMemory.ProbeOffset + 3.5 -- ก้าวใหญ่!
+                                    local testPos = inMemory.OriginalClimbSpot + (inMemory.LadderRight * inMemory.ProbeOffset)
+                                    local hit = workspace:Raycast(testPos + Vector3.new(0,2,0), -normal * 8, rayParams)
+                                    
+                                    if not hit then
+                                        inMemory.RightEdge = inMemory.ProbeOffset - 3.5
+                                        inMemory.ProbeState = "Left"
                                         inMemory.ProbeOffset = 0
-                                        
-                                    elseif inMemory.ProbeState == "Right" then
-                                        inMemory.ProbeOffset = inMemory.ProbeOffset + 1.5
-                                        local testPos = inMemory.OriginalClimbSpot + (inMemory.LadderRight * inMemory.ProbeOffset)
-                                        local hit = workspace:Raycast(testPos + Vector3.new(0,2,0), -inMemory.LadderNormal * 6, rayParams)
-                                        
-                                        if not hit then
-                                            inMemory.RightEdge = inMemory.ProbeOffset - 1.5
-                                            inMemory.ProbeState = "Left"
-                                            inMemory.ProbeOffset = 0
-                                        else
-                                            inMemory.ClimbSpot = testPos
-                                            inMemory.ClimbFailTick = os.clock() - 1 
-                                        end
-                                        
-                                    elseif inMemory.ProbeState == "Left" then
-                                        inMemory.ProbeOffset = inMemory.ProbeOffset - 1.5
-                                        local testPos = inMemory.OriginalClimbSpot + (inMemory.LadderRight * inMemory.ProbeOffset)
-                                        local hit = workspace:Raycast(testPos + Vector3.new(0,2,0), -inMemory.LadderNormal * 6, rayParams)
-                                        
-                                        if not hit then
-                                            inMemory.LeftEdge = inMemory.ProbeOffset + 1.5
-                                            inMemory.ProbeState = "Center"
-                                        else
-                                            inMemory.ClimbSpot = testPos
-                                            inMemory.ClimbFailTick = os.clock() - 1
-                                        end
-                                        
-                                    elseif inMemory.ProbeState == "Center" then
-                                        local mid = ((inMemory.RightEdge or 0) + (inMemory.LeftEdge or 0)) / 2
-                                        inMemory.ClimbSpot = inMemory.OriginalClimbSpot + (inMemory.LadderRight * mid)
-                                        inMemory.ProbeState = "Done"
-                                        inMemory.ClimbFailTick = os.clock() + 5
+                                    else
+                                        inMemory.ClimbSpot = testPos
+                                        inMemory.ClimbFailTick = os.clock()
                                     end
+                                    
+                                elseif inMemory.ProbeState == "Left" then
+                                    inMemory.ProbeOffset = inMemory.ProbeOffset - 3.5
+                                    local testPos = inMemory.OriginalClimbSpot + (inMemory.LadderRight * inMemory.ProbeOffset)
+                                    local hit = workspace:Raycast(testPos + Vector3.new(0,2,0), -normal * 8, rayParams)
+                                    
+                                    if not hit then
+                                        inMemory.LeftEdge = inMemory.ProbeOffset + 3.5
+                                        inMemory.ProbeState = "Center"
+                                    else
+                                        inMemory.ClimbSpot = testPos
+                                        inMemory.ClimbFailTick = os.clock()
+                                    end
+                                    
+                                elseif inMemory.ProbeState == "Center" then
+                                    -- ผ่ากลาง!
+                                    local mid = ((inMemory.RightEdge or 0) + (inMemory.LeftEdge or 0)) / 2
+                                    inMemory.ClimbSpot = inMemory.OriginalClimbSpot + (inMemory.LadderRight * mid)
+                                    inMemory.ProbeState = "Done"
+                                    inMemory.ClimbFailTick = os.clock() + 5 
                                 end
                             end
 
-                            -- บังคับหันหน้าเข้าหากำแพงตรงๆ (ย้อนรอย Normal ที่คลำได้)
-                            local faceDir = -(inMemory.LadderNormal or Vector3.new(1,0,0))
+                            -- บังคับหันหน้าเข้าหาบันได
+                            local faceDir = -normal
                             if faceDir.Magnitude == 0 then faceDir = Vector3.new(1,0,0) end
                             
                             local lookPos = currentPos + faceDir * 5
                             myRoot.CFrame = CFrame.lookAt(currentPos, Vector3.new(lookPos.X, currentPos.Y, lookPos.Z))
                             
-                            -- [THE FIX]: พุ่งตรงขึ้นยอดเสาฟ้า โดยไม่สนระบบหลบหลีก (Avoidance) แล้ว!
+                            -- พุ่งชนยอดเสาและโดดรัวๆ
                             myHuman:MoveTo(topTarget)
                             forceJump(myHuman)
                         end
@@ -727,13 +688,9 @@ task.spawn(function()
                                                 local climbSpot, ladderCenter, ladderNormal = findClimbSpotVineStyle(outerNodes, targetPos.Y, center, myChar)
                                                 
                                                 local ladderRight = Vector3.new(1,0,0)
-                                                local setupSpot = nil
                                                 if ladderNormal then
                                                     ladderRight = ladderNormal:Cross(Vector3.new(0,1,0)).Unit
                                                     if ladderRight.Magnitude == 0 then ladderRight = Vector3.new(1,0,0) end
-                                                    -- [THE FIX] คำนวณจุดตั้งหลัก ห่างจากหน้าบันได 5 บล็อก!
-                                                    setupSpot = climbSpot + (ladderNormal * 5)
-                                                    setupSpot = Vector3.new(setupSpot.X, getRealFloorY(setupSpot), setupSpot.Z)
                                                 end
 
                                                 table.insert(_G.BuildingMemories, {
@@ -741,9 +698,7 @@ task.spawn(function()
                                                     Center = center,
                                                     HasPillar = (climbSpot ~= nil),
                                                     ClimbSpot = climbSpot,
-                                                    OriginalClimbSpot = climbSpot,
-                                                    SetupSpot = setupSpot, -- เก็บจุดตั้งหลักไว้เดินไปก่อน
-                                                    Phase = "GoToSetup",   -- โหมดเริ่มต้นคือเดินไปตั้งหลัก
+                                                    OriginalClimbSpot = climbSpot, 
                                                     LadderCenter = ladderCenter,
                                                     LadderNormal = ladderNormal,
                                                     LadderRight = ladderRight,
@@ -751,6 +706,7 @@ task.spawn(function()
                                                     ProbeOffset = 0,
                                                     RightEdge = nil,
                                                     LeftEdge = nil,
+                                                    ClimbPhase = "Aligning", -- [NEW] เริ่มต้นด้วยการเดินไปตั้งหลักก่อน!
                                                     MaxClimbY = currentPos.Y,
                                                     ClimbFailTick = os.clock(),
                                                     TargetY = targetPos.Y
