@@ -158,7 +158,7 @@ local function getRealFloorY(pos)
 end
 
 -- =========================================================================
--- [วิชาระเบิดรัศมีผ่าแกนกลางสัมบูรณ์] กวาดเรียบทุกชิ้นส่วน หักคอ Normal ให้ตรงเป๊ะ!
+-- [วิชาระเบิดรัศมี (Box Expansion)]
 -- =========================================================================
 local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
     local params = OverlapParams.new()
@@ -182,6 +182,10 @@ local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
             local baseWallRay = workspace:Raycast(node + Vector3.new(0, 2, 0), dir * 8, rayParams)
             
             if baseWallRay and baseWallRay.Instance then
+                local normal = baseWallRay.Normal
+                
+                if normal:Dot(-dir) < 0.7 then continue end
+                
                 local p = baseWallRay.Instance
                 local topY = p.Position.Y + (p.Size.Y/2)
                 local bottomY = p.Position.Y - (p.Size.Y/2)
@@ -206,84 +210,36 @@ local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
                     local objCenter = p.Position
                     local ladderCenter = Vector3.new(objCenter.X, node.Y, objCenter.Z)
                     
-                    -- [THE MAGIC] วิชาระเบิดรัศมีเพื่อกลืนกินโมเดลบันไดทั้งหมด
-                    local searchSize = Vector3.new(6, 12, 6) 
-                    local searchCFrame = CFrame.new(ladderCenter + Vector3.new(0, 6, 0)) 
-                    local collectedParts = {}
+                    local searchSize = Vector3.new(16, 20, 16) 
+                    local searchCFrame = CFrame.new(ladderCenter + Vector3.new(0, 10, 0))
+                    local partsInBox = workspace:GetPartBoundsInBox(searchCFrame, searchSize, params)
                     
-                    -- ระเบิดขยายออก 5 รอบ (ครอบคลุมกว้างถึง 26 Studs)
-                    for step = 1, 5 do
-                        searchSize = searchSize + Vector3.new(4, 0, 4)
-                        local partsInBox = workspace:GetPartBoundsInBox(searchCFrame, searchSize, params)
-                        collectedParts = {}
-                        for _, foundPart in ipairs(partsInBox) do
-                            if foundPart:IsA("BasePart") and foundPart.CanCollide and foundPart.Transparency < 1 then
-                                -- กรองเอาเฉพาะชิ้นส่วนแนวตั้งที่ไม่ใช่พื้นยักษ์
-                                if foundPart.Size.X < 30 and foundPart.Size.Z < 30 then
-                                    table.insert(collectedParts, foundPart)
-                                end
-                            end
-                        end
-                    end
-                    
-                    -- หาค่า Min/Max ของ AABB 
                     local minX, maxX = math.huge, -math.huge
                     local minZ, maxZ = math.huge, -math.huge
-                    local validCount = 0
+                    local validPartsCount = 0
                     
-                    for _, cp in ipairs(collectedParts) do
-                        local pos = cp.Position
-                        local halfX = cp.Size.X / 2
-                        local halfZ = cp.Size.Z / 2
-                        if pos.X - halfX < minX then minX = pos.X - halfX end
-                        if pos.X + halfX > maxX then maxX = pos.X + halfX end
-                        if pos.Z - halfZ < minZ then minZ = pos.Z - halfZ end
-                        if pos.Z + halfZ > maxZ then maxZ = pos.Z + halfZ end
-                        validCount = validCount + 1
-                    end
-                    
-                    local trueNormal = baseWallRay.Normal -- สำรองไว้ก่อน
-                    
-                    if validCount > 0 then
-                        local trueCenterX = (minX + maxX) / 2
-                        local trueCenterZ = (minZ + maxZ) / 2
-                        local widthX = maxX - minX
-                        local widthZ = maxZ - minZ
-                        
-                        ladderCenter = Vector3.new(trueCenterX, node.Y, trueCenterZ)
-                        
-                        -- [SMART AXIS DEDUCTION] วิเคราะห์หาแกนหน้าบันไดที่แท้จริง
-                        if widthX > widthZ * 1.3 then
-                            -- บันไดกว้างแนวนอนแกน X -> ต้องปีนจากแกน Z
-                            if node.Z > ladderCenter.Z then trueNormal = Vector3.new(0, 0, 1)
-                            else trueNormal = Vector3.new(0, 0, -1) end
-                        elseif widthZ > widthX * 1.3 then
-                            -- บันไดกว้างแนวนอนแกน Z -> ต้องปีนจากแกน X
-                            if node.X > ladderCenter.X then trueNormal = Vector3.new(1, 0, 0)
-                            else trueNormal = Vector3.new(-1, 0, 0) end
-                        else
-                            -- ถ้ากว้างเท่ากัน (เสาสี่เหลี่ยมจัตุรัส) ให้ใช้เวกเตอร์ชี้ไปหาพื้นที่โล่ง (node)
-                            local diff = (node - ladderCenter)
-                            diff = Vector3.new(diff.X, 0, diff.Z).Unit
-                            -- หักให้ตรงแกน (Snap to Cardinal)
-                            if math.abs(diff.X) > math.abs(diff.Z) then
-                                trueNormal = Vector3.new(math.sign(diff.X), 0, 0)
-                            else
-                                trueNormal = Vector3.new(0, 0, math.sign(diff.Z))
+                    for _, cp in ipairs(partsInBox) do
+                        if cp:IsA("BasePart") and cp.CanCollide and cp.Transparency < 1 then
+                            if cp.Size.X < 30 and cp.Size.Z < 30 then 
+                                local pos = cp.Position
+                                local halfX, halfZ = cp.Size.X/2, cp.Size.Z/2
+                                if pos.X - halfX < minX then minX = pos.X - halfX end
+                                if pos.X + halfX > maxX then maxX = pos.X + halfX end
+                                if pos.Z - halfZ < minZ then minZ = pos.Z - halfZ end
+                                if pos.Z + halfZ > maxZ then maxZ = pos.Z + halfZ end
+                                validPartsCount = validPartsCount + 1
                             end
                         end
-                        
-                        -- ถ้าระเบิดแล้วเจอกำแพงใหญ่เว่อร์ (เกิน 25) แสดงว่าไม่ใช่บันได ให้ถอยมาจุดเดิม
-                        if widthX > 25 or widthZ > 25 then
-                            ladderCenter = Vector3.new(baseWallRay.Position.X, node.Y, baseWallRay.Position.Z)
-                            ladderCenter = ladderCenter - (baseWallRay.Normal * 2)
-                            trueNormal = baseWallRay.Normal
-                        end
                     end
                     
-                    -- ปักเสาฟ้าตรงกลางเป๊ะ พร้อมใช้แกน Normal ที่ถูกต้อง 100%
-                    local bestClimbPos = ladderCenter + (trueNormal * 2.5)
-                    return bestClimbPos, ladderCenter, trueNormal
+                    if validPartsCount > 0 and minX ~= math.huge then
+                        ladderCenter = Vector3.new((minX + maxX)/2, node.Y, (minZ + maxZ)/2)
+                    end
+                    
+                    local outwardDir = -dir 
+                    local bestClimbPos = ladderCenter + (outwardDir * 2.5)
+                    
+                    return bestClimbPos, ladderCenter, outwardDir
                 end
             end
         end
@@ -292,7 +248,7 @@ local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
 end
 
 -- =========================================================================
--- LASER FLOOD-FILL: สแกนหาพื้นที่เขียว (ในร่ม) และพื้นที่เหลือง (ขอบตึก) ในพริบตา
+-- LASER FLOOD-FILL
 -- =========================================================================
 local function floodFillRoofInstantly(startPos, maxCheckHeight)
     local step = 6          
@@ -345,15 +301,7 @@ local function floodFillRoofInstantly(startPos, maxCheckHeight)
                 
                 if math.abs(floorY - startPos.Y) <= 8 then
                     local testPos = Vector3.new(testXZ.X, floorY, testXZ.Z)
-                    local hasCeiling = workspace:Raycast(testPos + Vector3.new(0,1,0), Vector3.new(0, maxCheckHeight, 0), rayParams)
-                    
-                    -- [THE FIX] Smart Ceiling Filter: ป้องกันการสแกนไปโดนขั้นบันไดแล้วนึกว่าเป็นเพดาน
-                    if hasCeiling then
-                        local hitInst = hasCeiling.Instance
-                        if hitInst.Size.Y <= 2.5 and hitInst.Size.X < 15 and hitInst.Size.Z < 15 then
-                            hasCeiling = nil -- มันคือเศษไม้/ขั้นบันได เมินมันซะ!
-                        end
-                    end
+                    local hasCeiling = workspace:Raycast(testPos + Vector3.new(0,5,0), Vector3.new(0, maxCheckHeight-5, 0), rayParams)
                     
                     if hasCeiling then
                         table.insert(queue, testPos)
@@ -376,84 +324,6 @@ local function floodFillRoofInstantly(startPos, maxCheckHeight)
     end
     
     return roofNodes, outerNodes
-end
-
-local function computeVerticalClimbPath(startPos, targetPos, myChar, tChar)
-    local customWaypoints = {}
-    local currentScanPos = startPos
-    local heightToClimb = targetPos.Y - startPos.Y
-    if heightToClimb < 3 then return customWaypoints end
-
-    local params = OverlapParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {myChar, tChar, workspace.Terrain}
-
-    local visited = {}
-    for jump = 1, 30 do 
-        local bestNextPos = nil
-        local bestScore = math.huge
-        local searchCenter = currentScanPos + Vector3.new(0, 6, 0)
-        local partsNearby = workspace:GetPartBoundsInRadius(searchCenter, 15, params)
-        
-        for _, part in ipairs(partsNearby) do
-            if part:IsA("BasePart") and part.CanCollide and part.Transparency < 1 then
-                local rayOrigin = part.Position + Vector3.new(0, (part.Size.Y/2) + 4, 0)
-                local downRay = workspace:Raycast(rayOrigin, Vector3.new(0, -8, 0), rayParams)
-                if downRay then
-                    local hitPos = downRay.Position
-                    local heightDiff = hitPos.Y - currentScanPos.Y
-                    if heightDiff > 0.5 and heightDiff <= 10.0 then
-                        local isVisited = false
-                        for _, v in ipairs(visited) do
-                            if (v - hitPos).Magnitude < 2.5 then isVisited = true; break end
-                        end
-                        
-                        if not isVisited then
-                            local dist2D = (Vector2.new(hitPos.X, hitPos.Z) - Vector2.new(targetPos.X, targetPos.Z)).Magnitude
-                            local score = dist2D - (heightDiff * 15)
-                            if score < bestScore then
-                                bestScore = score; bestNextPos = hitPos
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        
-        if bestNextPos then
-            table.insert(customWaypoints, {Position = bestNextPos, Action = Enum.PathWaypointAction.Jump})
-            table.insert(visited, bestNextPos)
-            currentScanPos = bestNextPos
-            if currentScanPos.Y >= targetPos.Y - 5 then 
-                table.insert(customWaypoints, {Position = targetPos, Action = Enum.PathWaypointAction.Walk})
-                break
-            end
-        else
-            break
-        end
-    end
-    return customWaypoints
-end
-
-local function findPathWithFallback(startPos, targetPos)
-    local path = PathfindingService:CreatePath({AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 4})
-    path:ComputeAsync(startPos, targetPos)
-    if path.Status == Enum.PathStatus.Success then return path:GetWaypoints() end
-    
-    local searchRadii = {5, 10, 15}
-    local angles = {0, 45, -45, 90, -90, 135, -135, 180}
-    for _, r in ipairs(searchRadii) do
-        for _, ang in ipairs(angles) do
-            local offset = CFrame.Angles(0, math.rad(ang), 0) * Vector3.new(0, 0, r)
-            local testPos = targetPos + offset
-            local floorRay = workspace:Raycast(testPos + Vector3.new(0, 10, 0), Vector3.new(0, -50, 0), rayParams)
-            if floorRay then
-                path:ComputeAsync(startPos, floorRay.Position)
-                if path.Status == Enum.PathStatus.Success then return path:GetWaypoints() end
-            end
-        end
-    end
-    return {} 
 end
 
 -- --- UI ---
@@ -515,7 +385,7 @@ task.spawn(function()
                 if not randomTarget or not randomTarget.Parent or not randomTarget.Character or not randomTarget.Character:FindFirstChild("Humanoid") or randomTarget.Character.Humanoid.Health <= 0 then
                     local validPlayers = {}
                     for _, p in pairs(Players:GetPlayers()) do
-                        if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health > 0 then
+                        if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Humanoid") and p.Character.Health > 0 then
                             table.insert(validPlayers, p)
                         end
                     end
@@ -573,8 +443,8 @@ task.spawn(function()
                 -- =======================================================
                 local inMemory = nil
                 for i, mem in ipairs(_G.BuildingMemories) do
+                    mem.TargetY = targetPos.Y
                     
-                    -- [THE FIX] กฎการล้างสมอง: ต้องเดินเหยียบแพลตฟอร์มลึกเข้าไปเกิน 4 บล็อกก่อน ถึงจะเคลียร์ความจำ!
                     local distFromPillar = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(mem.ClimbSpot.X, 0, mem.ClimbSpot.Z)).Magnitude
                     if currentPos.Y >= mem.TargetY - 2 and distFromPillar > 4 then
                         table.remove(_G.BuildingMemories, i)
@@ -606,36 +476,89 @@ task.spawn(function()
                         inMemory.ClimbPhase = inMemory.ClimbPhase or "Aligning"
                         
                         local outwardDir = inMemory.LadderOutward or Vector3.new(1,0,0)
-                        local setupPos = inMemory.LadderCenter + (outwardDir * 15)
+                        local setupPos = inMemory.LadderCenter + (outwardDir * 8) -- ดึงออกมาแค่ 8 Studs พอดีตั้งหลัก
                         setupPos = Vector3.new(setupPos.X, inMemory.OriginalClimbSpot.Y, setupPos.Z)
                         
-                        -- ทะลุยอดขึ้นไป 5 บล็อก แล้วหักเข้าตึก 6 บล็อก
-                        local vaultPos = Vector3.new(inMemory.ClimbSpot.X, inMemory.TargetY + 5, inMemory.ClimbSpot.Z) + (-outwardDir * 6)
+                        -- [THE FIX] เล็งทะลุยอดเสาฟ้าให้สุด
+                        local topTarget = Vector3.new(inMemory.ClimbSpot.X, inMemory.TargetY + 5, inMemory.ClimbSpot.Z)
 
                         if inMemory.ClimbPhase == "Aligning" then
                             local distToSetup = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(setupPos.X, 0, setupPos.Z)).Magnitude
                             updateDebug("DirectTrace", currentPos, setupPos, Color3.fromRGB(255, 165, 0)) 
                             
-                            if distToSetup > 4 then
-                                moveWithAvoidance(myHuman, setupPos)
-                            else
+                            -- [THE FIX] วิ่งฝ่าบล็อกเหลือง/เขียวไปเลย ไม่ใช้ moveWithAvoidance!
+                            myHuman:MoveTo(setupPos)
+                            
+                            if distToSetup <= 4 then
                                 inMemory.ClimbPhase = "Climbing"
                                 inMemory.ClimbFailTick = os.clock()
+                                inMemory.MaxClimbY = currentPos.Y
+                                inMemory.ProbeState = "None"
                             end
                             
                         elseif inMemory.ClimbPhase == "Climbing" then
-                            updateDebug("DirectTrace", currentPos, vaultPos, Color3.fromRGB(255, 0, 255)) 
+                            updateDebug("DirectTrace", currentPos, topTarget, Color3.fromRGB(255, 0, 255)) 
                             
+                            -- [THE FIX] รีเทิร์นระบบสไลด์โยกคลำหาเสาแบบเดิมกลับมา!
+                            if currentPos.Y > (inMemory.MaxClimbY or currentPos.Y) + 1 then
+                                inMemory.MaxClimbY = currentPos.Y
+                                inMemory.ClimbFailTick = os.clock()
+                                inMemory.ProbeState = "None"
+                            end
+
+                            -- ถ้ายืนเอ๋อ 3 วิ ความสูงไม่เพิ่ม ให้สไลด์คลำ!
+                            if os.clock() - (inMemory.ClimbFailTick or os.clock()) > 3 then
+                                if inMemory.ProbeState == "None" then
+                                    inMemory.ProbeState = "Right"
+                                    inMemory.ProbeOffset = 0
+                                    
+                                elseif inMemory.ProbeState == "Right" then
+                                    inMemory.ProbeOffset = inMemory.ProbeOffset + 1.5 
+                                    local testPos = inMemory.OriginalClimbSpot + (inMemory.LadderRight * inMemory.ProbeOffset)
+                                    -- เช็คขอบ
+                                    local hit = workspace:Raycast(testPos + Vector3.new(0,2,0), -outwardDir * 8, rayParams)
+                                    
+                                    if not hit then
+                                        inMemory.RightEdge = inMemory.ProbeOffset - 1.5
+                                        inMemory.ProbeState = "Left"
+                                        inMemory.ProbeOffset = 0
+                                    else
+                                        inMemory.ClimbSpot = testPos
+                                        inMemory.ClimbFailTick = os.clock() - 1
+                                    end
+                                    
+                                elseif inMemory.ProbeState == "Left" then
+                                    inMemory.ProbeOffset = inMemory.ProbeOffset - 1.5
+                                    local testPos = inMemory.OriginalClimbSpot + (inMemory.LadderRight * inMemory.ProbeOffset)
+                                    local hit = workspace:Raycast(testPos + Vector3.new(0,2,0), -outwardDir * 8, rayParams)
+                                    
+                                    if not hit then
+                                        inMemory.LeftEdge = inMemory.ProbeOffset + 1.5
+                                        inMemory.ProbeState = "Center"
+                                    else
+                                        inMemory.ClimbSpot = testPos
+                                        inMemory.ClimbFailTick = os.clock() - 1
+                                    end
+                                    
+                                elseif inMemory.ProbeState == "Center" then
+                                    local mid = ((inMemory.RightEdge or 0) + (inMemory.LeftEdge or 0)) / 2
+                                    inMemory.ClimbSpot = inMemory.OriginalClimbSpot + (inMemory.LadderRight * mid)
+                                    inMemory.ProbeState = "Done"
+                                    inMemory.ClimbFailTick = os.clock() + 5 
+                                end
+                            end
+
+                            -- ล็อกคอหันหน้าเข้าหาตึกตลอดเวลา! ห้ามโหมดอื่นแย่ง
                             local faceDir = -outwardDir
                             if faceDir.Magnitude == 0 then faceDir = Vector3.new(1,0,0) end
                             local lookPos = currentPos + faceDir * 5
                             myRoot.CFrame = CFrame.lookAt(currentPos, Vector3.new(lookPos.X, currentPos.Y, lookPos.Z))
                             
-                            -- พุ่งตรงไปยังจุดโหนตัว (VaultPos) โดยปิดการกระโดด
-                            myHuman:MoveTo(vaultPos)
+                            -- [THE FIX] พุ่งชนยอดเสาฟ้า วิ่งฝ่าบล็อกโลด!
+                            myHuman:MoveTo(topTarget)
                             
-                            -- โดดช่วยกระตุ้นเฉพาะตอนตันจริงๆ (5 วิ)
-                            if os.clock() - (inMemory.ClimbFailTick or os.clock()) > 5 then
+                            -- กระโดดอัดกำแพงถ้าไม่ได้ลอยอยู่
+                            if myHuman.FloorMaterial ~= Enum.Material.Air then
                                 forceJump(myHuman)
                             end
                         end
@@ -740,97 +663,91 @@ task.spawn(function()
                             lastComputeTime = os.clock()
                             lastTargetPos = targetPos
 
-                            local testWaypoints = findPathWithFallback(currentPos, targetPos)
-                            
-                            if #testWaypoints > 0 and not isStuck then
-                                currentWaypoints = testWaypoints
-                                currentWaypointIndex = 2
-                                isFollowingCustomPath = true
-                                if debugEnabled then
-                                    clearVisuals()
-                                    for _, wp in ipairs(currentWaypoints) do
-                                        local p = Instance.new("Part")
-                                        p.Name, p.Size, p.Position = "WP_Debug", Vector3.new(1.2, 1.2, 1.2), wp.Position
-                                        p.Anchored, p.CanCollide, p.CanQuery, p.Transparency = true, false, false, 0.4
-                                        p.Color, p.Material = Color3.fromRGB(0, 150, 255), Enum.Material.Neon
-                                        p.Parent = workspace.Terrain
-                                    end
-                                end
-                            else
-                                local canUseCustomPaths = (_G.CustomPathFailTick == nil) or (os.clock() - _G.CustomPathFailTick > 4)
+                            local canUseCustomPaths = (_G.CustomPathFailTick == nil) or (os.clock() - _G.CustomPathFailTick > 4)
 
-                                if canUseCustomPaths then
-                                    if hDist < 15 then
-                                        local requiredHeightCheck = math.max(20, targetPos.Y - currentPos.Y + 5)
+                            if canUseCustomPaths then
+                                if hDist < 15 then
+                                    local requiredHeightCheck = math.max(20, targetPos.Y - currentPos.Y + 5)
+                                    
+                                    if checkCeilingAround(currentPos, requiredHeightCheck) then
+                                        local roofNodes, outerNodes = floodFillRoofInstantly(currentPos, requiredHeightCheck)
                                         
-                                        if checkCeilingAround(currentPos, requiredHeightCheck) then
-                                            local roofNodes, outerNodes = floodFillRoofInstantly(currentPos, requiredHeightCheck)
+                                        if #roofNodes > 0 then
+                                            local minX, maxX = math.huge, -math.huge
+                                            local minZ, maxZ = math.huge, -math.huge
+                                            for _, p in ipairs(roofNodes) do
+                                                if p.X < minX then minX = p.X end
+                                                if p.X > maxX then maxX = p.X end
+                                                if p.Z < minZ then minZ = p.Z end
+                                                if p.Z > maxZ then maxZ = p.Z end
+                                            end
+                                            local center = Vector3.new((minX+maxX)/2, currentPos.Y, (minZ+maxZ)/2)
                                             
-                                            if #roofNodes > 0 then
-                                                local minX, maxX = math.huge, -math.huge
-                                                local minZ, maxZ = math.huge, -math.huge
-                                                for _, p in ipairs(roofNodes) do
-                                                    if p.X < minX then minX = p.X end
-                                                    if p.X > maxX then maxX = p.X end
-                                                    if p.Z < minZ then minZ = p.Z end
-                                                    if p.Z > maxZ then maxZ = p.Z end
-                                                end
-                                                local center = Vector3.new((minX+maxX)/2, currentPos.Y, (minZ+maxZ)/2)
-                                                
-                                                local climbSpot, ladderCenter, outwardDir = findClimbSpotVineStyle(outerNodes, targetPos.Y, center, myChar)
+                                            local climbSpot, ladderCenter, outwardDir = findClimbSpotVineStyle(outerNodes, targetPos.Y, center, myChar)
+                                            
+                                            local ladderRight = Vector3.new(1,0,0)
+                                            if outwardDir then
+                                                ladderRight = outwardDir:Cross(Vector3.new(0,1,0)).Unit
+                                                if ladderRight.Magnitude == 0 then ladderRight = Vector3.new(1,0,0) end
+                                            end
 
-                                                table.insert(_G.BuildingMemories, {
-                                                    MinX = minX, MaxX = maxX, MinZ = minZ, MaxZ = maxZ,
-                                                    Center = center,
-                                                    HasPillar = (climbSpot ~= nil),
-                                                    ClimbSpot = climbSpot,
-                                                    OriginalClimbSpot = climbSpot, 
-                                                    LadderCenter = ladderCenter,
-                                                    LadderOutward = outwardDir, 
-                                                    ClimbPhase = "Aligning",
-                                                    MaxClimbY = currentPos.Y,
-                                                    ClimbFailTick = os.clock(),
-                                                    TargetY = targetPos.Y
-                                                })
-                                            end
-                                        end
-                                    else
-                                        local flatTargetPos = Vector3.new(targetPos.X, currentPos.Y, targetPos.Z)
-                                        local flatDir = (flatTargetPos - currentPos).Unit
-                                        
-                                        if flatDir.Magnitude > 0 then
-                                            local fwdRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), flatDir * 6, rayParams)
-                                            if fwdRay then
-                                                _G.DodgeMem = _G.DodgeMem or {Dir = Vector3.new(), Expire = 0}
-                                                local dodgeDir
-                                                if os.clock() < _G.DodgeMem.Expire then
-                                                    dodgeDir = _G.DodgeMem.Dir
-                                                else
-                                                    local rightDir = (CFrame.Angles(0, math.rad(-75), 0) * flatDir).Unit
-                                                    local leftDir = (CFrame.Angles(0, math.rad(75), 0) * flatDir).Unit
-                                                    local rightRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), rightDir * 10, rayParams)
-                                                    local leftRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), leftDir * 10, rayParams)
-                                                    
-                                                    if not rightRay then dodgeDir = rightDir
-                                                    elseif not leftRay then dodgeDir = leftDir
-                                                    else dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * flatDir).Unit end 
-                                                    _G.DodgeMem = {Dir = dodgeDir, Expire = os.clock() + 2.0}
-                                                end
-                                                local dodgePos = currentPos + (dodgeDir * 8)
-                                                updateDebug("DirectTrace", currentPos, dodgePos, Color3.fromRGB(0, 255, 255))
-                                                moveWithAvoidance(myHuman, dodgePos)
-                                            else
-                                                updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(0, 255, 255))
-                                                moveWithAvoidance(myHuman, flatTargetPos)
-                                            end
+                                            table.insert(_G.BuildingMemories, {
+                                                MinX = minX, MaxX = maxX, MinZ = minZ, MaxZ = maxZ,
+                                                Center = center,
+                                                HasPillar = (climbSpot ~= nil),
+                                                ClimbSpot = climbSpot,
+                                                OriginalClimbSpot = climbSpot, 
+                                                LadderCenter = ladderCenter,
+                                                LadderOutward = outwardDir, 
+                                                LadderRight = ladderRight,
+                                                ProbeState = "None",
+                                                ProbeOffset = 0,
+                                                RightEdge = nil,
+                                                LeftEdge = nil,
+                                                ClimbPhase = "Aligning",
+                                                MaxClimbY = currentPos.Y,
+                                                ClimbFailTick = os.clock(),
+                                                TargetY = targetPos.Y,
+                                                IsOnRoof = false 
+                                            })
                                         end
                                     end
                                 else
-                                    isProbing = false
-                                    currentWaypoints = {}
-                                    isFollowingCustomPath = false
-                                    moveWithAvoidance(myHuman, targetPos)
+                                    local flatTargetPos = Vector3.new(targetPos.X, currentPos.Y, targetPos.Z)
+                                    local flatDir = (flatTargetPos - currentPos).Unit
+                                    
+                                    if flatDir.Magnitude > 0 then
+                                        local fwdRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), flatDir * 6, rayParams)
+                                        if fwdRay then
+                                            _G.DodgeMem = _G.DodgeMem or {Dir = Vector3.new(), Expire = 0}
+                                            local dodgeDir
+                                            if os.clock() < _G.DodgeMem.Expire then
+                                                dodgeDir = _G.DodgeMem.Dir
+                                            else
+                                                local rightDir = (CFrame.Angles(0, math.rad(-75), 0) * flatDir).Unit
+                                                local leftDir = (CFrame.Angles(0, math.rad(75), 0) * flatDir).Unit
+                                                local rightRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), rightDir * 10, rayParams)
+                                                local leftRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), leftDir * 10, rayParams)
+                                                
+                                                if not rightRay then dodgeDir = rightDir
+                                                elseif not leftRay then dodgeDir = leftDir
+                                                else dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * flatDir).Unit end 
+                                                _G.DodgeMem = {Dir = dodgeDir, Expire = os.clock() + 2.0}
+                                            end
+                                            local dodgePos = currentPos + (dodgeDir * 8)
+                                            updateDebug("DirectTrace", currentPos, dodgePos, Color3.fromRGB(0, 255, 255))
+                                            moveWithAvoidance(myHuman, dodgePos)
+                                        else
+                                            updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(0, 255, 255))
+                                            moveWithAvoidance(myHuman, flatTargetPos)
+                                        end
+                                    end
                                 end
+                            else
+                                isProbing = false
+                                currentWaypoints = {}
+                                isFollowingCustomPath = false
+                                moveWithAvoidance(myHuman, targetPos)
                             end
                         end
                     end
