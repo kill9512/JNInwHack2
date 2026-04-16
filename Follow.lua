@@ -105,7 +105,6 @@ local function forceJump(hum)
     end
 end
 
--- [THE FIX] แก้ไขระบบการหลบมุมให้เป็น 90 องศา (Wall Hugging) ไม่หันสลับซ้ายขวา
 local function moveWithAvoidance(humanoid, pos)
     local hrp = humanoid.Parent:FindFirstChild("HumanoidRootPart")
     if hrp then
@@ -129,17 +128,17 @@ local function moveWithAvoidance(humanoid, pos)
                     if os.clock() < _G.MicroDodgeMem.Expire then
                         dodgeDir = _G.MicroDodgeMem.Dir
                     else
-                        local rightDir = (CFrame.Angles(0, math.rad(-90), 0) * dir).Unit
-                        local leftDir = (CFrame.Angles(0, math.rad(90), 0) * dir).Unit
+                        local rightDir = (CFrame.Angles(0, math.rad(-60), 0) * dir).Unit
+                        local leftDir = (CFrame.Angles(0, math.rad(60), 0) * dir).Unit
                         
                         local rightRay = workspace:Raycast(hrp.Position + Vector3.new(0, 1.5, 0), rightDir * 6, rayParams)
                         local leftRay = workspace:Raycast(hrp.Position + Vector3.new(0, 1.5, 0), leftDir * 6, rayParams)
                         
                         if not rightRay then dodgeDir = rightDir
                         elseif not leftRay then dodgeDir = leftDir
-                        else dodgeDir = rightDir end -- บังคับขวาถ้าติดทั้งคู่ จะได้ไม่ยืนเอ๋อ 180 องศา
+                        else dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * dir).Unit end 
                         
-                        _G.MicroDodgeMem = {Dir = dodgeDir, Expire = os.clock() + 1.0} 
+                        _G.MicroDodgeMem = {Dir = dodgeDir, Expire = os.clock() + 0.6} 
                     end
                     targetWalkPos = hrp.Position + (dodgeDir * 6)
                 else
@@ -167,10 +166,10 @@ local function checkCeilingAround(pos, height)
 end
 
 -- =========================================================================
--- [THE FIX] ใช้ Raycast Normal หาจุดปักเสา แม่นยำ 100% ไม่ต้องใช้การกลืน Part
+-- [วิชาระเบิดรัศมี] Sphere Expansion หาแกนกลางบันไดแบบ 100% !!
 -- =========================================================================
 local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
-    local params = RaycastParams.new()
+    local params = OverlapParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = {myChar, workspace.Terrain}
 
@@ -188,7 +187,7 @@ local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
         }
         
         for _, dir in ipairs(dirs) do
-            local baseWallRay = workspace:Raycast(node + Vector3.new(0, 2, 0), dir * 8, params)
+            local baseWallRay = workspace:Raycast(node + Vector3.new(0, 2, 0), dir * 8, rayParams)
             
             if baseWallRay and baseWallRay.Instance then
                 local p = baseWallRay.Instance
@@ -202,7 +201,7 @@ local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
                     local testY = 5
                     canClimb = true
                     while testY < heightToTarget - 5 do
-                        local upWallRay = workspace:Raycast(node + Vector3.new(0, testY, 0), dir * 8, params)
+                        local upWallRay = workspace:Raycast(node + Vector3.new(0, testY, 0), dir * 8, rayParams)
                         if not upWallRay then
                             canClimb = false 
                             break
@@ -212,18 +211,57 @@ local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
                 end
                 
                 if canClimb then
-                    -- ใช้ Normal ชี้ออกจากกำแพง
-                    local outwardDir = baseWallRay.Normal
-                    if outwardDir.Magnitude == 0 then outwardDir = -dir end
+                    local objCenter = p.Position
+                    local normal = baseWallRay.Normal
+                    local ladderCenter = Vector3.new(objCenter.X, node.Y, objCenter.Z)
                     
-                    local hitPoint = baseWallRay.Position
-                    local ladderCenter = hitPoint - (outwardDir * 2) 
-                    ladderCenter = Vector3.new(ladderCenter.X, node.Y, ladderCenter.Z)
+                    -- [THE MAGIC] วิชาระเบิดรัศมี (Box Expansion)
+                    local searchSize = Vector3.new(4, 10, 4) -- เริ่มต้นกล่อง 4x10x4
+                    local searchCFrame = CFrame.new(ladderCenter + Vector3.new(0, 5, 0)) -- ยกขึ้นนิดนึงไม่ให้โดนพื้น
+                    local collectedParts = {}
                     
-                    local bestClimbPos = hitPoint + (outwardDir * 2.5)
-                    bestClimbPos = Vector3.new(bestClimbPos.X, node.Y, bestClimbPos.Z)
+                    -- ระเบิดออกทีละ 2 Studs จำนวน 6 รอบ (ขยายสุด 16x16)
+                    for step = 1, 12 do
+                        searchSize = searchSize + Vector3.new(2, 0, 2)
+                        local partsInBox = workspace:GetPartBoundsInBox(searchCFrame, searchSize, params)
+                        collectedParts = {}
+                        for _, foundPart in ipairs(partsInBox) do
+                            if foundPart:IsA("BasePart") and foundPart.CanCollide and foundPart.Transparency < 1 then
+                                -- กรองเอาเฉพาะชิ้นส่วนแนวตั้งที่ไม่ใช่พื้นยักษ์
+                                if foundPart.Size.X < 50 and foundPart.Size.Z < 50 then
+                                    table.insert(collectedParts, foundPart)
+                                end
+                            end
+                        end
+                    end
                     
-                    return bestClimbPos, ladderCenter, outwardDir
+                    -- คำนวณหาแกนกลางสัมบูรณ์จากทุกชิ้นส่วนที่โดนกลืน
+                    local minX, maxX = math.huge, -math.huge
+                    local minZ, maxZ = math.huge, -math.huge
+                    for _, cp in ipairs(collectedParts) do
+                        local pos = cp.Position
+                        local halfX = cp.Size.X / 2
+                        local halfZ = cp.Size.Z / 2
+                        if pos.X - halfX < minX then minX = pos.X - halfX end
+                        if pos.X + halfX > maxX then maxX = pos.X + halfX end
+                        if pos.Z - halfZ < minZ then minZ = pos.Z - halfZ end
+                        if pos.Z + halfZ > maxZ then maxZ = pos.Z + halfZ end
+                    end
+                    
+                    if minX ~= math.huge then
+                        local trueCenterX = (minX + maxX) / 2
+                        local trueCenterZ = (minZ + maxZ) / 2
+                        ladderCenter = Vector3.new(trueCenterX, node.Y, trueCenterZ)
+                        
+                        -- ถ้าสแกนเจอกำแพงใหญ่เกินไป (ไม่ใช่บันได) ให้ดึงกลับมาจุดยิงเลเซอร์
+                        if (maxX - minX) > 20 or (maxZ - minZ) > 20 then
+                            ladderCenter = Vector3.new(baseWallRay.Position.X, node.Y, baseWallRay.Position.Z)
+                            ladderCenter = ladderCenter - (normal * 2) 
+                        end
+                    end
+                    
+                    local bestClimbPos = ladderCenter + (normal * 2.5)
+                    return bestClimbPos, ladderCenter, normal
                 end
             end
         end
@@ -448,12 +486,9 @@ task.spawn(function()
                 -- =======================================================
                 local inMemory = nil
                 for i, mem in ipairs(_G.BuildingMemories) do
-                    -- [THE FIX] แก้ไขกัน Error ถ้าหา ClimbSpot ไม่เจอ
-                    local distFromPillar = 10
-                    if mem.ClimbSpot then
-                        distFromPillar = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(mem.ClimbSpot.X, 0, mem.ClimbSpot.Z)).Magnitude
-                    end
                     
+                    -- [NEW] ปลดล็อกความจำเมื่อ: ถึงยอดตึก (Y ใกล้เคียงเป้าหมาย) และ "เดินเข้าไปในตึกเกิน 4 บล็อก" แล้ว!
+                    local distFromPillar = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(mem.ClimbSpot.X, 0, mem.ClimbSpot.Z)).Magnitude
                     if currentPos.Y >= mem.TargetY - 2 and distFromPillar > 4 then
                         table.remove(_G.BuildingMemories, i)
                         clearVisuals()
@@ -487,6 +522,7 @@ task.spawn(function()
                         local setupPos = inMemory.LadderCenter + (outwardDir * 15)
                         setupPos = Vector3.new(setupPos.X, inMemory.OriginalClimbSpot.Y, setupPos.Z)
                         
+                        -- [THE MAGIC] ดันยอดเป้าหมายให้ "สูงเลยเพดานขึ้นไป 5 บล็อก" และ "หักเลี้ยวเข้าในแพลตฟอร์ม 6 บล็อก"
                         local vaultPos = Vector3.new(inMemory.ClimbSpot.X, inMemory.TargetY + 5, inMemory.ClimbSpot.Z) + (-outwardDir * 6)
 
                         if inMemory.ClimbPhase == "Aligning" then
@@ -508,19 +544,19 @@ task.spawn(function()
                             local lookPos = currentPos + faceDir * 5
                             myRoot.CFrame = CFrame.lookAt(currentPos, Vector3.new(lookPos.X, currentPos.Y, lookPos.Z))
                             
+                            -- พุ่งชาร์จเป้าหมายบนแพลตฟอร์ม!
                             myHuman:MoveTo(vaultPos)
                             
+                            -- ถ้าติดอยู่ข้างล่างนานเกิน 5 วิ โดดช่วยกระตุ้นการปีน
                             if os.clock() - (inMemory.ClimbFailTick or os.clock()) > 5 then
                                 forceJump(myHuman)
                             end
                         end
-                        return
                     else
-                        -- [THE FIX: FALLBACK] ถ้าตรวจเจอพื้นที่ตึก แต่หาจุดปีนไม่เจอ ให้เดินแบบปกติแทน และกระโดดช่วย
-                        moveWithAvoidance(myHuman, targetPos)
-                        if os.clock() % 3 < 0.1 then forceJump(myHuman) end
-                        return
+                        _G.BuildingMemories = {}
+                        clearVisuals()
                     end
+                    return 
                 end
 
                 -- =======================================================
@@ -587,16 +623,15 @@ task.spawn(function()
                                 if os.clock() < _G.DodgeMem.Expire then
                                     dodgeDir = _G.DodgeMem.Dir
                                 else
-                                    -- [THE FIX] หลบ 90 องศาเมื่อเจอกำแพง
-                                    local rightDir = (CFrame.Angles(0, math.rad(-90), 0) * flatDir).Unit
-                                    local leftDir = (CFrame.Angles(0, math.rad(90), 0) * flatDir).Unit
+                                    local rightDir = (CFrame.Angles(0, math.rad(-75), 0) * flatDir).Unit
+                                    local leftDir = (CFrame.Angles(0, math.rad(75), 0) * flatDir).Unit
                                     
                                     local rightRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), rightDir * 10, rayParams)
                                     local leftRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), leftDir * 10, rayParams)
                                     
                                     if not rightRay then dodgeDir = rightDir
                                     elseif not leftRay then dodgeDir = leftDir
-                                    else dodgeDir = rightDir end 
+                                    else dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * flatDir).Unit end 
                                     
                                     _G.DodgeMem = {Dir = dodgeDir, Expire = os.clock() + 2.0}
                                 end
@@ -684,15 +719,14 @@ task.spawn(function()
                                                 if os.clock() < _G.DodgeMem.Expire then
                                                     dodgeDir = _G.DodgeMem.Dir
                                                 else
-                                                    -- [THE FIX] หลบ 90 องศาเมื่อเจอกำแพงในแนวราบ
-                                                    local rightDir = (CFrame.Angles(0, math.rad(-90), 0) * flatDir).Unit
-                                                    local leftDir = (CFrame.Angles(0, math.rad(90), 0) * flatDir).Unit
+                                                    local rightDir = (CFrame.Angles(0, math.rad(-75), 0) * flatDir).Unit
+                                                    local leftDir = (CFrame.Angles(0, math.rad(75), 0) * flatDir).Unit
                                                     local rightRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), rightDir * 10, rayParams)
                                                     local leftRay = workspace:Raycast(currentPos + Vector3.new(0, 1.5, 0), leftDir * 10, rayParams)
                                                     
                                                     if not rightRay then dodgeDir = rightDir
                                                     elseif not leftRay then dodgeDir = leftDir
-                                                    else dodgeDir = rightDir end 
+                                                    else dodgeDir = (CFrame.Angles(0, math.rad(180), 0) * flatDir).Unit end 
                                                     _G.DodgeMem = {Dir = dodgeDir, Expire = os.clock() + 2.0}
                                                 end
                                                 local dodgePos = currentPos + (dodgeDir * 8)
