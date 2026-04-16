@@ -166,7 +166,7 @@ local function checkCeilingAround(pos, height)
 end
 
 -- =========================================================================
--- [ร่างเทพวิชาเถาวัลย์] Center Snap: หาแกนกลางวัตถุแล้วปักเสาฟ้าให้ตรงเป๊ะ!
+-- [ร่างเทพวิชาเถาวัลย์] Center Snap
 -- =========================================================================
 local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
     local params = OverlapParams.new()
@@ -211,18 +211,15 @@ local function findClimbSpotVineStyle(outerNodes, targetY, centerPos, myChar)
                 end
                 
                 if canClimb then
-                    -- [หัวใจสำคัญ Center Snap] ดึงแกนกลาง X, Z ของบันไดออกมาตรงๆ!
                     local objCenter = p.Position
                     local normal = baseWallRay.Normal
                     local bestClimbPos
                     local ladderCenter = Vector3.new(objCenter.X, node.Y, objCenter.Z)
                     
-                    -- ถ้ากำแพงใหญ่เกินไป ให้ปักที่จุดยิงโดน (ป้องกันมุดเข้ากลางตึก)
                     if p.Size.X > 15 or p.Size.Z > 15 then
                         bestClimbPos = baseWallRay.Position + (normal * 2.5)
                         ladderCenter = baseWallRay.Position - (normal * 2) 
                     else
-                        -- ถ้าเป็นบันไดหรือเสา ให้ปักหน้า "จุดศูนย์กลาง" เป๊ะๆ!
                         bestClimbPos = ladderCenter + (normal * 2.5)
                     end
                     
@@ -447,7 +444,7 @@ task.spawn(function()
                 end
 
                 -- =======================================================
-                -- [โหมดตรวจสอบ Bounding Box Area & Target Jump Logic]
+                -- [โหมดตรวจสอบ Bounding Box Area & ไต่เสาฟ้า]
                 -- =======================================================
                 local inMemory = nil
                 for i, mem in ipairs(_G.BuildingMemories) do
@@ -473,15 +470,68 @@ task.spawn(function()
                         if distToPillar > 3 then
                             updateDebug("DirectTrace", currentPos, inMemory.ClimbSpot, Color3.fromRGB(0, 0, 255))
                             moveWithAvoidance(myHuman, inMemory.ClimbSpot)
+                            -- รีเซ็ตตัวจับเวลาปีน
+                            inMemory.ClimbStartTick = os.clock()
+                            inMemory.ClimbStartY = currentPos.Y
                         else
-                            -- [THE FIX] หันหน้าเข้าหา "แกนกลางของบันไดเป๊ะๆ" เพื่อเกาะ!
+                            -- [NEW ALGORITHM] ระบบโยกเสาหาแกนกลางบันได (Dynamic Center Probe)
+                            inMemory.ClimbStartTick = inMemory.ClimbStartTick or os.clock()
+                            inMemory.ClimbStartY = inMemory.ClimbStartY or currentPos.Y
+
+                            -- ถ้ากระโดดอยู่ที่เดิมเกิน 3 วิ และความสูงขึ้นไม่ถึง 5 บล็อก (ติดขอบบันได)
+                            if os.clock() - inMemory.ClimbStartTick > 3.0 then
+                                if currentPos.Y - inMemory.ClimbStartY < 5 then
+                                    local fwdDir = (Vector3.new(inMemory.Center.X, currentPos.Y, inMemory.Center.Z) - currentPos).Unit
+                                    local rayHit = workspace:Raycast(currentPos, fwdDir * 5, rayParams)
+                                    
+                                    if rayHit then
+                                        local normal = rayHit.Normal
+                                        local sideDir = Vector3.new(0, 1, 0):Cross(normal)
+                                        if sideDir.Magnitude < 0.001 then 
+                                            sideDir = Vector3.new(1, 0, 0)
+                                        else
+                                            sideDir = sideDir.Unit
+                                        end
+                                        
+                                        -- โยกเลเซอร์หาขอบขวา
+                                        local rightDist = 0
+                                        for d = 0.5, 10, 0.5 do
+                                            if not workspace:Raycast(currentPos + sideDir * d, fwdDir * 5, rayParams) then break end
+                                            rightDist = d
+                                        end
+                                        
+                                        -- โยกเลเซอร์หาขอบซ้าย
+                                        local leftDist = 0
+                                        for d = 0.5, 10, 0.5 do
+                                            if not workspace:Raycast(currentPos - sideDir * d, fwdDir * 5, rayParams) then break end
+                                            leftDist = d
+                                        end
+                                        
+                                        -- หาค่ากลางเป๊ะๆ
+                                        local shiftAmount = (rightDist - leftDist) / 2
+                                        local newCenter = currentPos + (sideDir * shiftAmount)
+                                        
+                                        -- ย้ายเสาฟ้าไปตรงกลาง!
+                                        inMemory.ClimbSpot = newCenter
+                                        inMemory.LadderCenter = newCenter + (fwdDir * 2) 
+                                        
+                                        -- เคลียร์เวลาเริ่มปีนใหม่
+                                        inMemory.ClimbStartTick = os.clock()
+                                    end
+                                else
+                                    -- ปีนขึ้นได้ปกติ อัปเดตความสูง
+                                    inMemory.ClimbStartY = currentPos.Y
+                                    inMemory.ClimbStartTick = os.clock()
+                                end
+                            end
+
+                            -- ดันตัวเข้าหาแกนกลางบันได
                             local targetWall = inMemory.LadderCenter or inMemory.Center
                             local lookPos = Vector3.new(targetWall.X, currentPos.Y, targetWall.Z)
                             if (lookPos - currentPos).Magnitude > 0.1 then
                                 myRoot.CFrame = CFrame.lookAt(currentPos, lookPos)
                             end
                             
-                            -- ดันตัวเข้ากำแพงเพื่อปีนขึ้น!
                             local climbDir = (lookPos - currentPos).Unit
                             myHuman:MoveTo(currentPos + climbDir * 5)
                             forceJump(myHuman)
@@ -579,12 +629,6 @@ task.spawn(function()
                                 isFollowingCustomPath = false
                                 updateDebug("DirectTrace", currentPos, flatTargetPos, Color3.fromRGB(255, 128, 0))
                                 moveWithAvoidance(myHuman, flatTargetPos)
-
-                                local chestRay = workspace:Raycast(currentPos, flatDir * 4, rayParams)
-                                local floorDropRay = workspace:Raycast(currentPos + (flatDir * 4) + Vector3.new(0, 1, 0), Vector3.new(0, -10, 0), rayParams)
-                                if chestRay and chestRay.Distance < 3 and not floorDropRay then
-                                    forceJump(myHuman)
-                                end
                             end
                         end
                         
@@ -630,7 +674,6 @@ task.spawn(function()
                                                 end
                                                 local center = Vector3.new((minX+maxX)/2, currentPos.Y, (minZ+maxZ)/2)
                                                 
-                                                -- ใช้วิชาเถาวัลย์ หดหาเสาปีนจากจุดเหลือง! แล้วหาแกนกลางเป๊ะๆ
                                                 local climbSpot, ladderCenter = findClimbSpotVineStyle(outerNodes, targetPos.Y, center, myChar)
                                                 
                                                 table.insert(_G.BuildingMemories, {
