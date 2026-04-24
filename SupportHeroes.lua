@@ -17,7 +17,6 @@ local debugEnabled = false
 
 local autoCoinEnabled = false 
 local autoDodgeEnabled = false
-
 local shieldRange = 100 
 
 local currentWaypoints = {}
@@ -43,7 +42,7 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V5", "Perfect Dodge & หนีมุม", function(state)
+SupportSection:NewToggle("Smart Dodge V5", "หลบขอบวงเวทย์ & สไลด์กระสุน", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -127,14 +126,16 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- --- ระบบกันทะลุกำแพง/กันตกเหว ---
+-- --- ระบบสแกนหาจุดปลอดภัย (แก้บัคติดมุม) ---
 local function isSafePosition(startPos, targetPos)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
     
+    -- เช็คกำแพงขวางทาง
     local dir = targetPos - startPos
     local wallHit = workspace:Raycast(startPos, dir, rayParams)
     if wallHit then return false end 
 
+    -- เช็คเหว (ยิงเลเซอร์ลงพื้น)
     local groundOrigin = targetPos + Vector3.new(0, 3, 0)
     local groundHit = workspace:Raycast(groundOrigin, Vector3.new(0, -10, 0), rayParams)
     if not groundHit then return false end 
@@ -142,7 +143,27 @@ local function isSafePosition(startPos, targetPos)
     return true
 end
 
--- --- [ระบบอัปเดต V5] แก้บัคระยะหนี + หลบมุม ---
+-- [ใหม่] ถัาทางหลักติดกำแพง ให้หมุนหาทางออกรอบตัว 360 องศา
+local function findSafeDodge(startPos, baseDir, distance)
+    -- ลองทางหลักก่อน
+    local target = startPos + (baseDir * distance)
+    if isSafePosition(startPos, target) then return target end
+    
+    -- ถ้าติดกำแพง ลองกวาดมุม 45, 90, 135, 180 องศา ทั้งซ้ายขวา
+    local angles = {45, -45, 90, -90, 135, -135, 180}
+    for _, angle in ipairs(angles) do
+        local rotatedDir = CFrame.Angles(0, math.rad(angle), 0) * baseDir
+        local testTarget = startPos + (rotatedDir * distance)
+        if isSafePosition(startPos, testTarget) then
+            return testTarget
+        end
+    end
+    
+    -- ถ้าติดทุกทางจริงๆ (โดนขังขอบแมพ) ยอมขยับไปทางหลักนิดนึงก็ยังดี
+    return startPos + (baseDir * (distance * 0.4))
+end
+
+-- --- [ระบบอัปเดต V5] โคตรแม่นยำ ---
 local function executeSmartDodgeV5(hazard)
     if not hazard or not hazard.Parent then return end
     
@@ -156,15 +177,34 @@ local function executeSmartDodgeV5(hazard)
     if not myRoot then return end
 
     local hazardPos = nil
-    local hazardSize = Vector3.new(4, 4, 4) 
+    local hazardRadius = 2 
     
+    -- [แก้ 1: วัดขนาดจาก Part ข้างใน Model แทน BoundingBox]
     if isAoE then
-        local cframe, size = hazard:GetBoundingBox()
-        hazardPos = cframe.Position
-        hazardSize = size
+        local parts = {}
+        for _, v in pairs(hazard:GetDescendants()) do
+            if v:IsA("BasePart") then table.insert(parts, v) end
+        end
+        
+        if #parts > 0 then
+            -- ใช้จุดศูนย์กลางของชิ้นแรกหรือชิ้นหลัก
+            local centerPart = hazard.PrimaryPart or parts[1]
+            hazardPos = centerPart.Position
+            
+            -- หาชิ้นที่ใหญ่ที่สุดใน Model เพื่อกำหนดรัศมีวงเวทย์
+            for _, p in pairs(parts) do
+                local r = math.max(p.Size.X, p.Size.Z) / 2
+                if r > hazardRadius then hazardRadius = r end
+            end
+        else
+            -- ถ้ามันว่างเปล่าจริงๆ ค่อยใช้ BoundingBox กางเกงใน
+            local cframe, size = hazard:GetBoundingBox()
+            hazardPos = cframe.Position
+            hazardRadius = math.max(size.X, size.Z) / 2
+        end
     elseif hazard:IsA("BasePart") then
         hazardPos = hazard.Position
-        hazardSize = hazard.Size
+        hazardRadius = math.max(hazard.Size.X, hazard.Size.Z) / 2
     end
 
     if not hazardPos then return end
@@ -176,51 +216,51 @@ local function executeSmartDodgeV5(hazard)
 
     if distXZ > shieldRange then return end
 
-    -- [กรณีที่ 1] หลบวงเวทย์ (Model) แบบติดมุมก็หนีได้
+    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด)
     if isAoE then
-        local radius = math.max(hazardSize.X, hazardSize.Z) / 2
-        
-        -- [แก้ปัญหา 1] ล็อครัศมีหนี ไม่ให้มันพาปลิวทะลุแมพ (ต่ำสุด 4 สูงสุด 15 บล็อค)
-        radius = math.clamp(radius, 4, 15)
-        
-        if distXZ < radius + 1.5 then 
-            local baseDir = (myPosXZ - hazPosXZ)
-            if baseDir.Magnitude == 0 then baseDir = Vector3.new(1, 0, 0) end
-            baseDir = baseDir.Unit
+        -- ถ้าเราอยู่ในวง (บวกระยะเผื่อ 1.5 บล็อค เพื่อให้หลุดขอบชัวร์ๆ)
+        if distXZ < hazardRadius + 1.5 then 
+            local escapeDir = (myPosXZ - hazPosXZ)
+            if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
+            escapeDir = escapeDir.Unit
             
-            local distanceToMove = (radius + 2.5) - distXZ
+            -- คำนวณระยะที่ต้องก้าวออกไปให้พ้นขอบพอดีเป๊ะ
+            local distanceToMove = (hazardRadius + 1.5) - distXZ
             
-            -- [แก้ปัญหา 2] หมุนกวาดหาทิศทางที่ปลอดภัย 8 ทิศทาง ถ้าทิศหลักชนกำแพง!
-            local anglesToTry = {0, 45, -45, 90, -90, 135, -135, 180}
-            for _, angle in ipairs(anglesToTry) do
-                local rotatedDir = CFrame.Angles(0, math.rad(angle), 0) * baseDir
-                local targetPos = myPos + (rotatedDir * distanceToMove)
-                
-                if isSafePosition(myPos, targetPos) then
-                    myRoot.CFrame = CFrame.new(targetPos)
-                    break -- เจอที่ปลอดภัยแล้ว หยุดหาทันที
-                end
+            -- ใช้ฟังก์ชันดิ้นรน 360 องศา เผื่อติดมุม
+            local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove)
+            if safeTarget then
+                myRoot.CFrame = CFrame.new(safeTarget)
             end
         end
 
-    -- [กรณีที่ 2] Perfect Dodge สำหรับกระสุนพุ่งชน
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic)
     elseif isProjectile then
-        -- [แก้ปัญหา 3] รอให้จ่อหน้าในระยะ 6 บล็อค ค่อยวาร์ปสวน
-        if distXZ < 6 then 
+        -- [แก้ 3: หดระยะจับเซนเซอร์เหลือ 7 หลบแบบเสี้ยววินาที]
+        if distXZ < 7 then 
             local dirFromHazard = (myPosXZ - hazPosXZ)
             if dirFromHazard.Magnitude == 0 then dirFromHazard = Vector3.new(1, 0, 0) end
             dirFromHazard = dirFromHazard.Unit
             
-            local dodgeDist = 10
-            local targetPos = myPos - (dirFromHazard * dodgeDist)
+            -- หามุม 90 องศา (Sidestep ซ้าย/ขวา)
+            local rightDir = dirFromHazard:Cross(Vector3.new(0, 1, 0)).Unit
+            local leftDir = -rightDir
             
-            if isSafePosition(myPos, targetPos) then
-                myRoot.CFrame = CFrame.new(targetPos)
+            local dodgeDist = 6 -- สไลด์ข้าง 6 บล็อคก็พ้นแล้ว
+            
+            -- ลองหลบขวาก่อน ถ้าติดกำแพงให้ลองซ้าย
+            local safeTarget = nil
+            if isSafePosition(myPos, myPos + (rightDir * dodgeDist)) then
+                safeTarget = myPos + (rightDir * dodgeDist)
+            elseif isSafePosition(myPos, myPos + (leftDir * dodgeDist)) then
+                safeTarget = myPos + (leftDir * dodgeDist)
             else
-                local shortTarget = myPos - (dirFromHazard * 5)
-                if isSafePosition(myPos, shortTarget) then
-                    myRoot.CFrame = CFrame.new(shortTarget)
-                end
+                -- ถ้าติดทั้งซ้ายขวา (อยู่ในตรอก) ใช้ระบบหาทางออก 360 องศา
+                safeTarget = findSafeDodge(myPos, rightDir, dodgeDist)
+            end
+            
+            if safeTarget then
+                myRoot.CFrame = CFrame.new(safeTarget)
             end
         end
     end
@@ -263,7 +303,7 @@ task.spawn(function()
     end
 end)
 
--- Loop สแกน Effects
+-- Loop สแกนแบบ Stepped (รันก่อนฟิสิกส์ชนกัน)
 RunService.Stepped:Connect(function()
     if autoDodgeEnabled then
         pcall(function()
@@ -278,7 +318,7 @@ RunService.Stepped:Connect(function()
     end
 end)
 
--- แยก getnilinstances ออกมารันช้าๆ (กันแลค)
+-- แยก GetNil Instances ออกมารันช้าๆ ลดแลค
 task.spawn(function()
     while true do
         task.wait(0.5) 
