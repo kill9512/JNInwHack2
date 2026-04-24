@@ -150,11 +150,11 @@ local function handleEruption(hazard)
 end
 
 -- ==========================================
--- [ระบบที่ 2] เกราะเสาเข็มแก้วหัวแหลม
+-- [ระบบที่ 2] เกราะลิ่มแก้ว (Wedge Deflector)
 -- ==========================================
 local function handleProjectile(hazard)
     local mainPart = hazard:IsA("BasePart") and hazard or (hazard:IsA("Model") and (hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true)))
-    if not mainPart or mainPart:FindFirstChild("PointyBumper") then return end
+    if not mainPart or mainPart:FindFirstChild("WedgeShield") then return end
 
     local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if not myRoot then return end
@@ -164,50 +164,44 @@ local function handleProjectile(hazard)
     local dirToPlayer = (myRoot.Position - mainPart.Position)
     dirToPlayer = dirToPlayer.Magnitude > 0 and dirToPlayer.Unit or Vector3.new(0, 0, 1)
 
-    -- สร้างฐานเสาเข็ม
-    local bumper = Instance.new("Part")
-    bumper.Name = "PointyBumper"
-    bumper.Transparency = 0.6
-    bumper.Material = Enum.Material.Glass
-    bumper.Color = Color3.fromRGB(0, 255, 255)
-    bumper.Size = Vector3.new(8, 8, 30) -- ยาว 30 บล็อค
-    bumper.CanCollide = true
-    bumper.CanTouch = false
-    bumper.Massless = true
-    bumper.Anchored = mainPart.Anchored
+    -- สร้าง WedgePart (หัวแหลม)
+    local wedge = Instance.new("WedgePart")
+    wedge.Name = "WedgeShield"
+    wedge.Transparency = 0.6
+    wedge.Material = Enum.Material.Glass
+    wedge.Color = Color3.fromRGB(255, 255, 255)
     
-    -- สร้างหัวแหลม (Wedge)
-    local pointyHead = Instance.new("WedgePart")
-    pointyHead.Name = "PointyHead"
-    pointyHead.Parent = bumper
-    pointyHead.Size = Vector3.new(8, 12, 10) -- หัวแหลมยาว 10 บล็อค
-    pointyHead.Material = Enum.Material.Glass
-    pointyHead.Color = Color3.fromRGB(0, 255, 255)
-    pointyHead.Transparency = 0.6
-    pointyHead.CanCollide = true
-    pointyHead.CanTouch = false
-    pointyHead.Massless = true
-    
-    -- เชื่อมหัวแหลมเข้ากับเสาเข็ม
-    local headWeld = Instance.new("WeldConstraint")
-    headWeld.Part0 = pointyHead; headWeld.Part1 = bumper; headWeld.Parent = pointyHead
-    pointyHead.CFrame = bumper.CFrame * CFrame.new(0, 0, -20) * CFrame.Angles(0, math.pi, 0) -- วางไว้ที่ปลายเสา
+    -- [ความหนาและแหลม] กว้าง 12 สูง 12 ยาว 40 บล็อค
+    wedge.Size = Vector3.new(12, 12, 40) 
+    wedge.CanCollide = true
+    wedge.CanTouch = false
+    wedge.Massless = true
+    wedge.Anchored = mainPart.Anchored
 
-    -- วางเสาเข็มยื่นมาหาผู้เล่น
-    local centerOfBumper = mainPart.Position + (dirToPlayer * 15)
-    bumper.CFrame = CFrame.lookAt(centerOfBumper, myRoot.Position)
-    
-    local mainWeld = Instance.new("WeldConstraint")
-    mainWeld.Part0 = bumper; mainWeld.Part1 = mainPart; mainWeld.Parent = bumper
-    
-    bumper.Parent = mainPart
+    -- ตั้งค่าฟิสิกส์ให้ลื่นที่สุด (เพื่อให้มึงสไลด์ออกข้างได้ง่าย)
+    wedge.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0) -- Friction = 0
 
-    -- ปิดการชนของดาเมจจริง
+    -- วางตำแหน่งให้ด้านลาด (Slope) หันมาทางตัวมึง
+    -- ขยับจุดศูนย์กลางยื่นออกมาหน้ากระสุน 15 บล็อค
+    local centerOfWedge = mainPart.Position + (dirToPlayer * 15)
+    
+    -- หมุนลิ่มให้ชี้ไปทางตัวมึงตรงๆ
+    wedge.CFrame = CFrame.lookAt(centerOfWedge, myRoot.Position) * CFrame.Angles(0, math.pi, 0)
+    
+    local weld = Instance.new("WeldConstraint")
+    weld.Part0 = wedge; weld.Part1 = mainPart; weld.Parent = wedge
+    
+    wedge.Parent = mainPart
+
+    -- ปิดการชนของดาเมจจริงและลบ Touch
     pcall(function()
         mainPart.CanCollide = false
         for _, v in pairs(hazard:GetDescendants()) do
-            if v:IsA("BasePart") then v.CanCollide = false end
-            if v:IsA("TouchInterest") then v:Destroy() end
+            if v:IsA("BasePart") then 
+                v.CanCollide = false 
+                local t = v:FindFirstChild("TouchInterest")
+                if t then t:Destroy() end
+            end
         end
     end)
 end
