@@ -16,11 +16,7 @@ local followEnabled = false
 local debugEnabled = false
 
 local autoCoinEnabled = false 
-local autoDodgeEnabled = false 
-
--- [ใหม่] ตั้งค่าตายตัว ระยะเช็คดาเมจ 10 บล็อค และระยะวาร์ปหลบ 12 บล็อค (ให้พ้นวงกว้าง Eruption)
-local DANGER_RADIUS = 10
-local DODGE_DISTANCE = 12
+local autoDodgeEnabled = false
 
 local currentWaypoints = {}
 local currentWaypointIndex = 1
@@ -34,7 +30,6 @@ rayParams.FilterType = Enum.RaycastFilterType.Exclude
 local lastPosition = Vector3.new()
 local lastMoveTick = os.clock()
 local randomTarget = nil 
-local lastDodgeTime = 0 -- ป้องกันวาร์ปรัวๆ จนจอกระตุก
 
 -- --- UI Sections ---
 local SupportSection = Tab:NewSection("Support Functions") 
@@ -46,7 +41,7 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge (8-Way)", "หลบ Eruption, Arrow, Magic ฉลาดขึ้น", function(state)
+SupportSection:NewToggle("Smart Dodge V2", "สไลด์หลบ Eruption, Arrow, Magic", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -86,7 +81,13 @@ end)
 MoveSection:NewToggle("Show Path", "Visuals", function(s) debugEnabled = s end)
 MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
 
--- --- Debug Visualization ---
+-- --- Helper Functions ---
+local function clearVisuals()
+    for _, v in pairs(workspace.Terrain:GetChildren()) do
+        if v.Name == "WP_Debug" or v.Name == "DirectTrace" or v.Name == "ProbeTrace" then v:Destroy() end
+    end
+end
+
 local function updateDebug(name, startPos, endPos, color)
     if not debugEnabled then 
         if workspace.Terrain:FindFirstChild(name) then workspace.Terrain[name]:Destroy() end
@@ -99,12 +100,6 @@ local function updateDebug(name, startPos, endPos, color)
     line.CFrame, line.Parent = CFrame.lookAt(startPos, endPos), workspace.Terrain
 end
 
-function clearVisuals()
-    for _, v in pairs(workspace.Terrain:GetChildren()) do
-        if v.Name == "WP_Debug" or v.Name == "DirectTrace" or v.Name == "ProbeTrace" then v:Destroy() end
-    end
-end
-
 local function forceJump(hum)
     if hum.FloorMaterial ~= Enum.Material.Air then
         hum.Jump = true
@@ -112,56 +107,41 @@ local function forceJump(hum)
     end
 end
 
--- --- [ระบบอัปเดต] ค้นหาจุดวาร์ปที่ปลอดภัยรอบตัว 8 ทิศทาง ---
-local function getSafeDodgePosition(myRoot, hazardPos)
-    local myPos = myRoot.Position
-    local myCFrame = myRoot.CFrame
-    
-    -- อัปเดตตัวแปรทะลุกำแพงให้ละเว้นตัวเรา
-    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
-
-    -- กำหนดทิศทางหนี 8 ทิศทางรอบตัว (เพื่อไม่ให้ถอยหลังตกแมพอย่างเดียว)
-    local dirs = {
-        myCFrame.RightVector, -- ขวา
-        -myCFrame.RightVector, -- ซ้าย
-        myCFrame.LookVector, -- หน้า
-        -myCFrame.LookVector, -- หลัง
-        (myCFrame.RightVector + myCFrame.LookVector).Unit, -- เฉียงขวาหน้า
-        (-myCFrame.RightVector + myCFrame.LookVector).Unit, -- เฉียงซ้ายหน้า
-        (myCFrame.RightVector - myCFrame.LookVector).Unit, -- เฉียงขวาหลัง
-        (-myCFrame.RightVector - myCFrame.LookVector).Unit -- เฉียงซ้ายหลัง
-    }
-
-    for _, dir in ipairs(dirs) do
-        local targetPos = myPos + (dir * DODGE_DISTANCE)
-        
-        -- 1. เช็คว่า "ข้างหน้ามีกำแพงไหม?" (ยิงเลเซอร์แนวราบ)
-        local wallRay = workspace:Raycast(myPos, dir * DODGE_DISTANCE, rayParams)
-        
-        if not wallRay then
-            -- 2. ถ้าไม่ติดกำแพง เช็คต่อว่า "มีพื้นรองรับไหม?" (ยิงเลเซอร์แนวดิ่ง)
-            local floorRayOrigin = targetPos + Vector3.new(0, 5, 0)
-            local floorRay = workspace:Raycast(floorRayOrigin, Vector3.new(0, -30, 0), rayParams)
-            
-            if floorRay then
-                -- 3. ถ้ามีพื้น เช็คสุดท้ายว่า "จุดใหม่นี้ พ้นระยะดาเมจ 10 บล็อคหรือยัง?"
-                local newDistToHazard = (Vector3.new(targetPos.X, 0, targetPos.Z) - Vector3.new(hazardPos.X, 0, hazardPos.Z)).Magnitude
-                if newDistToHazard > DANGER_RADIUS then
-                    return targetPos -- เจอจุดเพอร์เฟกต์! เอาจุดนี้แหละ
-                end
-            end
-        end
+local function getProbingDirection(myRoot, targetPos)
+    local currentPos = myRoot.Position
+    local baseDir = (targetPos - currentPos).Unit
+    local scanAngles = {0, 30, -30, 60, -60, 90, -90, 135, -135} 
+    local bestDir = nil; local maxDist = 0
+    for _, angle in ipairs(scanAngles) do
+        local dir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(baseDir.X, 0, baseDir.Z)).Unit
+        local ray = workspace:Raycast(currentPos, dir * 15, rayParams)
+        local d = ray and ray.Distance or 15
+        if d > maxDist then maxDist = d; bestDir = dir end
     end
-    
-    return nil -- ถ้า 8 ทิศอันตรายหมด ยอมยืนเฉยๆ ดีกว่าวาร์ปตกแมพ
+    return bestDir
 end
 
-local function executeDodge(hazard)
+-- --- [ระบบอัปเดต] เช็คความปลอดภัยของตำแหน่งปลายทาง ---
+local function isSafePosition(startPos, targetPos)
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    
+    -- 1. เช็คกำแพงขวางทาง (ยิงเรดาร์แนวนอน)
+    local dir = targetPos - startPos
+    local wallHit = workspace:Raycast(startPos, dir, rayParams)
+    if wallHit then return false end -- ติดกำแพง ห้ามไป!
+
+    -- 2. เช็คเหว (ยิงเรดาร์ลงพื้นจากจุดปลายทาง)
+    local groundOrigin = targetPos + Vector3.new(0, 3, 0)
+    local groundHit = workspace:Raycast(groundOrigin, Vector3.new(0, -10, 0), rayParams)
+    if not groundHit then return false end -- ไม่มีพื้นรองรับ ห้ามไป!
+
+    return true
+end
+
+-- --- [ระบบอัปเดต] การคำนวณหลบแบบใหม่ ---
+local function executeSmartDodge(hazard)
     if not hazard or not hazard.Parent then return end
     
-    -- หน่วงคูลดาวน์การหลบ (0.3 วิ) ป้องกันสคริปต์รันซ้อนกันจนจอสั่น
-    if os.clock() - lastDodgeTime < 0.3 then return end
-
     local isDanger = false
     if hazard.Name == "Eruption" or hazard.Name == "Arrow" or hazard.Name:match("Magic$") then
         isDanger = true
@@ -173,24 +153,69 @@ local function executeDodge(hazard)
     if not myRoot then return end
 
     local hazardPos = nil
+    local hazardSize = Vector3.new(4, 4, 4) -- ขนาดเผื่อไว้
+    
     if hazard:IsA("BasePart") then
         hazardPos = hazard.Position
+        hazardSize = hazard.Size
     elseif hazard:IsA("Model") then
         local p = hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true)
-        if p then hazardPos = p.Position end
+        if p then 
+            hazardPos = p.Position 
+            hazardSize = p.Size
+        end
     end
 
-    if hazardPos then
-        -- ถ้าระยะห่างน้อยกว่า 10 บล็อค วาร์ป!
-        local distXZ = (Vector3.new(myRoot.Position.X, 0, myRoot.Position.Z) - Vector3.new(hazardPos.X, 0, hazardPos.Z)).Magnitude
-        local distY = math.abs(myRoot.Position.Y - hazardPos.Y)
+    if not hazardPos then return end
+    
+    local myPos = myRoot.Position
+    local myPosXZ = Vector3.new(myPos.X, 0, myPos.Z)
+    local hazPosXZ = Vector3.new(hazardPos.X, 0, hazardPos.Z)
+    local distXZ = (myPosXZ - hazPosXZ).Magnitude
+
+    -- [กรณีที่ 1] หลบวงเวทย์ใต้ตีน (Eruption)
+    if hazard.Name == "Eruption" then
+        -- หารัศมีของวงเวทย์ (เอาความกว้างหาร 2)
+        local radius = math.max(hazardSize.X, hazardSize.Z) / 2
         
-        if distXZ <= DANGER_RADIUS and distY < 15 then
-            local safePos = getSafeDodgePosition(myRoot, hazardPos)
-            if safePos then
-                -- วาร์ปสไลด์ตัว แต่รักษาแกน Y ระดับเดิมไว้
-                myRoot.CFrame = CFrame.new(Vector3.new(safePos.X, myRoot.Position.Y, safePos.Z))
-                lastDodgeTime = os.clock()
+        -- ถ้าเรายืนอยู่ในวงเวทย์ (บวกระยะเผื่อนิดหน่อย)
+        if distXZ < radius + 1 then
+            -- หาเส้นทางเดินออกจากจุดศูนย์กลาง
+            local escapeDir = (myPosXZ - hazPosXZ)
+            if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
+            escapeDir = escapeDir.Unit
+            
+            -- ขยับออกไปให้พ้นขอบวงเวทย์เป๊ะๆ (ขอบ + 2 บล็อค)
+            local distanceToMove = (radius + 2) - distXZ
+            local targetPos = myPos + (escapeDir * distanceToMove)
+            
+            if isSafePosition(myPos, targetPos) then
+                myRoot.CFrame = CFrame.new(targetPos)
+            end
+        end
+
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic)
+    else
+        -- ถ้าระยะจวนตัว (ใกล้กว่า 8 บล็อค)
+        if distXZ < 8 then
+            local dirFromHazard = (myPosXZ - hazPosXZ)
+            if dirFromHazard.Magnitude == 0 then dirFromHazard = Vector3.new(1, 0, 0) end
+            dirFromHazard = dirFromHazard.Unit
+            
+            -- [เคล็ดลับ] หาเวกเตอร์ด้านข้าง (Sidestep) ซ้ายและขวา
+            local rightDir = dirFromHazard:Cross(Vector3.new(0, 1, 0))
+            local leftDir = -rightDir
+            
+            -- ระยะสไลด์ออกข้างแค่ 5 บล็อค ก็พ้นกระสุนแล้ว แถมไม่ถอยห่างมอนสเตอร์
+            local dodgeDist = 5
+            local targetRight = myPos + (rightDir * dodgeDist)
+            local targetLeft = myPos + (leftDir * dodgeDist)
+            
+            -- ลองฉากหลบไปทางขวาก่อน ถ้าขวาติดกำแพงก็ไปซ้าย
+            if isSafePosition(myPos, targetRight) then
+                myRoot.CFrame = CFrame.new(targetRight)
+            elseif isSafePosition(myPos, targetLeft) then
+                myRoot.CFrame = CFrame.new(targetLeft)
             end
         end
     end
@@ -233,7 +258,7 @@ task.spawn(function()
     end
 end)
 
--- ทำงานทุกเฟรม (60FPS) เพื่อให้หลบทัน
+-- Loop ตรวจจับอันตรายแบบ Real-time
 RunService.Heartbeat:Connect(function()
     if autoDodgeEnabled then
         pcall(function()
@@ -241,12 +266,12 @@ RunService.Heartbeat:Connect(function()
             local effects = dungeon and dungeon:FindFirstChild("Effects")
             if effects then
                 for _, v in pairs(effects:GetChildren()) do
-                    executeDodge(v)
+                    executeSmartDodge(v)
                 end
             end
             if getnilinstances then
                 for _, v in pairs(getnilinstances()) do
-                    executeDodge(v)
+                    executeSmartDodge(v)
                 end
             end
         end)
