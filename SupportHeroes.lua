@@ -125,29 +125,43 @@ end)
 MoveSection:NewToggle("Show Path", "Visuals", function(s) debugEnabled = s end)
 MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
 
--- --- [ใหม่] AUTO COIN LOOP ---
+-- --- [อัปเดต] AUTO COIN LOOP (แบบวาร์ป CFrame ดึงของเข้าหาตัว) ---
 task.spawn(function()
     while true do
-        task.wait(0.1) -- รอ 0.1 วินาทีเพื่อไม่ให้ดึงทรัพยากรเครื่องมากเกินไป
+        task.wait(0.1) -- รอ 0.1 วินาที ลดภาระเครื่อง
         if autoCoinEnabled then
             pcall(function()
                 local myChar = LocalPlayer.Character
                 local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
                 
                 if myRoot then
-                    -- เช็คว่าโฟลเดอร์ Dungeon และ Treasure มีอยู่จริง ป้องกันสคริปต์พัง
+                    -- เข้าถึงตำแหน่งโฟลเดอร์ของสมบัติ
                     local dungeon = workspace:FindFirstChild("Dungeon")
                     local treasure = dungeon and dungeon:FindFirstChild("Treasure")
                     
                     if treasure then
-                        -- วนหาของทุกชิ้นใน Treasure 
+                        -- วนหา CoinStack ทุกอัน
                         for _, item in pairs(treasure:GetChildren()) do
-                            -- ถ้าชื่อตรงและมี TouchInterest
-                            if item.Name == "CoinStack" and item:FindFirstChild("TouchInterest") then
-                                -- ใช้ฟังก์ชันจำลองการสัมผัส (0 = เริ่มสัมผัส, 1 = เลิกสัมผัส)
-                                firetouchinterest(myRoot, item, 0)
-                                task.wait(0.01)
-                                firetouchinterest(myRoot, item, 1)
+                            if item.Name == "CoinStack" then
+                                
+                                -- กรณีที่ CoinStack เป็นชิ้นส่วนเดี่ยวๆ (Part, MeshPart)
+                                if item:IsA("BasePart") then
+                                    -- วาร์ปมาที่ตำแหน่งตัวเราทันที
+                                    item.CFrame = myRoot.CFrame
+                                    
+                                -- กรณีที่ CoinStack ถูกสร้างมาเป็น Model (มีหลายชิ้นส่วนรวมกัน)
+                                elseif item:IsA("Model") then
+                                    -- ย้ายทั้งโมเดลมาหาตัวเรา
+                                    item:PivotTo(myRoot.CFrame)
+                                    
+                                    -- เพื่อความชัวร์ เราจะดึงทุกชิ้นส่วนย่อยข้างในที่มี TouchInterest มาด้วย
+                                    for _, part in pairs(item:GetDescendants()) do
+                                        if part:IsA("BasePart") and part:FindFirstChild("TouchInterest") then
+                                            part.CFrame = myRoot.CFrame
+                                        end
+                                    end
+                                end
+                                
                             end
                         end
                     end
