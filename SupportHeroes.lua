@@ -455,4 +455,17 @@ task.spawn(function()
                                 if isClimbing then
                                     if currentPos.Y >= wp.Position.Y - 1 or (dist2D < 5 and distY < 3.5) then currentWaypointIndex = currentWaypointIndex + 1 end
                                 else
-                                    if dist2D
+                                    if dist2D < 4.5 and distY < 3.5 then currentWaypointIndex = currentWaypointIndex + 1 end
+                                end
+                                if not isClimbing and (wp.Action == Enum.PathWaypointAction.Jump or (isGoingUp and dist2D < 2)) then forceJump(myHuman) end
+                            end
+                        end
+                        updateDebug("DirectTrace", currentPos, directRay and directRay.Position or targetPos, Color3.fromRGB(255, 0, 0))
+                    end
+                else
+                    currentWaypoints = {}; myHuman:MoveTo(currentPos)
+                end
+            end
+        end)
+    end
+end)
