@@ -6,7 +6,7 @@ local Tab = Window:NewTab("Main")
 local Players = game.Players
 local LocalPlayer = Players.LocalPlayer
 local PathfindingService = game:GetService("PathfindingService")
-local RunService = game:GetService("RunService") -- [เพิ่ม] นำเข้า RunService เพื่อความเร็วสูงสุด
+local RunService = game:GetService("RunService")
 
 -- --- Settings Variables ---
 local SelectedMode = "Manual"
@@ -16,10 +16,11 @@ local followEnabled = false
 local debugEnabled = false
 
 local autoCoinEnabled = false 
-local autoDodgeEnabled = false -- ควบคุมระบบหลบ
+local autoDodgeEnabled = false 
 
-local shieldRange = 100 -- ระยะตรวจจับของอันตราย
-local dodgeDistance = 15 -- ระยะที่จะสไลด์หลบ (บล็อค)
+-- ล็อคระยะหลบแค่ 5 ตามสั่ง
+local dodgeDistance = 5 
+local lastDodgeTime = 0 -- ตัวแปรคูลดาวน์การหลบ
 
 local currentWaypoints = {}
 local currentWaypointIndex = 1
@@ -44,13 +45,10 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge (XZ)", "วาร์ปหลบแบบเช็คเหว Eruption, Arrow, Magic", function(state)
+SupportSection:NewToggle("Smart Dodge v2", "สไลด์ 5 บล็อค กันกำแพง+เหว", function(state)
     autoDodgeEnabled = state
 end)
-
-SupportSection:NewSlider("Dodge Detect Range", "ระยะตรวจจับ (บล็อค)", 300, 20, function(s)
-    shieldRange = s
-end)
+-- (เอา Slider ออกไปแล้ว ตามคำขอ)
 
 -- --- UI: Navigation Control ---
 Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP", "Random"}, function(m) 
@@ -114,47 +112,66 @@ local function forceJump(hum)
     end
 end
 
--- --- [ระบบอัปเดต] คำนวณจุดหลบภัยที่พื้นไม่ทะลุ ---
+-- --- [ระบบใหม่] เรดาร์สแกน 8 ทิศทาง หูตาสับปะรด ---
 local function getSafeDodgePosition(myRoot, hazardPos)
     local myPos = myRoot.Position
-    
-    -- สร้างทิศทางหนีตรงข้ามกับของอันตราย (แกน XZ)
-    local escapeDir = (myPos - hazardPos)
-    escapeDir = Vector3.new(escapeDir.X, 0, escapeDir.Z)
-    
-    -- ถ้าจุดซ้อนทับกันพอดี ให้สุ่มหนีสักทาง
-    if escapeDir.Magnitude == 0 then
-        escapeDir = Vector3.new(math.random(-1, 1), 0, math.random(-1, 1))
-    end
-    escapeDir = escapeDir.Unit
-    
-    local targetPos = myPos + (escapeDir * dodgeDistance)
-    
-    -- [หัวใจหลัก] เช็คว่าปลายทางมีพื้นไหม? โดยยิงเลเซอร์จากความสูงลงไป 30 บล็อค
-    local rayOrigin = targetPos + Vector3.new(0, 5, 0)
-    local rayDirection = Vector3.new(0, -30, 0)
     local params = RaycastParams.new()
-    params.FilterDescendantsInstances = {LocalPlayer.Character}
+    -- ไม่สแกนโดนตัวเราและไม่สแกนโดนของอันตรายนั้นๆ
+    params.FilterDescendantsInstances = {LocalPlayer.Character, workspace:FindFirstChild("Dungeon")}
     params.FilterType = Enum.RaycastFilterType.Exclude
 
-    local hit = workspace:Raycast(rayOrigin, rayDirection, params)
+    -- มุมที่จะลองหนี (0 คือตรงไปข้างหน้า, 180 คือถอยหลัง, 90/-90 คือออกซ้ายขวา)
+    local scanAngles = {180, 90, -90, 135, -135, 45, -45, 0}
     
-    if hit then
-        return targetPos -- มีพื้น ปลอดภัย! วาร์ปได้เลย
+    -- หาเวกเตอร์ที่ชี้ไปหาของอันตราย (ถ้าของมันเสกตรงตีนเป๊ะๆ จะใช้ทิศทางที่หน้าเราหันอยู่แทน)
+    local toHazard = (hazardPos - myPos)
+    toHazard = Vector3.new(toHazard.X, 0, toHazard.Z)
+    if toHazard.Magnitude < 0.1 then
+        toHazard = myRoot.CFrame.LookVector
     else
-        -- ถ้าไม่มีพื้น (เป็นเหว) ลองหนีไปทิศตรงข้ามแทน
-        local altTarget = myPos + (-escapeDir * dodgeDistance)
-        local altOrigin = altTarget + Vector3.new(0, 5, 0)
-        local altHit = workspace:Raycast(altOrigin, rayDirection, params)
-        if altHit then
-            return altTarget -- ทิศตรงข้ามปลอดภัย
+        toHazard = toHazard.Unit
+    end
+
+    for _, angle in ipairs(scanAngles) do
+        -- หมุนทิศทางหนี
+        local escapeDir = CFrame.Angles(0, math.rad(angle), 0) * toHazard
+        local testPos = myPos + (escapeDir * dodgeDistance)
+        
+        -- 1. [เช็คกำแพง] ยิงเลเซอร์ขนานพื้นไปข้างหน้า 5 บล็อค
+        local wallHit = workspace:Raycast(myPos, escapeDir * dodgeDistance, params)
+        local actualTarget = testPos
+        local isWallSafe = true
+        
+        if wallHit then
+            -- ถ้ายิงเจอกำแพงในระยะใกล้กว่า 2 บล็อค แปลว่าทางนี้ตัน
+            if (wallHit.Position - myPos).Magnitude < 2 then
+                isWallSafe = false
+            else
+                -- ถ้าไกลพอ ให้วาร์ปไปชิดกำแพงแทน (ถอยออกมาก้าวนึงกันทะลุ)
+                actualTarget = wallHit.Position - (escapeDir * 1)
+            end
+        end
+
+        if isWallSafe then
+            -- 2. [เช็คเหว] ยิงเลเซอร์จากจุดที่จะไป ลงไปที่พื้น
+            local floorRayOrigin = actualTarget + Vector3.new(0, 3, 0)
+            local floorHit = workspace:Raycast(floorRayOrigin, Vector3.new(0, -15, 0), params)
+            
+            if floorHit then
+                -- มีพื้นเหยียบ และไม่ทะลุกำแพง = ทางนี้ปลอดภัย!
+                return actualTarget
+            end
         end
     end
     
-    return nil -- ไม่มีพื้นทั้งคู่ ยอมโดนดาเมจดีกว่าตกแมพตาย
+    -- ถ้าลอง 8 ทิศแล้วไม่มีทางหนีเลย (โดนรุมปิดมุม/ยืนอยู่บนเสาเล็กๆ) ให้ยืนเฉยๆ ดีกว่าวาร์ปตกแมพ
+    return nil 
 end
 
 local function executeDodge(hazard)
+    -- ถ้าเพิ่งหลบไปเมื่อกี๊ ให้รอ 0.5 วิ ก่อนถึงจะหลบใหม่ได้ (กันสคริปต์รวน)
+    if os.clock() - lastDodgeTime < 0.5 then return end
+    
     if not hazard or not hazard.Parent then return end
     
     local isDanger = false
@@ -176,22 +193,21 @@ local function executeDodge(hazard)
     end
 
     if hazardPos then
-        -- ถ้าระยะห่างน้อยกว่า 15 บล็อค ถือว่าจวนตัวแล้ว
+        -- ถ้าวงเวทย์โผล่มาในระยะ 8 บล็อค (ต้องใช้ 8 เพราะระยะหลบคือ 5 จะได้มีช่องว่าง)
         local dist = (myRoot.Position - hazardPos).Magnitude
-        if dist < 15 then
-            -- ขอจุดวาร์ปที่ปลอดภัยจากระบบ
+        if dist < 8 then
             local safePos = getSafeDodgePosition(myRoot, hazardPos)
             if safePos then
-                -- รักษาระดับความสูงแกน Y ไว้เหมือนเดิม
+                -- รักษาระดับความสูงแกน Y ไว้
                 local finalPos = Vector3.new(safePos.X, myRoot.Position.Y, safePos.Z)
                 myRoot.CFrame = CFrame.new(finalPos)
+                lastDodgeTime = os.clock() -- บันทึกเวลาที่หลบล่าสุด
             end
         end
     end
 end
 
 -- --- SUPPORT LOOPS ---
--- ดึงเงินใช้ loop ปกติได้ ไม่ค่อยกินสเปค
 task.spawn(function()
     while true do
         task.wait(0.1)
@@ -228,7 +244,7 @@ task.spawn(function()
     end
 end)
 
--- [ใหม่ล่าสุด] ใช้ Heartbeat เพื่อให้หลบได้เร็วแบบฟ้าผ่า (รัน 60 ครั้งต่อวิ)
+-- Heartbeat ให้ทำงานไวสุดๆ
 RunService.Heartbeat:Connect(function()
     if autoDodgeEnabled then
         pcall(function()
@@ -248,13 +264,12 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
--- --- MAIN FOLLOW LOOP ---
+-- --- MAIN FOLLOW LOOP (คงเดิม) ---
 task.spawn(function()
     while true do
         task.wait(0.05)
         if not followEnabled then continue end
         
-        -- (โค้ดระบบเดินตามเดิม ซ่อนไว้ไม่ให้ยาวเกิน แต่ในนี้ยังรันปกติ)
         pcall(function()
             local target = nil
             if SelectedMode == "Manual" then
