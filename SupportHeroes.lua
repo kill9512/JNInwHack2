@@ -42,7 +42,7 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V7", "หลบ Eruption & กางเกราะแก้ว", function(state)
+SupportSection:NewToggle("Smart Dodge V7", "หลบ Eruption & กางเกราะกระสุน", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -126,9 +126,10 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- --- ระบบสแกนหาจุดปลอดภัย ---
+-- --- ระบบสแกนหาจุดปลอดภัย (สำหรับ Eruption) ---
 local function isSafePosition(startPos, targetPos)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    
     local dir = targetPos - startPos
     local wallHit = workspace:Raycast(startPos, dir, rayParams)
     if wallHit then return false end 
@@ -140,7 +141,22 @@ local function isSafePosition(startPos, targetPos)
     return true
 end
 
--- --- ฟังก์ชันหามอนสเตอร์ที่ใกล้ที่สุด ---
+local function findSafeDodge(startPos, baseDir, distance)
+    local target = startPos + (baseDir * distance)
+    if isSafePosition(startPos, target) then return target end
+    
+    local angles = {45, -45, 90, -90, 135, -135, 180}
+    for _, angle in ipairs(angles) do
+        local rotatedDir = CFrame.Angles(0, math.rad(angle), 0) * baseDir
+        local testTarget = startPos + (rotatedDir * distance)
+        if isSafePosition(startPos, testTarget) then
+            return testTarget
+        end
+    end
+    return startPos + (baseDir * (distance * 0.4))
+end
+
+-- หามอนสเตอร์ที่ใกล้ที่สุด (สำหรับ Eruption)
 local function getNearestEnemy(myPosXZ)
     local dungeon = workspace:FindFirstChild("Dungeon")
     local enemies = dungeon and dungeon:FindFirstChild("Enemies")
@@ -162,11 +178,11 @@ local function getNearestEnemy(myPosXZ)
     return nearestEnemyPos
 end
 
--- --- [ระบบอัปเดต V7] Eruption ชิดมอน & เกราะแก้วผลักกระสุน ---
+-- --- [ระบบอัปเดต V7] รวมมิตร โคตร Perfect ---
 local function executeSmartDodgeV7(hazard)
     if not hazard or not hazard.Parent then return end
     
-    local isAoE = (hazard.Name == "Eruption" and hazard:IsA("Model"))
+    local isAoE = hazard:IsA("Model") and hazard.Name == "Eruption"
     local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$"))
     
     if not (isAoE or isProjectile) then return end
@@ -176,9 +192,8 @@ local function executeSmartDodgeV7(hazard)
     if not myRoot then return end
 
     local hazardPos = nil
-    local hazardRadius = 2 
+    local hazardSize = Vector3.new(4, 4, 4) 
     
-    -- หาตำแหน่งของอันตราย
     if isAoE then
         local parts = {}
         for _, v in pairs(hazard:GetDescendants()) do
@@ -189,18 +204,16 @@ local function executeSmartDodgeV7(hazard)
             hazardPos = centerPart.Position
             for _, p in pairs(parts) do
                 local r = math.max(p.Size.X, p.Size.Z) / 2
-                if r > hazardRadius then hazardRadius = r end
+                if r > (math.max(hazardSize.X, hazardSize.Z) / 2) then hazardSize = p.Size end
             end
         else
             local cframe, size = hazard:GetBoundingBox()
             hazardPos = cframe.Position
-            hazardRadius = math.max(size.X, size.Z) / 2
+            hazardSize = size
         end
     elseif hazard:IsA("BasePart") then
         hazardPos = hazard.Position
-    elseif hazard:IsA("Model") then
-        local p = hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true)
-        if p then hazardPos = p.Position end
+        hazardSize = hazard.Size
     end
 
     if not hazardPos then return end
@@ -212,8 +225,11 @@ local function executeSmartDodgeV7(hazard)
 
     if distXZ > shieldRange then return end
 
-    -- [กรณีที่ 1] หลบ Eruption (วาร์ปไปขอบวงเวทย์ฝั่งที่ใกล้มอนที่สุด)
+    -- [กรณีที่ 1] หลบ Eruption (ชิดขอบหน้ามอน) - คงความเทพจาก V6
     if isAoE then
+        local hazardRadius = math.max(hazardSize.X, hazardSize.Z) / 2
+        if hazardRadius < 5 then hazardRadius = 10 end 
+        
         if distXZ < hazardRadius + 1.5 then 
             local nearestEnemyXZ = getNearestEnemy(myPosXZ)
             local escapeDir
@@ -247,53 +263,55 @@ local function executeSmartDodgeV7(hazard)
             end
         end
 
-    -- [กรณีที่ 2] กระสุนพุ่งชน (สร้างเกราะแก้วผลักแทนการวาร์ป)
+    -- [กรณีที่ 2] กระสุนพุ่งชน (กางเกราะแก้วหนา 5 บล็อค!)
     elseif isProjectile then
-        -- ถ้ากางเกราะให้กระสุนลูกนี้ไปแล้ว จะได้ไม่ต้องทำซ้ำ
-        if not hazard:FindFirstChild("GlassBumper_Tag") then
-            -- แปะป้ายบอกว่ากางเกราะแล้ว
-            local tag = Instance.new("BoolValue")
-            tag.Name = "GlassBumper_Tag"
-            tag.Parent = hazard
+        -- ถ้ามันยังไม่มีเกราะครอบ ให้กางเกราะให้มันทันที
+        if not hazard:FindFirstChild("GlassBumper") then
+            
+            -- ปิดดาเมจของจริงก่อนเลย ปลอดภัยไว้ก่อน
+            pcall(function()
+                if hazard:IsA("BasePart") then
+                    hazard.CanTouch = false
+                    hazard.CanCollide = false
+                elseif hazard:IsA("Model") then
+                    for _, p in pairs(hazard:GetDescendants()) do
+                        if p:IsA("BasePart") then
+                            p.CanTouch = false
+                            p.CanCollide = false
+                        end
+                    end
+                end
+            end)
 
-            -- ฟังก์ชันเสริมเกราะให้ชิ้นส่วน
-            local function applyGlass(part)
-                if not part:IsA("BasePart") then return end
-                
-                -- ลบดาเมจทิ้ง!
-                part.CanTouch = false
-                local touch = part:FindFirstChild("TouchInterest")
-                if touch then touch:Destroy() end
+            -- หาจุดอ้างอิงเพื่อสร้างเกราะ
+            local mainPart = hazard:IsA("BasePart") and hazard or hazard.PrimaryPart
+            if not mainPart then mainPart = hazard:FindFirstChildWhichIsA("BasePart", true) end
 
-                -- สร้างก้อนเกราะแก้วมารองรับการชน
+            if mainPart then
+                -- สร้างเกราะแก้วฟิสิกส์
                 local bumper = Instance.new("Part")
                 bumper.Name = "GlassBumper"
-                bumper.Size = part.Size + Vector3.new(4, 4, 4) -- หนา 4 บล็อค แข็งๆ ไปเลย
-                bumper.CFrame = part.CFrame
-                bumper.Transparency = 0.5 -- โปร่งแสงแบบกระจก
-                bumper.Material = Enum.Material.Glass
-                bumper.Color = Color3.fromRGB(0, 255, 255) -- สีฟ้าๆ เท่ๆ
-                bumper.CanCollide = true -- ให้มันมาชนตัวเราดันๆ ได้
-                bumper.CanTouch = false
-                bumper.Massless = true
-                bumper.Anchored = part.Anchored
-
+                -- ขยายขนาดเพิ่มไปด้านละ 5 บล็อค (รวมเป็นบวก 10 แกนละ)
+                bumper.Size = hazardSize + Vector3.new(10, 10, 10) 
+                bumper.CFrame = mainPart.CFrame
+                
+                -- ตกแต่งให้ใสๆ สีฟ้า
+                bumper.Transparency = 0.5
+                bumper.Material = Enum.Material.ForceField
+                bumper.Color = Color3.fromRGB(0, 255, 255)
+                
+                -- ตั้งค่าฟิสิกส์ให้ดันตัวเราได้ แต่ทำดาเมจไม่ได้!
+                bumper.CanCollide = true
+                bumper.CanTouch = false 
+                bumper.Massless = true -- ป้องกันกระสุนหนักหัวทิ่ม
+                
                 -- เชื่อมติดกับกระสุน
                 local weld = Instance.new("WeldConstraint")
                 weld.Part0 = bumper
-                weld.Part1 = part
+                weld.Part1 = mainPart
                 weld.Parent = bumper
-
-                bumper.Parent = part
-                part.CanCollide = false -- ปิดการชนของกระสุนเดิม ให้ชนแต่เกราะ
-            end
-
-            if hazard:IsA("BasePart") then
-                applyGlass(hazard)
-            elseif hazard:IsA("Model") then
-                for _, desc in pairs(hazard:GetDescendants()) do
-                    applyGlass(desc)
-                end
+                
+                bumper.Parent = hazard
             end
         end
     end
@@ -336,6 +354,7 @@ task.spawn(function()
     end
 end)
 
+-- Loop สแกนแบบ Stepped (รันโคตรไว)
 RunService.Stepped:Connect(function()
     if autoDodgeEnabled then
         pcall(function()
@@ -350,6 +369,7 @@ RunService.Stepped:Connect(function()
     end
 end)
 
+-- แยก GetNil Instances ออกมารันช้าๆ ลดแลค
 task.spawn(function()
     while true do
         task.wait(0.5) 
