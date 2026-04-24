@@ -15,7 +15,7 @@ local followEnabled = false
 local debugEnabled = false
 
 local autoCoinEnabled = false 
-local antiDamageEnabled = false
+local autoDodgeEnabled = false -- [เปลี่ยน] ใช้ตัวแปรนี้สำหรับระบบหลบ
 
 local currentWaypoints = {}
 local currentWaypointIndex = 1
@@ -35,13 +35,14 @@ local SupportSection = Tab:NewSection("Support Functions")
 local Section = Tab:NewSection("Interior & Building Navigation")
 local MoveSection = Tab:NewSection("Navigation Control")
 
--- --- UI: Support Functions (รวมดึงเงินและกันดาเมจไว้ด้วยกัน) ---
+-- --- UI: Support Functions ---
 SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก CoinStack อัตโนมัติ", function(state)
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Anti Damage (Effects)", "ลบดาเมจ Eruption, Arrow, Magic", function(state)
-    antiDamageEnabled = state
+-- [เปลี่ยน] ปุ่มเปิดปิดเป็นระบบหลบแทน
+SupportSection:NewToggle("Auto Dodge (XZ)", "วาร์ปหนี Eruption, Arrow, Magic", function(state)
+    autoDodgeEnabled = state
 end)
 
 -- --- UI: Navigation Control ---
@@ -128,35 +129,54 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- --- ฟังก์ชันช่วยจัดการของอันตราย (อัปเดต: ขั้นเด็ดขาด) ---
-local function neutralizeHazard(obj)
-    if not obj then return end
+-- --- [ใหม่] ฟังก์ชันคำนวณทิศทางวาร์ปหลบ (หนีเฉพาะแกน X, Z) ---
+local function checkAndDodge(hazard)
+    if not hazard or not hazard.Parent then return end
     
-    if obj.Name == "Eruption" and obj:IsA("UnionOperation") then
-        pcall(function()
-            obj.CanTouch = false
-            -- วาร์ปลงใต้ดินลึกๆ ไปเลย จะได้ไม่มีรัศมีดาเมจโดนเรา
-            obj.CFrame = CFrame.new(0, -9999, 0) 
-        end)
-    elseif obj.Name == "Arrow" or obj.Name:match("Magic$") then
-        pcall(function()
-            -- สำหรับธนูและเวทมนตร์ ลบทิ้งออกจากเกมไปเลย ชัวร์ที่สุด!
-            obj:Destroy()
-        end)
+    -- กรองเฉพาะของอันตราย
+    local isDanger = false
+    if hazard.Name == "Eruption" or hazard.Name == "Arrow" or hazard.Name:match("Magic$") then
+        isDanger = true
+    end
+    
+    if not isDanger then return end
+
+    local myChar = LocalPlayer.Character
+    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end
+
+    -- หาตำแหน่งของอันตราย (รองรับทั้งแบบ Part และ Model)
+    local hazardPos = nil
+    if hazard:IsA("BasePart") then
+        hazardPos = hazard.Position
+    elseif hazard:IsA("Model") then
+        local p = hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true)
+        if p then hazardPos = p.Position end
+    end
+
+    if hazardPos then
+        -- ถ้าระยะห่างน้อยกว่า 15 บล็อค แปลว่ามันจะถึงตัวแล้ว!
+        local dist = (myRoot.Position - hazardPos).Magnitude
+        if dist < 15 then
+            -- 1. หาเวกเตอร์ชี้ทิศทางออกจากของอันตราย
+            local escapeDir = (myRoot.Position - hazardPos)
+            -- 2. บังคับให้แกน Y เป็น 0 เพื่อให้พุ่งขนานกับพื้น (แกน XZ) เท่านั้น
+            escapeDir = Vector3.new(escapeDir.X, 0, escapeDir.Z)
+            
+            -- ป้องกัน Error กรณีตัวละครซ้อนทับจุดศูนย์กลางพอดี
+            if escapeDir.Magnitude > 0 then
+                escapeDir = escapeDir.Unit
+            else
+                escapeDir = Vector3.new(math.random(-1, 1), 0, math.random(-1, 1)).Unit 
+            end
+            
+            -- 3. สั่งวาร์ปกระชากตัวเราหนีไป 15 บล็อค ทันที!
+            myRoot.CFrame = myRoot.CFrame + (escapeDir * 15)
+        end
     end
 end
 
--- [ใหม่] ดักจับของเกิดใหม่แบบ Real-time (ทำงานทันทีที่เสก)
-workspace.DescendantAdded:Connect(function(descendant)
-    if antiDamageEnabled then
-        -- task.defer ช่วยให้รอ property ของชิ้นส่วนนั้นโหลดเสร็จก่อนค่อยทำงาน
-        task.defer(function()
-            neutralizeHazard(descendant)
-        end)
-    end
-end)
-
--- --- SUPPORT LOOPS (Auto Coin & Anti Damage) ---
+-- --- SUPPORT LOOPS (Auto Coin & Auto Dodge) ---
 task.spawn(function()
     while true do
         task.wait(0.1)
@@ -195,60 +215,24 @@ task.spawn(function()
     end
 end)
 
--- --- [อัปเดต] ANTI DAMAGE LOOP (เพิ่มระบบ Ghost Mode ให้ตัวละครเรา) ---
+-- [เปลี่ยน] Loop สแกนพื้นที่เพื่อทำการวาร์ปหลบ
 task.spawn(function()
     while true do
-        task.wait(0.2) 
-        if antiDamageEnabled then
+        task.wait(0.05) -- ทำงานไวๆ เพื่อให้หลบทัน
+        if autoDodgeEnabled then
             pcall(function()
-                
-                -- [ไฮไลท์เด็ด!] ทำให้ตัวเราเป็นวิญญาณ ป้องกันสคริปต์เกมมาเช็คการชน (Touch)
-                local myChar = LocalPlayer.Character
-                if myChar then
-                    for _, part in pairs(myChar:GetDescendants()) do
-                        -- เช็คว่าเป็นชิ้นส่วนร่างกาย และมี CanTouch ให้ปิดทิ้งเลย
-                        if part:IsA("BasePart") and part.CanTouch then
-                            part.CanTouch = false
-                        end
-                    end
-                end
-
-                -- สแกนของที่หลงเหลืออยู่ใน Effects (ลบเพื่อกันแลคและกันภาพรกตา)
                 local dungeon = workspace:FindFirstChild("Dungeon")
                 local effects = dungeon and dungeon:FindFirstChild("Effects")
+                
                 if effects then
                     for _, v in pairs(effects:GetChildren()) do
-                        neutralizeHazard(v)
-                        if v:IsA("Model") then
-                            for _, desc in pairs(v:GetDescendants()) do
-                                neutralizeHazard(desc)
-                            end
-                        end
+                        checkAndDodge(v)
                     end
                 end
                 
-                -- สแกนใน nil (ของซ่อน)
                 if getnilinstances then
                     for _, v in pairs(getnilinstances()) do
-                        neutralizeHazard(v)
-                        if v:IsA("Model") then
-                            for _, desc in pairs(v:GetDescendants()) do
-                                neutralizeHazard(desc)
-                            end
-                        end
-                    end
-                end
-                
-            end)
-        else
-            -- [เพิ่มทางออก] ถ้าเราปิดปุ่ม Anti Damage ให้คืนร่างเดิม เผื่อต้องเดินชนพอร์ทัลวาร์ป
-            pcall(function()
-                local myChar = LocalPlayer.Character
-                if myChar then
-                    for _, part in pairs(myChar:GetDescendants()) do
-                        if part:IsA("BasePart") and not part.CanTouch then
-                            part.CanTouch = true
-                        end
+                        checkAndDodge(v)
                     end
                 end
             end)
