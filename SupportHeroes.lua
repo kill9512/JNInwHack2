@@ -42,7 +42,7 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V6", "หลบชิดมอน & วาร์ปสวนทะลุหน้า", function(state)
+SupportSection:NewToggle("Smart Dodge V7", "หลบ Eruption & กางเกราะแก้ว", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -126,10 +126,9 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- --- ระบบสแกนหาจุดปลอดภัย (กันทะลุกำแพง/ตกเหว) ---
+-- --- ระบบสแกนหาจุดปลอดภัย ---
 local function isSafePosition(startPos, targetPos)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
-    
     local dir = targetPos - startPos
     local wallHit = workspace:Raycast(startPos, dir, rayParams)
     if wallHit then return false end 
@@ -141,22 +140,7 @@ local function isSafePosition(startPos, targetPos)
     return true
 end
 
-local function findSafeDodge(startPos, baseDir, distance)
-    local target = startPos + (baseDir * distance)
-    if isSafePosition(startPos, target) then return target end
-    
-    local angles = {45, -45, 90, -90, 135, -135, 180}
-    for _, angle in ipairs(angles) do
-        local rotatedDir = CFrame.Angles(0, math.rad(angle), 0) * baseDir
-        local testTarget = startPos + (rotatedDir * distance)
-        if isSafePosition(startPos, testTarget) then
-            return testTarget
-        end
-    end
-    return startPos + (baseDir * (distance * 0.4))
-end
-
--- [ใหม่] ฟังก์ชันหามอนสเตอร์ที่ใกล้ที่สุด
+-- --- ฟังก์ชันหามอนสเตอร์ที่ใกล้ที่สุด ---
 local function getNearestEnemy(myPosXZ)
     local dungeon = workspace:FindFirstChild("Dungeon")
     local enemies = dungeon and dungeon:FindFirstChild("Enemies")
@@ -178,11 +162,11 @@ local function getNearestEnemy(myPosXZ)
     return nearestEnemyPos
 end
 
--- --- [ระบบอัปเดต V6] วาร์ปสวนหน้า + หลบชิดมอน ---
-local function executeSmartDodgeV6(hazard)
+-- --- [ระบบอัปเดต V7] Eruption ชิดมอน & เกราะแก้วผลักกระสุน ---
+local function executeSmartDodgeV7(hazard)
     if not hazard or not hazard.Parent then return end
     
-    local isAoE = hazard:IsA("Model")
+    local isAoE = (hazard.Name == "Eruption" and hazard:IsA("Model"))
     local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$"))
     
     if not (isAoE or isProjectile) then return end
@@ -194,6 +178,7 @@ local function executeSmartDodgeV6(hazard)
     local hazardPos = nil
     local hazardRadius = 2 
     
+    -- หาตำแหน่งของอันตราย
     if isAoE then
         local parts = {}
         for _, v in pairs(hazard:GetDescendants()) do
@@ -213,7 +198,9 @@ local function executeSmartDodgeV6(hazard)
         end
     elseif hazard:IsA("BasePart") then
         hazardPos = hazard.Position
-        hazardRadius = math.max(hazard.Size.X, hazard.Size.Z) / 2
+    elseif hazard:IsA("Model") then
+        local p = hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true)
+        if p then hazardPos = p.Position end
     end
 
     if not hazardPos then return end
@@ -225,29 +212,25 @@ local function executeSmartDodgeV6(hazard)
 
     if distXZ > shieldRange then return end
 
-    -- [กรณีที่ 1] หลบ Eruption (เล็งหามอนสเตอร์ที่ใกล้ที่สุด)
+    -- [กรณีที่ 1] หลบ Eruption (วาร์ปไปขอบวงเวทย์ฝั่งที่ใกล้มอนที่สุด)
     if isAoE then
         if distXZ < hazardRadius + 1.5 then 
             local nearestEnemyXZ = getNearestEnemy(myPosXZ)
             local escapeDir
             
             if nearestEnemyXZ then
-                -- สร้างเส้นทางจากจุดศูนย์กลางเวทย์ ชี้ไปหามอนสเตอร์
                 escapeDir = (nearestEnemyXZ - hazPosXZ)
                 if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
                 escapeDir = escapeDir.Unit
             else
-                -- ถ้าไม่มีมอนสเตอร์เหลือเลย ก็หลบออกไปธรรมดา
                 escapeDir = (myPosXZ - hazPosXZ)
                 if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
                 escapeDir = escapeDir.Unit
             end
             
-            -- วาร์ปไปที่ขอบวงเวทย์ (ฝั่งที่ชี้ไปหามอน)
             local targetPosXZ = hazPosXZ + (escapeDir * (hazardRadius + 1.5))
             local targetPos = Vector3.new(targetPosXZ.X, myPos.Y, targetPosXZ.Z)
             
-            -- เช็คว่าจุดนั้นปลอดภัยไหม ถ้าไม่ปลอดภัยให้ลองหมุนหามุมอื่นบนเส้นรอบวง
             if isSafePosition(myPos, targetPos) then
                 myRoot.CFrame = CFrame.new(targetPos)
             else
@@ -264,25 +247,52 @@ local function executeSmartDodgeV6(hazard)
             end
         end
 
-    -- [กรณีที่ 2] กระสุนพุ่งชน (วาร์ปสวนทะลุหน้า!)
+    -- [กรณีที่ 2] กระสุนพุ่งชน (สร้างเกราะแก้วผลักแทนการวาร์ป)
     elseif isProjectile then
-        if distXZ < 12 then 
-            -- หาเส้นทางพุ่งเข้าหากระสุน (ทิศทางตรงกันข้ามกับที่มันมา)
-            local warpDir = (hazPosXZ - myPosXZ)
-            if warpDir.Magnitude == 0 then warpDir = Vector3.new(1, 0, 0) end
-            warpDir = warpDir.Unit
-            
-            -- พุ่งสวนทะลุไปเลย 15 บล็อค (ไปโผล่หลังกระสุน)
-            local warpDist = 15
-            local targetPos = myPos + (warpDir * warpDist)
-            
-            if isSafePosition(myPos, targetPos) then
-                myRoot.CFrame = CFrame.new(targetPos)
-            else
-                -- ถ้าสวนไปแล้วติดกำแพง ให้ระบบพยายามไถลออกข้างๆ
-                local safeTarget = findSafeDodge(myPos, warpDir, warpDist)
-                if safeTarget then
-                    myRoot.CFrame = CFrame.new(safeTarget)
+        -- ถ้ากางเกราะให้กระสุนลูกนี้ไปแล้ว จะได้ไม่ต้องทำซ้ำ
+        if not hazard:FindFirstChild("GlassBumper_Tag") then
+            -- แปะป้ายบอกว่ากางเกราะแล้ว
+            local tag = Instance.new("BoolValue")
+            tag.Name = "GlassBumper_Tag"
+            tag.Parent = hazard
+
+            -- ฟังก์ชันเสริมเกราะให้ชิ้นส่วน
+            local function applyGlass(part)
+                if not part:IsA("BasePart") then return end
+                
+                -- ลบดาเมจทิ้ง!
+                part.CanTouch = false
+                local touch = part:FindFirstChild("TouchInterest")
+                if touch then touch:Destroy() end
+
+                -- สร้างก้อนเกราะแก้วมารองรับการชน
+                local bumper = Instance.new("Part")
+                bumper.Name = "GlassBumper"
+                bumper.Size = part.Size + Vector3.new(4, 4, 4) -- หนา 4 บล็อค แข็งๆ ไปเลย
+                bumper.CFrame = part.CFrame
+                bumper.Transparency = 0.5 -- โปร่งแสงแบบกระจก
+                bumper.Material = Enum.Material.Glass
+                bumper.Color = Color3.fromRGB(0, 255, 255) -- สีฟ้าๆ เท่ๆ
+                bumper.CanCollide = true -- ให้มันมาชนตัวเราดันๆ ได้
+                bumper.CanTouch = false
+                bumper.Massless = true
+                bumper.Anchored = part.Anchored
+
+                -- เชื่อมติดกับกระสุน
+                local weld = Instance.new("WeldConstraint")
+                weld.Part0 = bumper
+                weld.Part1 = part
+                weld.Parent = bumper
+
+                bumper.Parent = part
+                part.CanCollide = false -- ปิดการชนของกระสุนเดิม ให้ชนแต่เกราะ
+            end
+
+            if hazard:IsA("BasePart") then
+                applyGlass(hazard)
+            elseif hazard:IsA("Model") then
+                for _, desc in pairs(hazard:GetDescendants()) do
+                    applyGlass(desc)
                 end
             end
         end
@@ -333,7 +343,7 @@ RunService.Stepped:Connect(function()
             local effects = dungeon and dungeon:FindFirstChild("Effects")
             if effects then
                 for _, v in pairs(effects:GetChildren()) do
-                    executeSmartDodgeV6(v)
+                    executeSmartDodgeV7(v)
                 end
             end
         end)
@@ -347,7 +357,7 @@ task.spawn(function()
             pcall(function()
                 if getnilinstances then
                     for _, v in pairs(getnilinstances()) do
-                        executeSmartDodgeV6(v)
+                        executeSmartDodgeV7(v)
                     end
                 end
             end)
