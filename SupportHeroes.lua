@@ -18,6 +18,9 @@ local debugEnabled = false
 local autoCoinEnabled = false 
 local autoDodgeEnabled = false
 
+-- [คืนชีพ] ระยะตรวจจับ
+local shieldRange = 100 
+
 local currentWaypoints = {}
 local currentWaypointIndex = 1
 local lastComputeTime = 0
@@ -41,8 +44,13 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V2", "สไลด์หลบ Eruption, Arrow, Magic", function(state)
+SupportSection:NewToggle("Smart Dodge V3", "วาร์ปสวนทะลุ Eruption, Arrow, Magic", function(state)
     autoDodgeEnabled = state
+end)
+
+-- [คืนชีพ] Slider ปรับระยะ
+SupportSection:NewSlider("Dodge Detect Range", "ระยะตรวจจับอันตราย (บล็อค)", 300, 20, function(s)
+    shieldRange = s
 end)
 
 -- --- UI: Navigation Control ---
@@ -121,24 +129,24 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- --- [ระบบอัปเดต] เช็คความปลอดภัยของตำแหน่งปลายทาง ---
+-- --- ระบบเช็คกำแพง/เหว ---
 local function isSafePosition(startPos, targetPos)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
     
-    -- 1. เช็คกำแพงขวางทาง (ยิงเรดาร์แนวนอน)
+    -- 1. เช็คกำแพงขวางทาง
     local dir = targetPos - startPos
     local wallHit = workspace:Raycast(startPos, dir, rayParams)
-    if wallHit then return false end -- ติดกำแพง ห้ามไป!
+    if wallHit then return false end 
 
     -- 2. เช็คเหว (ยิงเรดาร์ลงพื้นจากจุดปลายทาง)
     local groundOrigin = targetPos + Vector3.new(0, 3, 0)
     local groundHit = workspace:Raycast(groundOrigin, Vector3.new(0, -10, 0), rayParams)
-    if not groundHit then return false end -- ไม่มีพื้นรองรับ ห้ามไป!
+    if not groundHit then return false end 
 
     return true
 end
 
--- --- [ระบบอัปเดต] การคำนวณหลบแบบใหม่ ---
+-- --- [อัปเดตใหม่] ระบบวาร์ปหลบ V3 ---
 local function executeSmartDodge(hazard)
     if not hazard or not hazard.Parent then return end
     
@@ -152,18 +160,17 @@ local function executeSmartDodge(hazard)
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not myRoot then return end
 
+    -- [แก้ไข] รองรับทั้ง Model และ Part เพื่อหาขนาดและพิกัด
     local hazardPos = nil
-    local hazardSize = Vector3.new(4, 4, 4) -- ขนาดเผื่อไว้
+    local hazardSize = Vector3.new(4, 4, 4) 
     
-    if hazard:IsA("BasePart") then
+    if hazard:IsA("Model") then
+        local cframe, size = hazard:GetBoundingBox()
+        hazardPos = cframe.Position
+        hazardSize = size
+    elseif hazard:IsA("BasePart") then
         hazardPos = hazard.Position
         hazardSize = hazard.Size
-    elseif hazard:IsA("Model") then
-        local p = hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true)
-        if p then 
-            hazardPos = p.Position 
-            hazardSize = p.Size
-        end
     end
 
     if not hazardPos then return end
@@ -173,49 +180,51 @@ local function executeSmartDodge(hazard)
     local hazPosXZ = Vector3.new(hazardPos.X, 0, hazardPos.Z)
     local distXZ = (myPosXZ - hazPosXZ).Magnitude
 
-    -- [กรณีที่ 1] หลบวงเวทย์ใต้ตีน (Eruption)
+    -- [ดักระยะ] ถ้านอกระยะตรวจจับ ไม่ต้องหลบ
+    if distXZ > shieldRange then return end
+
+    -- [กรณีที่ 1] หลบวงเวทย์ (Eruption)
     if hazard.Name == "Eruption" then
-        -- หารัศมีของวงเวทย์ (เอาความกว้างหาร 2)
+        -- หารัศมีของวงเวทย์
         local radius = math.max(hazardSize.X, hazardSize.Z) / 2
         
-        -- ถ้าเรายืนอยู่ในวงเวทย์ (บวกระยะเผื่อนิดหน่อย)
+        -- ถ้าอยู่ข้างในวงเวทย์ หรือใกล้ขอบมากไป
         if distXZ < radius + 1 then
-            -- หาเส้นทางเดินออกจากจุดศูนย์กลาง
             local escapeDir = (myPosXZ - hazPosXZ)
             if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
             escapeDir = escapeDir.Unit
             
-            -- ขยับออกไปให้พ้นขอบวงเวทย์เป๊ะๆ (ขอบ + 2 บล็อค)
+            -- ขยับออกไปยืนตรงขอบวงเวทย์ + เผื่อ 2 บล็อค
             local distanceToMove = (radius + 2) - distXZ
             local targetPos = myPos + (escapeDir * distanceToMove)
             
+            -- เช็คกันกำแพง/เหว ก่อนวาร์ป
             if isSafePosition(myPos, targetPos) then
                 myRoot.CFrame = CFrame.new(targetPos)
             end
         end
 
-    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic)
+    -- [กรณีที่ 2] วาร์ปสวนทะลุกระสุน (Arrow, Magic)
     else
-        -- ถ้าระยะจวนตัว (ใกล้กว่า 8 บล็อค)
-        if distXZ < 8 then
-            local dirFromHazard = (myPosXZ - hazPosXZ)
-            if dirFromHazard.Magnitude == 0 then dirFromHazard = Vector3.new(1, 0, 0) end
-            dirFromHazard = dirFromHazard.Unit
+        -- ถ้าระยะจวนตัว (ใกล้กว่า 10 บล็อค)
+        if distXZ < 10 then
+            -- หาเส้นทางพุ่งสวนหน้าไปหากระสุน
+            local dirToHazard = (hazPosXZ - myPosXZ)
+            if dirToHazard.Magnitude == 0 then dirToHazard = Vector3.new(1, 0, 0) end
+            dirToHazard = dirToHazard.Unit
             
-            -- [เคล็ดลับ] หาเวกเตอร์ด้านข้าง (Sidestep) ซ้ายและขวา
-            local rightDir = dirFromHazard:Cross(Vector3.new(0, 1, 0))
-            local leftDir = -rightDir
+            local dodgeDist = 12 -- วาร์ปพุ่งไปข้างหน้า 12 บล็อค (ทะลุหลังมันไปเลย)
             
-            -- ระยะสไลด์ออกข้างแค่ 5 บล็อค ก็พ้นกระสุนแล้ว แถมไม่ถอยห่างมอนสเตอร์
-            local dodgeDist = 5
-            local targetRight = myPos + (rightDir * dodgeDist)
-            local targetLeft = myPos + (leftDir * dodgeDist)
+            local targetForward = myPos + (dirToHazard * dodgeDist)
+            local targetBackward = myPos - (dirToHazard * dodgeDist)
             
-            -- ลองฉากหลบไปทางขวาก่อน ถ้าขวาติดกำแพงก็ไปซ้าย
-            if isSafePosition(myPos, targetRight) then
-                myRoot.CFrame = CFrame.new(targetRight)
-            elseif isSafePosition(myPos, targetLeft) then
-                myRoot.CFrame = CFrame.new(targetLeft)
+            -- ลำดับ 1: วาร์ปพุ่งสวนทะลุกระสุน
+            if isSafePosition(myPos, targetForward) then
+                myRoot.CFrame = CFrame.new(targetForward)
+                
+            -- ลำดับ 2: ถ้าพุ่งสวนแล้วจะตกแมพ/ติดกำแพง ให้กระโดดถอยหลังแทน
+            elseif isSafePosition(myPos, targetBackward) then
+                myRoot.CFrame = CFrame.new(targetBackward)
             end
         end
     end
@@ -258,7 +267,6 @@ task.spawn(function()
     end
 end)
 
--- Loop ตรวจจับอันตรายแบบ Real-time
 RunService.Heartbeat:Connect(function()
     if autoDodgeEnabled then
         pcall(function()
