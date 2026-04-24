@@ -15,7 +15,10 @@ local followEnabled = false
 local debugEnabled = false
 
 local autoCoinEnabled = false 
-local antiDamageEnabled = false -- กลับมาใช้ตัวแปรนี้
+local antiDamageEnabled = false 
+
+-- [ใหม่] ตัวแปรจำกัดระยะการกางเกราะ
+local shieldRange = 100 
 
 local currentWaypoints = {}
 local currentWaypointIndex = 1
@@ -40,8 +43,13 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Force CanCollide", "เปิดการชน Eruption, Arrow, Magic", function(state)
+SupportSection:NewToggle("Bumper Shield (XZ)", "สร้างเกราะกันชน Eruption, Arrow, Magic", function(state)
     antiDamageEnabled = state
+end)
+
+-- [ใหม่] UI ปรับระยะตรวจจับเกราะ (เลื่อนได้ตั้งแต่ 20 ถึง 300 บล็อค)
+SupportSection:NewSlider("Shield Detect Range", "ระยะตรวจจับเพื่อสร้างเกราะ", 300, 20, function(s)
+    shieldRange = s
 end)
 
 -- --- UI: Navigation Control ---
@@ -123,8 +131,8 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- --- [ใหม่] ฟังก์ชันตั้งค่า CanCollide อย่างเดียว ---
-local function forceCollision(hazard)
+-- --- [ระบบอัปเดต] สร้างเกราะกันชนแบบจำกัดระยะ (Distance Check) ---
+local function createBumper(hazard)
     if not hazard or not hazard.Parent then return end
     
     local isDanger = false
@@ -133,13 +141,62 @@ local function forceCollision(hazard)
     end
     if not isDanger then return end
 
+    -- [ใหม่] ดึงตำแหน่งตัวเราก่อน
+    local myChar = LocalPlayer.Character
+    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end
+
+    -- [ใหม่] หาตำแหน่งของวัตถุอันตราย
+    local hazardPos = nil
     if hazard:IsA("BasePart") then
-        hazard.CanCollide = true
+        hazardPos = hazard.Position
     elseif hazard:IsA("Model") then
-        for _, part in pairs(hazard:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = true
-            end
+        local p = hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true)
+        if p then hazardPos = p.Position end
+    end
+
+    -- [ใหม่] เช็คระยะห่าง ถ้าไกลกว่า shieldRange ที่เราตั้งไว้ ให้ข้ามไปเลย ไม่ต้องกางเกราะ
+    if hazardPos then
+        local dist = (myRoot.Position - hazardPos).Magnitude
+        if dist > shieldRange then
+            return -- ไกลไป ช่างแม่ง ปล่อยมันยิงเพื่อนไป
+        end
+    end
+
+    -- ฟังก์ชันย่อยสำหรับสวมเกราะให้ชิ้นส่วน
+    local function addShield(part)
+        if part:IsA("BasePart") and not part:FindFirstChild("DodgeBumper") then
+            local bumper = Instance.new("Part")
+            bumper.Name = "DodgeBumper"
+            
+            -- ขยายขนาดเกราะ
+            bumper.Size = part.Size + Vector3.new(6, 2, 6) 
+            bumper.CFrame = part.CFrame
+            
+            bumper.Transparency = 0.7 
+            bumper.Material = Enum.Material.ForceField
+            bumper.Color = Color3.fromRGB(0, 255, 255)
+            
+            bumper.CanCollide = true
+            bumper.CanTouch = false 
+            bumper.Massless = true 
+            bumper.Anchored = part.Anchored 
+            
+            local weld = Instance.new("WeldConstraint")
+            weld.Part0 = bumper
+            weld.Part1 = part
+            weld.Parent = bumper
+            
+            bumper.Parent = part
+            part.CanCollide = false
+        end
+    end
+
+    if hazard:IsA("BasePart") then
+        addShield(hazard)
+    elseif hazard:IsA("Model") then
+        for _, v in pairs(hazard:GetDescendants()) do
+            addShield(v)
         end
     end
 end
@@ -183,19 +240,19 @@ end)
 
 task.spawn(function()
     while true do
-        task.wait(0.05) 
+        task.wait(0.1) 
         if antiDamageEnabled then
             pcall(function()
                 local dungeon = workspace:FindFirstChild("Dungeon")
                 local effects = dungeon and dungeon:FindFirstChild("Effects")
                 if effects then
                     for _, v in pairs(effects:GetChildren()) do
-                        forceCollision(v)
+                        createBumper(v)
                     end
                 end
                 if getnilinstances then
                     for _, v in pairs(getnilinstances()) do
-                        forceCollision(v)
+                        createBumper(v)
                     end
                 end
             end)
