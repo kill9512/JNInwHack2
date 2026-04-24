@@ -43,7 +43,7 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V4", "วาร์ปหลบ (จับ Model & ธนู)", function(state)
+SupportSection:NewToggle("Smart Dodge V5", "Perfect Dodge & หนีมุม", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -142,11 +142,10 @@ local function isSafePosition(startPos, targetPos)
     return true
 end
 
--- --- [ระบบอัปเดต V4] โคตรไว & โยน Eruption ทิ้ง ---
-local function executeSmartDodgeV4(hazard)
+-- --- [ระบบอัปเดต V5] แก้บัคระยะหนี + หลบมุม ---
+local function executeSmartDodgeV5(hazard)
     if not hazard or not hazard.Parent then return end
     
-    -- [อัปเดต] เช็คแค่ ClassName = Model ล้วนๆ ไม่สนชื่อห่าเหวอะไรทั้งนั้น
     local isAoE = hazard:IsA("Model")
     local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$"))
     
@@ -177,39 +176,48 @@ local function executeSmartDodgeV4(hazard)
 
     if distXZ > shieldRange then return end
 
-    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิดที่โผล่มา)
+    -- [กรณีที่ 1] หลบวงเวทย์ (Model) แบบติดมุมก็หนีได้
     if isAoE then
         local radius = math.max(hazardSize.X, hazardSize.Z) / 2
-        if radius < 5 then radius = 10 end 
         
-        if distXZ < radius + 1.5 then -- บวกระยะเผื่อให้เซนเซอร์ทำงานไวขึ้น
-            local escapeDir = (myPosXZ - hazPosXZ)
-            if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
-            escapeDir = escapeDir.Unit
+        -- [แก้ปัญหา 1] ล็อครัศมีหนี ไม่ให้มันพาปลิวทะลุแมพ (ต่ำสุด 4 สูงสุด 15 บล็อค)
+        radius = math.clamp(radius, 4, 15)
+        
+        if distXZ < radius + 1.5 then 
+            local baseDir = (myPosXZ - hazPosXZ)
+            if baseDir.Magnitude == 0 then baseDir = Vector3.new(1, 0, 0) end
+            baseDir = baseDir.Unit
             
             local distanceToMove = (radius + 2.5) - distXZ
-            local targetPos = myPos + (escapeDir * distanceToMove)
             
-            if isSafePosition(myPos, targetPos) then
-                myRoot.CFrame = CFrame.new(targetPos)
+            -- [แก้ปัญหา 2] หมุนกวาดหาทิศทางที่ปลอดภัย 8 ทิศทาง ถ้าทิศหลักชนกำแพง!
+            local anglesToTry = {0, 45, -45, 90, -90, 135, -135, 180}
+            for _, angle in ipairs(anglesToTry) do
+                local rotatedDir = CFrame.Angles(0, math.rad(angle), 0) * baseDir
+                local targetPos = myPos + (rotatedDir * distanceToMove)
+                
+                if isSafePosition(myPos, targetPos) then
+                    myRoot.CFrame = CFrame.new(targetPos)
+                    break -- เจอที่ปลอดภัยแล้ว หยุดหาทันที
+                end
             end
         end
 
-    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic)
+    -- [กรณีที่ 2] Perfect Dodge สำหรับกระสุนพุ่งชน
     elseif isProjectile then
-        if distXZ < 12 then -- เพิ่มระยะจับเซนเซอร์กระสุนให้ไกลขึ้น จะได้วาร์ปสวนทัน
+        -- [แก้ปัญหา 3] รอให้จ่อหน้าในระยะ 6 บล็อค ค่อยวาร์ปสวน
+        if distXZ < 6 then 
             local dirFromHazard = (myPosXZ - hazPosXZ)
             if dirFromHazard.Magnitude == 0 then dirFromHazard = Vector3.new(1, 0, 0) end
             dirFromHazard = dirFromHazard.Unit
             
-            -- กระโดดสวนทะลุกระสุนไปด้านหลัง
-            local dodgeDist = 12
+            local dodgeDist = 10
             local targetPos = myPos - (dirFromHazard * dodgeDist)
             
             if isSafePosition(myPos, targetPos) then
                 myRoot.CFrame = CFrame.new(targetPos)
             else
-                local shortTarget = myPos - (dirFromHazard * 6)
+                local shortTarget = myPos - (dirFromHazard * 5)
                 if isSafePosition(myPos, shortTarget) then
                     myRoot.CFrame = CFrame.new(shortTarget)
                 end
@@ -255,7 +263,7 @@ task.spawn(function()
     end
 end)
 
--- [ใหม่] Loop สแกน Effects แบบความเร็วแสง (Stepped ทำงานก่อนระบบฟิสิกส์)
+-- Loop สแกน Effects
 RunService.Stepped:Connect(function()
     if autoDodgeEnabled then
         pcall(function()
@@ -263,14 +271,14 @@ RunService.Stepped:Connect(function()
             local effects = dungeon and dungeon:FindFirstChild("Effects")
             if effects then
                 for _, v in pairs(effects:GetChildren()) do
-                    executeSmartDodgeV4(v)
+                    executeSmartDodgeV5(v)
                 end
             end
         end)
     end
 end)
 
--- [ใหม่] แยก getnilinstances ออกมารันช้าๆ (ลดอาการแลค!)
+-- แยก getnilinstances ออกมารันช้าๆ (กันแลค)
 task.spawn(function()
     while true do
         task.wait(0.5) 
@@ -278,7 +286,7 @@ task.spawn(function()
             pcall(function()
                 if getnilinstances then
                     for _, v in pairs(getnilinstances()) do
-                        executeSmartDodgeV4(v)
+                        executeSmartDodgeV5(v)
                     end
                 end
             end)
