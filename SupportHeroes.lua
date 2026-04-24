@@ -125,43 +125,36 @@ end)
 MoveSection:NewToggle("Show Path", "Visuals", function(s) debugEnabled = s end)
 MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
 
--- --- [อัปเดต] AUTO COIN LOOP (แบบวาร์ป CFrame ดึงของเข้าหาตัว) ---
+-- --- [อัปเดต] AUTO COIN LOOP (ปิด CanCollide ด้วย) ---
 task.spawn(function()
     while true do
-        task.wait(0.1) -- รอ 0.1 วินาที ลดภาระเครื่อง
+        task.wait(0.1)
         if autoCoinEnabled then
             pcall(function()
                 local myChar = LocalPlayer.Character
                 local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
                 
                 if myRoot then
-                    -- เข้าถึงตำแหน่งโฟลเดอร์ของสมบัติ
                     local dungeon = workspace:FindFirstChild("Dungeon")
                     local treasure = dungeon and dungeon:FindFirstChild("Treasure")
                     
                     if treasure then
-                        -- วนหา CoinStack ทุกอัน
                         for _, item in pairs(treasure:GetChildren()) do
                             if item.Name == "CoinStack" then
-                                
-                                -- กรณีที่ CoinStack เป็นชิ้นส่วนเดี่ยวๆ (Part, MeshPart)
                                 if item:IsA("BasePart") then
-                                    -- วาร์ปมาที่ตำแหน่งตัวเราทันที
+                                    item.CanCollide = false -- [เพิ่ม] ปิดการชน
                                     item.CFrame = myRoot.CFrame
-                                    
-                                -- กรณีที่ CoinStack ถูกสร้างมาเป็น Model (มีหลายชิ้นส่วนรวมกัน)
                                 elseif item:IsA("Model") then
-                                    -- ย้ายทั้งโมเดลมาหาตัวเรา
                                     item:PivotTo(myRoot.CFrame)
-                                    
-                                    -- เพื่อความชัวร์ เราจะดึงทุกชิ้นส่วนย่อยข้างในที่มี TouchInterest มาด้วย
                                     for _, part in pairs(item:GetDescendants()) do
-                                        if part:IsA("BasePart") and part:FindFirstChild("TouchInterest") then
-                                            part.CFrame = myRoot.CFrame
+                                        if part:IsA("BasePart") then
+                                            part.CanCollide = false -- [เพิ่ม] ปิดการชน
+                                            if part:FindFirstChild("TouchInterest") then
+                                                part.CFrame = myRoot.CFrame
+                                            end
                                         end
                                     end
                                 end
-                                
                             end
                         end
                     end
@@ -170,7 +163,69 @@ task.spawn(function()
         end
     end
 end)
+-- --- UI: Protection Control (หมวดหมู่ใหม่) ---
+local ProtectSection = Tab:NewSection("Protection")
+local antiDamageEnabled = false
 
+ProtectSection:NewToggle("Anti Damage (Effects)", "ลบดาเมจ Eruption, Arrow, Magic", function(state)
+    antiDamageEnabled = state
+end)
+
+-- --- ฟังก์ชันช่วยจัดการของอันตราย ---
+local function neutralizeHazard(obj)
+    if not obj then return end
+    
+    -- 1. ถ้าเป็น Eruption ให้ปิด CanTouch
+    if obj.Name == "Eruption" and obj:IsA("UnionOperation") then
+        if obj.CanTouch then
+            obj.CanTouch = false
+        end
+        
+    -- 2. ถ้าเป็น Arrow หรือชื่อลงท้ายด้วย Magic ให้ลบ TouchInterest
+    elseif obj.Name == "Arrow" or obj.Name:match("Magic$") then
+        local touch = obj:FindFirstChild("TouchInterest")
+        if touch then
+            touch:Destroy()
+        end
+    end
+end
+
+-- --- [ใหม่] ANTI DAMAGE LOOP ---
+task.spawn(function()
+    while true do
+        task.wait(0.2) -- เช็คทุกๆ 0.2 วินาที
+        if antiDamageEnabled then
+            pcall(function()
+                -- [ส่วนที่ 1] สแกนใน workspace.Dungeon.Effects
+                local dungeon = workspace:FindFirstChild("Dungeon")
+                local effects = dungeon and dungeon:FindFirstChild("Effects")
+                if effects then
+                    for _, v in pairs(effects:GetChildren()) do
+                        neutralizeHazard(v)
+                        -- เผื่อว่า Arrow/Magic ถูกสร้างมาเป็น Model เราจะเช็คของข้างในด้วย
+                        if v:IsA("Model") then
+                            for _, desc in pairs(v:GetDescendants()) do
+                                neutralizeHazard(desc)
+                            end
+                        end
+                    end
+                end
+                
+                -- [ส่วนที่ 2] สแกนใน nil instances (สำหรับของที่เกมแอบซ่อนไว้)
+                if getnilinstances then
+                    for _, v in pairs(getnilinstances()) do
+                        neutralizeHazard(v)
+                        if v:IsA("Model") then
+                            for _, desc in pairs(v:GetDescendants()) do
+                                neutralizeHazard(desc)
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+    end
+end)
 -- --- MAIN FOLLOW LOOP ---
 task.spawn(function()
     while true do
