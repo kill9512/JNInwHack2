@@ -2,25 +2,20 @@ local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHept
 local Window = Library.CreateLib("KONG GUISUS - EXPLORER", "DarkTheme")
 local Tab = Window:NewTab("Main")
 
--- --- UI Sections ---
-local Section = Tab:NewSection("Interior & Building Navigation")
--- [ใหม่] เพิ่ม Section สำหรับหมวดหมู่การฟาร์ม
-local FarmSection = Tab:NewSection("Farming Control") 
-
 -- --- Services ---
 local Players = game.Players
 local LocalPlayer = Players.LocalPlayer
 local PathfindingService = game:GetService("PathfindingService")
 
--- --- Settings ---
+-- --- Settings Variables ---
 local SelectedMode = "Manual"
 local SelectedPlayerName = nil
 local followDistance = 5
 local followEnabled = false
 local debugEnabled = false
 
--- [ใหม่] ตัวแปรควบคุมการเปิด/ปิด ดึงเงิน
 local autoCoinEnabled = false 
+local antiDamageEnabled = false
 
 local currentWaypoints = {}
 local currentWaypointIndex = 1
@@ -35,6 +30,56 @@ local lastPosition = Vector3.new()
 local lastMoveTick = os.clock()
 local randomTarget = nil 
 
+-- --- UI Sections ---
+local SupportSection = Tab:NewSection("Support Functions") 
+local Section = Tab:NewSection("Interior & Building Navigation")
+local MoveSection = Tab:NewSection("Navigation Control")
+
+-- --- UI: Support Functions (รวมดึงเงินและกันดาเมจไว้ด้วยกัน) ---
+SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก CoinStack อัตโนมัติ", function(state)
+    autoCoinEnabled = state
+end)
+
+SupportSection:NewToggle("Anti Damage (Effects)", "ลบดาเมจ Eruption, Arrow, Magic", function(state)
+    antiDamageEnabled = state
+end)
+
+-- --- UI: Navigation Control ---
+Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP", "Random"}, function(m) 
+    SelectedMode = m 
+    if m == "Random" then randomTarget = nil end 
+end)
+
+Section:NewTextBox("Search Player", "พิมพ์ชื่อ หรือ Display Name", function(txt)
+    local lowerTxt = txt:lower()
+    for _, p in pairs(Players:GetPlayers()) do 
+        if p ~= LocalPlayer and (p.Name:lower():find(lowerTxt) or p.DisplayName:lower():find(lowerTxt)) then
+            SelectedPlayerName = p.Name
+            SelectedMode = "Manual" 
+            break
+        end
+    end
+end)
+
+local drop = Section:NewDropdown("Select Target", "User", {}, function(s) SelectedPlayerName = s:match("@([^%)]+)") end)
+
+local function refreshList()
+    local t = {"None (Off)"}
+    for _, p in pairs(Players:GetPlayers()) do 
+        if p ~= LocalPlayer then table.insert(t, p.DisplayName.." (@"..p.Name..")") end 
+    end
+    drop:Refresh(t)
+end
+Section:NewButton("Refresh List", "Update", refreshList)
+refreshList()
+
+MoveSection:NewToggle("Enable Follow", "Start Logic", function(s) 
+    followEnabled = s 
+    if not s then currentWaypoints = {}; clearVisuals(); isProbing = false end
+end)
+MoveSection:NewToggle("Show Path", "Visuals", function(s) debugEnabled = s end)
+MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
+
 -- --- Debug Visualization ---
 local function updateDebug(name, startPos, endPos, color)
     if not debugEnabled then 
@@ -48,7 +93,7 @@ local function updateDebug(name, startPos, endPos, color)
     line.CFrame, line.Parent = CFrame.lookAt(startPos, endPos), workspace.Terrain
 end
 
-local function clearVisuals()
+function clearVisuals()
     for _, v in pairs(workspace.Terrain:GetChildren()) do
         if v.Name == "WP_Debug" or v.Name == "DirectTrace" or v.Name == "ProbeTrace" then v:Destroy() end
     end
@@ -83,49 +128,25 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- --- UI: Farming Control (ใหม่) ---
-FarmSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก CoinStack อัตโนมัติ", function(state)
-    autoCoinEnabled = state
-end)
-
--- --- UI: Navigation Control ---
-Section:NewDropdown("Target Mode", "Mode", {"Manual", "Max HP", "Min HP", "Random"}, function(m) 
-    SelectedMode = m 
-    if m == "Random" then randomTarget = nil end 
-end)
-
-Section:NewTextBox("Search Player", "พิมพ์ชื่อ หรือ Display Name", function(txt)
-    local lowerTxt = txt:lower()
-    for _, p in pairs(Players:GetPlayers()) do 
-        if p ~= LocalPlayer and (p.Name:lower():find(lowerTxt) or p.DisplayName:lower():find(lowerTxt)) then
-            SelectedPlayerName = p.Name
-            SelectedMode = "Manual" 
-            break
+local function neutralizeHazard(obj)
+    if not obj then return end
+    
+    if obj.Name == "Eruption" and obj:IsA("UnionOperation") then
+        if obj.CanTouch then
+            obj.CanTouch = false
+        end
+    elseif obj.Name == "Arrow" or obj.Name:match("Magic$") then
+        if obj:IsA("BasePart") and obj.CanTouch then
+            obj.CanTouch = false
+        end
+        local touch = obj:FindFirstChild("TouchInterest")
+        if touch then
+            touch:Destroy()
         end
     end
-end)
-
-local drop = Section:NewDropdown("Select Target", "User", {}, function(s) SelectedPlayerName = s:match("@([^%)]+)") end)
-
-local function refreshList()
-    local t = {"None (Off)"}
-    for _, p in pairs(Players:GetPlayers()) do 
-        if p ~= LocalPlayer then table.insert(t, p.DisplayName.." (@"..p.Name..")") end 
-    end
-    drop:Refresh(t)
 end
-Section:NewButton("Refresh List", "Update", refreshList)
-refreshList()
 
-local MoveSection = Tab:NewSection("Navigation Control")
-MoveSection:NewToggle("Enable Follow", "Start Logic", function(s) 
-    followEnabled = s 
-    if not s then currentWaypoints = {}; clearVisuals(); isProbing = false end
-end)
-MoveSection:NewToggle("Show Path", "Visuals", function(s) debugEnabled = s end)
-MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
-
--- --- [อัปเดต] AUTO COIN LOOP (ปิด CanCollide ด้วย) ---
+-- --- SUPPORT LOOPS (Auto Coin & Anti Damage) ---
 task.spawn(function()
     while true do
         task.wait(0.1)
@@ -142,13 +163,13 @@ task.spawn(function()
                         for _, item in pairs(treasure:GetChildren()) do
                             if item.Name == "CoinStack" then
                                 if item:IsA("BasePart") then
-                                    item.CanCollide = false -- [เพิ่ม] ปิดการชน
+                                    item.CanCollide = false
                                     item.CFrame = myRoot.CFrame
                                 elseif item:IsA("Model") then
                                     item:PivotTo(myRoot.CFrame)
                                     for _, part in pairs(item:GetDescendants()) do
                                         if part:IsA("BasePart") then
-                                            part.CanCollide = false -- [เพิ่ม] ปิดการชน
+                                            part.CanCollide = false
                                             if part:FindFirstChild("TouchInterest") then
                                                 part.CFrame = myRoot.CFrame
                                             end
@@ -163,46 +184,17 @@ task.spawn(function()
         end
     end
 end)
--- --- UI: Protection Control (หมวดหมู่ใหม่) ---
-local ProtectSection = Tab:NewSection("Protection")
-local antiDamageEnabled = false
 
-ProtectSection:NewToggle("Anti Damage (Effects)", "ลบดาเมจ Eruption, Arrow, Magic", function(state)
-    antiDamageEnabled = state
-end)
-
--- --- ฟังก์ชันช่วยจัดการของอันตราย ---
-local function neutralizeHazard(obj)
-    if not obj then return end
-    
-    -- 1. ถ้าเป็น Eruption ให้ปิด CanTouch
-    if obj.Name == "Eruption" and obj:IsA("UnionOperation") then
-        if obj.CanTouch then
-            obj.CanTouch = false
-        end
-        
-    -- 2. ถ้าเป็น Arrow หรือชื่อลงท้ายด้วย Magic ให้ลบ TouchInterest
-    elseif obj.Name == "Arrow" or obj.Name:match("Magic$") then
-        local touch = obj:FindFirstChild("TouchInterest")
-        if touch then
-            touch:Destroy()
-        end
-    end
-end
-
--- --- [ใหม่] ANTI DAMAGE LOOP ---
 task.spawn(function()
     while true do
-        task.wait(0.2) -- เช็คทุกๆ 0.2 วินาที
+        task.wait(0.2) 
         if antiDamageEnabled then
             pcall(function()
-                -- [ส่วนที่ 1] สแกนใน workspace.Dungeon.Effects
                 local dungeon = workspace:FindFirstChild("Dungeon")
                 local effects = dungeon and dungeon:FindFirstChild("Effects")
                 if effects then
                     for _, v in pairs(effects:GetChildren()) do
                         neutralizeHazard(v)
-                        -- เผื่อว่า Arrow/Magic ถูกสร้างมาเป็น Model เราจะเช็คของข้างในด้วย
                         if v:IsA("Model") then
                             for _, desc in pairs(v:GetDescendants()) do
                                 neutralizeHazard(desc)
@@ -211,7 +203,6 @@ task.spawn(function()
                     end
                 end
                 
-                -- [ส่วนที่ 2] สแกนใน nil instances (สำหรับของที่เกมแอบซ่อนไว้)
                 if getnilinstances then
                     for _, v in pairs(getnilinstances()) do
                         neutralizeHazard(v)
@@ -226,6 +217,7 @@ task.spawn(function()
         end
     end
 end)
+
 -- --- MAIN FOLLOW LOOP ---
 task.spawn(function()
     while true do
