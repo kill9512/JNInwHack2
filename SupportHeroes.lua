@@ -42,7 +42,7 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Hybrid Defense V7", "หลบ Eruption + กางเกราะแก้วกันกระสุน", function(state)
+SupportSection:NewToggle("Ultimate Defense V8", "หลบ Eruption ชัวร์ๆ + เสาเข็มกันกระสุน", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -112,9 +112,12 @@ local function forceJump(hum)
     end
 end
 
--- --- ระบบสแกนหาจุดปลอดภัย (กันทะลุกำแพง/ตกเหว) ---
-local function isSafePosition(startPos, targetPos)
-    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+-- --- [แก้บัคเรดาร์ V8] เมินของอันตรายเวลายิงเรดาร์เช็คกำแพง ---
+local function isSafePosition(startPos, targetPos, hazard)
+    -- เอาตัวเรา และ ตัวเวทมนตร์ ยัดใส่ Ignore List เพื่อไม่ให้มันบัคมองเป็นกำแพง
+    local ignoreList = {LocalPlayer.Character}
+    if hazard then table.insert(ignoreList, hazard) end
+    rayParams.FilterDescendantsInstances = ignoreList
     
     local dir = targetPos - startPos
     local wallHit = workspace:Raycast(startPos, dir, rayParams)
@@ -127,15 +130,15 @@ local function isSafePosition(startPos, targetPos)
     return true
 end
 
-local function findSafeDodge(startPos, baseDir, distance)
+local function findSafeDodge(startPos, baseDir, distance, hazard)
     local target = startPos + (baseDir * distance)
-    if isSafePosition(startPos, target) then return target end
+    if isSafePosition(startPos, target, hazard) then return target end
     
     local angles = {45, -45, 90, -90, 135, -135, 180}
     for _, angle in ipairs(angles) do
         local rotatedDir = CFrame.Angles(0, math.rad(angle), 0) * baseDir
         local testTarget = startPos + (rotatedDir * distance)
-        if isSafePosition(startPos, testTarget) then
+        if isSafePosition(startPos, testTarget, hazard) then
             return testTarget
         end
     end
@@ -143,7 +146,7 @@ local function findSafeDodge(startPos, baseDir, distance)
 end
 
 -- ==========================================
--- [ระบบย่อย 1] หลบ Eruption ให้พ้นทั้งตัว
+-- [ระบบย่อย 1] หลบ Eruption (รองรับทั้ง Part และ Model อย่างสมบูรณ์)
 -- ==========================================
 local function handleEruption(hazard)
     local myChar = LocalPlayer.Character
@@ -151,24 +154,27 @@ local function handleEruption(hazard)
     if not myRoot then return end
 
     local hazardPos = nil
-    local hazardRadius = 0 
+    local hazardRadius = 10 -- ค่าเผื่อเหนียว
     
-    -- หาขนาดและตำแหน่งของวงเวทย์
-    local parts = {}
-    for _, v in pairs(hazard:GetDescendants()) do
-        if v:IsA("BasePart") then table.insert(parts, v) end
-    end
-    
-    if #parts > 0 then
-        hazardPos = (hazard.PrimaryPart or parts[1]).Position
-        for _, p in pairs(parts) do
-            local r = math.max(p.Size.X, p.Size.Z) / 2
-            if r > hazardRadius then hazardRadius = r end
+    if hazard:IsA("BasePart") then
+        hazardPos = hazard.Position
+        hazardRadius = math.max(hazard.Size.X, hazard.Size.Z) / 2
+    elseif hazard:IsA("Model") then
+        local parts = {}
+        for _, v in pairs(hazard:GetDescendants()) do
+            if v:IsA("BasePart") then table.insert(parts, v) end
         end
-    else
-        local cframe, size = hazard:GetBoundingBox()
-        hazardPos = cframe.Position
-        hazardRadius = math.max(size.X, size.Z) / 2
+        if #parts > 0 then
+            hazardPos = (hazard.PrimaryPart or parts[1]).Position
+            for _, p in pairs(parts) do
+                local r = math.max(p.Size.X, p.Size.Z) / 2
+                if r > hazardRadius then hazardRadius = r end
+            end
+        else
+            local cframe, size = hazard:GetBoundingBox()
+            hazardPos = cframe.Position
+            hazardRadius = math.max(size.X, size.Z) / 2
+        end
     end
 
     if not hazardPos then return end
@@ -180,19 +186,18 @@ local function handleEruption(hazard)
 
     if distXZ > shieldRange then return end
 
-    -- [สำคัญ] บวกขนาดตัวละครเรา (ประมาณ 2.5 บล็อค) เข้าไปในรัศมีอันตราย
-    local safeRadius = hazardRadius + 2.5 
+    -- บวกขนาดตัวละครเราเข้าไป เพื่อไม่ให้เฉียดเกินไป
+    local safeRadius = hazardRadius + 3.5 
     
     if distXZ < safeRadius then 
-        -- พุ่งหนีออกจากศูนย์กลางวงเวทย์ตรงๆ (ไม่สนมอนสเตอร์แล้ว)
         local escapeDir = (myPosXZ - hazPosXZ)
         if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
         escapeDir = escapeDir.Unit
         
-        -- ระยะที่ต้องเดินออกไปเพื่อให้พ้นปลอดภัย (บวกเผื่ออีก 1 บล็อค)
-        local distanceToMove = (safeRadius + 1) - distXZ
+        local distanceToMove = safeRadius - distXZ
         
-        local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove)
+        -- ส่ง hazard เข้าไปให้เรดาร์มัน Ignore ด้วย!
+        local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove, hazard)
         if safeTarget then
             myRoot.CFrame = CFrame.new(safeTarget)
         end
@@ -200,7 +205,7 @@ local function handleEruption(hazard)
 end
 
 -- ==========================================
--- [ระบบย่อย 2] สร้างเกราะแก้วหนาดันกระสุน
+-- [ระบบย่อย 2] เกราะเสาเข็มแก้ว โคตรยาว โคตรหนา
 -- ==========================================
 local function handleProjectile(hazard)
     local mainPart = nil
@@ -208,9 +213,7 @@ local function handleProjectile(hazard)
     elseif hazard:IsA("Model") then mainPart = hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true) end
 
     if not mainPart then return end
-    
-    -- ถ้าสร้างเกราะให้ลูกนี้ไปแล้ว ให้ข้ามเลย
-    if mainPart:FindFirstChild("GlassBumper") then return end 
+    if mainPart:FindFirstChild("UltimateBumper") then return end 
 
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -219,7 +222,6 @@ local function handleProjectile(hazard)
     local distXZ = (Vector3.new(myRoot.Position.X, 0, myRoot.Position.Z) - Vector3.new(mainPart.Position.X, 0, mainPart.Position.Z)).Magnitude
     if distXZ > shieldRange then return end
 
-    -- ทิศทางจากกระสุน ชี้มาหาตัวเรา (เพื่อต่อความยาวเกราะมาทางเรา)
     local dirToPlayer = (myRoot.Position - mainPart.Position)
     if dirToPlayer.Magnitude > 0 then
         dirToPlayer = dirToPlayer.Unit
@@ -227,23 +229,23 @@ local function handleProjectile(hazard)
         dirToPlayer = Vector3.new(0, 0, 1)
     end
 
-    -- สร้างเกราะแก้ว
     local bumper = Instance.new("Part")
-    bumper.Name = "GlassBumper"
-    bumper.Transparency = 0.5 
+    bumper.Name = "UltimateBumper"
+    bumper.Transparency = 0.6 
     bumper.Material = Enum.Material.Glass
-    bumper.Color = Color3.fromRGB(0, 255, 255)
+    bumper.Color = Color3.fromRGB(255, 100, 100) -- สีแดงนิดๆ ให้รู้ว่าของโคตรอันตราย
     
-    -- [ไฮไลท์!] ขนาด 6x6 แต่ยาว 16 บล็อค!
-    bumper.Size = Vector3.new(6, 6, 16) 
+    -- [ไฮไลท์!] ขนาด 10x10 และยาว 40 บล็อค!!
+    bumper.Size = Vector3.new(10, 10, 40) 
     
     bumper.CanCollide = true
-    bumper.CanTouch = false -- ปิดไม่ให้มันทำดาเมจซะเอง
+    bumper.CanTouch = false 
     bumper.Massless = true 
     bumper.Anchored = mainPart.Anchored 
     
-    -- ขยับจุดศูนย์กลางเกราะให้ยื่นมาหาตัวเรา 5 บล็อค
-    bumper.CFrame = CFrame.lookAt(mainPart.Position + (dirToPlayer * 5), mainPart.Position + dirToPlayer * 10)
+    -- วางตำแหน่งให้ยื่นมาข้างหน้ากระสุน 20 บล็อค ชี้เป้ามาหาเราเป๊ะๆ
+    local centerOfBumper = mainPart.Position + (dirToPlayer * 20)
+    bumper.CFrame = CFrame.lookAt(centerOfBumper, myRoot.Position)
     
     local weld = Instance.new("WeldConstraint")
     weld.Part0 = bumper
@@ -252,7 +254,7 @@ local function handleProjectile(hazard)
     
     bumper.Parent = mainPart
     
-    -- ปิดการชนและลบ Touch ของตัวกระสุนทิ้งไปเลย
+    -- ลบอันตรายของกระสุนออก
     if hazard:IsA("BasePart") then
         hazard.CanCollide = false
         local t = hazard:FindFirstChild("TouchInterest")
@@ -313,7 +315,7 @@ RunService.Stepped:Connect(function()
             local effects = dungeon and dungeon:FindFirstChild("Effects")
             if effects then
                 for _, v in pairs(effects:GetChildren()) do
-                    if v.Name == "Eruption" and v:IsA("Model") then
+                    if v.Name == "Eruption" then
                         handleEruption(v)
                     elseif v.Name == "Arrow" or v.Name:match("Magic$") then
                         handleProjectile(v)
@@ -331,7 +333,7 @@ task.spawn(function()
             pcall(function()
                 if getnilinstances then
                     for _, v in pairs(getnilinstances()) do
-                        if v.Name == "Eruption" and v:IsA("Model") then
+                        if v.Name == "Eruption" then
                             handleEruption(v)
                         elseif v.Name == "Arrow" or v.Name:match("Magic$") then
                             handleProjectile(v)
