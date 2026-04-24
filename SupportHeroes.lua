@@ -42,7 +42,7 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V7", "หลบ Eruption & กางเกราะกระสุน", function(state)
+SupportSection:NewToggle("Smart Dodge V6", "หลบชิดมอน & วาร์ปสวนทะลุหน้า", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -126,7 +126,7 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- --- ระบบสแกนหาจุดปลอดภัย (สำหรับ Eruption) ---
+-- --- ระบบสแกนหาจุดปลอดภัย (กันทะลุกำแพง/ตกเหว) ---
 local function isSafePosition(startPos, targetPos)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
     
@@ -156,7 +156,7 @@ local function findSafeDodge(startPos, baseDir, distance)
     return startPos + (baseDir * (distance * 0.4))
 end
 
--- หามอนสเตอร์ที่ใกล้ที่สุด (สำหรับ Eruption)
+-- [ใหม่] ฟังก์ชันหามอนสเตอร์ที่ใกล้ที่สุด
 local function getNearestEnemy(myPosXZ)
     local dungeon = workspace:FindFirstChild("Dungeon")
     local enemies = dungeon and dungeon:FindFirstChild("Enemies")
@@ -178,11 +178,11 @@ local function getNearestEnemy(myPosXZ)
     return nearestEnemyPos
 end
 
--- --- [ระบบอัปเดต V7] รวมมิตร โคตร Perfect ---
-local function executeSmartDodgeV7(hazard)
+-- --- [ระบบอัปเดต V6] วาร์ปสวนหน้า + หลบชิดมอน ---
+local function executeSmartDodgeV6(hazard)
     if not hazard or not hazard.Parent then return end
     
-    local isAoE = hazard:IsA("Model") and hazard.Name == "Eruption"
+    local isAoE = hazard:IsA("Model")
     local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$"))
     
     if not (isAoE or isProjectile) then return end
@@ -192,7 +192,7 @@ local function executeSmartDodgeV7(hazard)
     if not myRoot then return end
 
     local hazardPos = nil
-    local hazardSize = Vector3.new(4, 4, 4) 
+    local hazardRadius = 2 
     
     if isAoE then
         local parts = {}
@@ -204,16 +204,16 @@ local function executeSmartDodgeV7(hazard)
             hazardPos = centerPart.Position
             for _, p in pairs(parts) do
                 local r = math.max(p.Size.X, p.Size.Z) / 2
-                if r > (math.max(hazardSize.X, hazardSize.Z) / 2) then hazardSize = p.Size end
+                if r > hazardRadius then hazardRadius = r end
             end
         else
             local cframe, size = hazard:GetBoundingBox()
             hazardPos = cframe.Position
-            hazardSize = size
+            hazardRadius = math.max(size.X, size.Z) / 2
         end
     elseif hazard:IsA("BasePart") then
         hazardPos = hazard.Position
-        hazardSize = hazard.Size
+        hazardRadius = math.max(hazard.Size.X, hazard.Size.Z) / 2
     end
 
     if not hazardPos then return end
@@ -225,28 +225,29 @@ local function executeSmartDodgeV7(hazard)
 
     if distXZ > shieldRange then return end
 
-    -- [กรณีที่ 1] หลบ Eruption (ชิดขอบหน้ามอน) - คงความเทพจาก V6
+    -- [กรณีที่ 1] หลบ Eruption (เล็งหามอนสเตอร์ที่ใกล้ที่สุด)
     if isAoE then
-        local hazardRadius = math.max(hazardSize.X, hazardSize.Z) / 2
-        if hazardRadius < 5 then hazardRadius = 10 end 
-        
         if distXZ < hazardRadius + 1.5 then 
             local nearestEnemyXZ = getNearestEnemy(myPosXZ)
             local escapeDir
             
             if nearestEnemyXZ then
+                -- สร้างเส้นทางจากจุดศูนย์กลางเวทย์ ชี้ไปหามอนสเตอร์
                 escapeDir = (nearestEnemyXZ - hazPosXZ)
                 if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
                 escapeDir = escapeDir.Unit
             else
+                -- ถ้าไม่มีมอนสเตอร์เหลือเลย ก็หลบออกไปธรรมดา
                 escapeDir = (myPosXZ - hazPosXZ)
                 if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
                 escapeDir = escapeDir.Unit
             end
             
+            -- วาร์ปไปที่ขอบวงเวทย์ (ฝั่งที่ชี้ไปหามอน)
             local targetPosXZ = hazPosXZ + (escapeDir * (hazardRadius + 1.5))
             local targetPos = Vector3.new(targetPosXZ.X, myPos.Y, targetPosXZ.Z)
             
+            -- เช็คว่าจุดนั้นปลอดภัยไหม ถ้าไม่ปลอดภัยให้ลองหมุนหามุมอื่นบนเส้นรอบวง
             if isSafePosition(myPos, targetPos) then
                 myRoot.CFrame = CFrame.new(targetPos)
             else
@@ -263,55 +264,26 @@ local function executeSmartDodgeV7(hazard)
             end
         end
 
-    -- [กรณีที่ 2] กระสุนพุ่งชน (กางเกราะแก้วหนา 5 บล็อค!)
+    -- [กรณีที่ 2] กระสุนพุ่งชน (วาร์ปสวนทะลุหน้า!)
     elseif isProjectile then
-        -- ถ้ามันยังไม่มีเกราะครอบ ให้กางเกราะให้มันทันที
-        if not hazard:FindFirstChild("GlassBumper") then
+        if distXZ < 12 then 
+            -- หาเส้นทางพุ่งเข้าหากระสุน (ทิศทางตรงกันข้ามกับที่มันมา)
+            local warpDir = (hazPosXZ - myPosXZ)
+            if warpDir.Magnitude == 0 then warpDir = Vector3.new(1, 0, 0) end
+            warpDir = warpDir.Unit
             
-            -- ปิดดาเมจของจริงก่อนเลย ปลอดภัยไว้ก่อน
-            pcall(function()
-                if hazard:IsA("BasePart") then
-                    hazard.CanTouch = false
-                    hazard.CanCollide = false
-                elseif hazard:IsA("Model") then
-                    for _, p in pairs(hazard:GetDescendants()) do
-                        if p:IsA("BasePart") then
-                            p.CanTouch = false
-                            p.CanCollide = false
-                        end
-                    end
+            -- พุ่งสวนทะลุไปเลย 15 บล็อค (ไปโผล่หลังกระสุน)
+            local warpDist = 15
+            local targetPos = myPos + (warpDir * warpDist)
+            
+            if isSafePosition(myPos, targetPos) then
+                myRoot.CFrame = CFrame.new(targetPos)
+            else
+                -- ถ้าสวนไปแล้วติดกำแพง ให้ระบบพยายามไถลออกข้างๆ
+                local safeTarget = findSafeDodge(myPos, warpDir, warpDist)
+                if safeTarget then
+                    myRoot.CFrame = CFrame.new(safeTarget)
                 end
-            end)
-
-            -- หาจุดอ้างอิงเพื่อสร้างเกราะ
-            local mainPart = hazard:IsA("BasePart") and hazard or hazard.PrimaryPart
-            if not mainPart then mainPart = hazard:FindFirstChildWhichIsA("BasePart", true) end
-
-            if mainPart then
-                -- สร้างเกราะแก้วฟิสิกส์
-                local bumper = Instance.new("Part")
-                bumper.Name = "GlassBumper"
-                -- ขยายขนาดเพิ่มไปด้านละ 5 บล็อค (รวมเป็นบวก 10 แกนละ)
-                bumper.Size = hazardSize + Vector3.new(10, 10, 10) 
-                bumper.CFrame = mainPart.CFrame
-                
-                -- ตกแต่งให้ใสๆ สีฟ้า
-                bumper.Transparency = 0.5
-                bumper.Material = Enum.Material.ForceField
-                bumper.Color = Color3.fromRGB(0, 255, 255)
-                
-                -- ตั้งค่าฟิสิกส์ให้ดันตัวเราได้ แต่ทำดาเมจไม่ได้!
-                bumper.CanCollide = true
-                bumper.CanTouch = false 
-                bumper.Massless = true -- ป้องกันกระสุนหนักหัวทิ่ม
-                
-                -- เชื่อมติดกับกระสุน
-                local weld = Instance.new("WeldConstraint")
-                weld.Part0 = bumper
-                weld.Part1 = mainPart
-                weld.Parent = bumper
-                
-                bumper.Parent = hazard
             end
         end
     end
@@ -354,7 +326,6 @@ task.spawn(function()
     end
 end)
 
--- Loop สแกนแบบ Stepped (รันโคตรไว)
 RunService.Stepped:Connect(function()
     if autoDodgeEnabled then
         pcall(function()
@@ -362,14 +333,13 @@ RunService.Stepped:Connect(function()
             local effects = dungeon and dungeon:FindFirstChild("Effects")
             if effects then
                 for _, v in pairs(effects:GetChildren()) do
-                    executeSmartDodgeV7(v)
+                    executeSmartDodgeV6(v)
                 end
             end
         end)
     end
 end)
 
--- แยก GetNil Instances ออกมารันช้าๆ ลดแลค
 task.spawn(function()
     while true do
         task.wait(0.5) 
@@ -377,7 +347,7 @@ task.spawn(function()
             pcall(function()
                 if getnilinstances then
                     for _, v in pairs(getnilinstances()) do
-                        executeSmartDodgeV7(v)
+                        executeSmartDodgeV6(v)
                     end
                 end
             end)
