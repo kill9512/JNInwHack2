@@ -128,23 +128,33 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
+-- --- ฟังก์ชันช่วยจัดการของอันตราย (อัปเดต: ขั้นเด็ดขาด) ---
 local function neutralizeHazard(obj)
     if not obj then return end
     
     if obj.Name == "Eruption" and obj:IsA("UnionOperation") then
-        if obj.CanTouch then
+        pcall(function()
             obj.CanTouch = false
-        end
+            -- วาร์ปลงใต้ดินลึกๆ ไปเลย จะได้ไม่มีรัศมีดาเมจโดนเรา
+            obj.CFrame = CFrame.new(0, -9999, 0) 
+        end)
     elseif obj.Name == "Arrow" or obj.Name:match("Magic$") then
-        if obj:IsA("BasePart") and obj.CanTouch then
-            obj.CanTouch = false
-        end
-        local touch = obj:FindFirstChild("TouchInterest")
-        if touch then
-            touch:Destroy()
-        end
+        pcall(function()
+            -- สำหรับธนูและเวทมนตร์ ลบทิ้งออกจากเกมไปเลย ชัวร์ที่สุด!
+            obj:Destroy()
+        end)
     end
 end
+
+-- [ใหม่] ดักจับของเกิดใหม่แบบ Real-time (ทำงานทันทีที่เสก)
+workspace.DescendantAdded:Connect(function(descendant)
+    if antiDamageEnabled then
+        -- task.defer ช่วยให้รอ property ของชิ้นส่วนนั้นโหลดเสร็จก่อนค่อยทำงาน
+        task.defer(function()
+            neutralizeHazard(descendant)
+        end)
+    end
+end)
 
 -- --- SUPPORT LOOPS (Auto Coin & Anti Damage) ---
 task.spawn(function()
@@ -190,6 +200,7 @@ task.spawn(function()
         task.wait(0.2) 
         if antiDamageEnabled then
             pcall(function()
+                -- สแกนของที่หลงเหลืออยู่ใน Effects
                 local dungeon = workspace:FindFirstChild("Dungeon")
                 local effects = dungeon and dungeon:FindFirstChild("Effects")
                 if effects then
@@ -203,6 +214,7 @@ task.spawn(function()
                     end
                 end
                 
+                -- สแกนใน nil (ของซ่อน)
                 if getnilinstances then
                     for _, v in pairs(getnilinstances()) do
                         neutralizeHazard(v)
