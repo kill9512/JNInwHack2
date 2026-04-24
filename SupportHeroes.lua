@@ -42,11 +42,11 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V6", "หลบชิดมอน & วาร์ปสวนทะลุหน้า", function(state)
+SupportSection:NewToggle("Shield & Escape V7", "เกราะดันกระสุน & หนีวงเวทย์", function(state)
     autoDodgeEnabled = state
 end)
 
-SupportSection:NewSlider("Dodge Detect Range", "ระยะตรวจจับ (บล็อค)", 300, 20, function(s)
+SupportSection:NewSlider("Detect Range", "ระยะตรวจจับ (บล็อค)", 300, 20, function(s)
     shieldRange = s
 end)
 
@@ -126,97 +126,51 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- --- ระบบสแกนหาจุดปลอดภัย (กันทะลุกำแพง/ตกเหว) ---
+-- --- ระบบสแกนหาจุดปลอดภัย (กันกำแพง/ตกเหว) ---
 local function isSafePosition(startPos, targetPos)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
-    
     local dir = targetPos - startPos
     local wallHit = workspace:Raycast(startPos, dir, rayParams)
     if wallHit then return false end 
-
     local groundOrigin = targetPos + Vector3.new(0, 3, 0)
     local groundHit = workspace:Raycast(groundOrigin, Vector3.new(0, -10, 0), rayParams)
     if not groundHit then return false end 
-
     return true
 end
 
 local function findSafeDodge(startPos, baseDir, distance)
     local target = startPos + (baseDir * distance)
     if isSafePosition(startPos, target) then return target end
-    
     local angles = {45, -45, 90, -90, 135, -135, 180}
     for _, angle in ipairs(angles) do
         local rotatedDir = CFrame.Angles(0, math.rad(angle), 0) * baseDir
         local testTarget = startPos + (rotatedDir * distance)
-        if isSafePosition(startPos, testTarget) then
-            return testTarget
-        end
+        if isSafePosition(startPos, testTarget) then return testTarget end
     end
     return startPos + (baseDir * (distance * 0.4))
 end
 
--- [ใหม่] ฟังก์ชันหามอนสเตอร์ที่ใกล้ที่สุด
-local function getNearestEnemy(myPosXZ)
-    local dungeon = workspace:FindFirstChild("Dungeon")
-    local enemies = dungeon and dungeon:FindFirstChild("Enemies")
-    if not enemies then return nil end
-
-    local nearestDist = math.huge
-    local nearestEnemyPos = nil
-
-    for _, enemy in pairs(enemies:GetChildren()) do
-        if enemy:FindFirstChild("HumanoidRootPart") and enemy:FindFirstChild("Humanoid") and enemy.Humanoid.Health > 0 then
-            local enemyPosXZ = Vector3.new(enemy.HumanoidRootPart.Position.X, 0, enemy.HumanoidRootPart.Position.Z)
-            local dist = (myPosXZ - enemyPosXZ).Magnitude
-            if dist < nearestDist then
-                nearestDist = dist
-                nearestEnemyPos = enemyPosXZ
-            end
-        end
-    end
-    return nearestEnemyPos
-end
-
--- --- [ระบบอัปเดต V6] วาร์ปสวนหน้า + หลบชิดมอน ---
-local function executeSmartDodgeV6(hazard)
-    if not hazard or not hazard.Parent then return end
+-- --- [ระบบ V7.1] หลบ Eruption (แค่ออกขอบพอ) ---
+local function dodgeEruption(hazard)
+    if not hazard:IsA("Model") then return end
     
-    local isAoE = hazard:IsA("Model")
-    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$"))
-    
-    if not (isAoE or isProjectile) then return end
-
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not myRoot then return end
 
-    local hazardPos = nil
-    local hazardRadius = 2 
-    
-    if isAoE then
-        local parts = {}
-        for _, v in pairs(hazard:GetDescendants()) do
-            if v:IsA("BasePart") then table.insert(parts, v) end
-        end
-        if #parts > 0 then
-            local centerPart = hazard.PrimaryPart or parts[1]
-            hazardPos = centerPart.Position
-            for _, p in pairs(parts) do
-                local r = math.max(p.Size.X, p.Size.Z) / 2
-                if r > hazardRadius then hazardRadius = r end
-            end
-        else
-            local cframe, size = hazard:GetBoundingBox()
-            hazardPos = cframe.Position
-            hazardRadius = math.max(size.X, size.Z) / 2
-        end
-    elseif hazard:IsA("BasePart") then
-        hazardPos = hazard.Position
-        hazardRadius = math.max(hazard.Size.X, hazard.Size.Z) / 2
+    local parts = {}
+    for _, v in pairs(hazard:GetDescendants()) do
+        if v:IsA("BasePart") then table.insert(parts, v) end
     end
-
-    if not hazardPos then return end
+    if #parts == 0 then return end
+    
+    local centerPart = hazard.PrimaryPart or parts[1]
+    local hazardPos = centerPart.Position
+    local hazardRadius = 2
+    for _, p in pairs(parts) do
+        local r = math.max(p.Size.X, p.Size.Z) / 2
+        if r > hazardRadius then hazardRadius = r end
+    end
     
     local myPos = myRoot.Position
     local myPosXZ = Vector3.new(myPos.X, 0, myPos.Z)
@@ -225,66 +179,70 @@ local function executeSmartDodgeV6(hazard)
 
     if distXZ > shieldRange then return end
 
-    -- [กรณีที่ 1] หลบ Eruption (เล็งหามอนสเตอร์ที่ใกล้ที่สุด)
-    if isAoE then
-        if distXZ < hazardRadius + 1.5 then 
-            local nearestEnemyXZ = getNearestEnemy(myPosXZ)
-            local escapeDir
-            
-            if nearestEnemyXZ then
-                -- สร้างเส้นทางจากจุดศูนย์กลางเวทย์ ชี้ไปหามอนสเตอร์
-                escapeDir = (nearestEnemyXZ - hazPosXZ)
-                if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
-                escapeDir = escapeDir.Unit
-            else
-                -- ถ้าไม่มีมอนสเตอร์เหลือเลย ก็หลบออกไปธรรมดา
-                escapeDir = (myPosXZ - hazPosXZ)
-                if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
-                escapeDir = escapeDir.Unit
-            end
-            
-            -- วาร์ปไปที่ขอบวงเวทย์ (ฝั่งที่ชี้ไปหามอน)
-            local targetPosXZ = hazPosXZ + (escapeDir * (hazardRadius + 1.5))
-            local targetPos = Vector3.new(targetPosXZ.X, myPos.Y, targetPosXZ.Z)
-            
-            -- เช็คว่าจุดนั้นปลอดภัยไหม ถ้าไม่ปลอดภัยให้ลองหมุนหามุมอื่นบนเส้นรอบวง
-            if isSafePosition(myPos, targetPos) then
-                myRoot.CFrame = CFrame.new(targetPos)
-            else
-                local angles = {30, -30, 60, -60, 90, -90, 120, -120, 180}
-                for _, angle in ipairs(angles) do
-                    local rotatedDir = CFrame.Angles(0, math.rad(angle), 0) * escapeDir
-                    local testPosXZ = hazPosXZ + (rotatedDir * (hazardRadius + 1.5))
-                    local testTarget = Vector3.new(testPosXZ.X, myPos.Y, testPosXZ.Z)
-                    if isSafePosition(myPos, testTarget) then
-                        myRoot.CFrame = CFrame.new(testTarget)
-                        break
-                    end
-                end
-            end
-        end
+    -- ถ้าอยู่ในวงเวทย์
+    if distXZ < hazardRadius + 1.5 then
+        -- หาเส้นทางหนีตรงๆ ออกจากจุดศูนย์กลาง (ไม่สนใจมอนแล้ว)
+        local escapeDir = (myPosXZ - hazPosXZ)
+        if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
+        escapeDir = escapeDir.Unit
 
-    -- [กรณีที่ 2] กระสุนพุ่งชน (วาร์ปสวนทะลุหน้า!)
-    elseif isProjectile then
-        if distXZ < 12 then 
-            -- หาเส้นทางพุ่งเข้าหากระสุน (ทิศทางตรงกันข้ามกับที่มันมา)
-            local warpDir = (hazPosXZ - myPosXZ)
-            if warpDir.Magnitude == 0 then warpDir = Vector3.new(1, 0, 0) end
-            warpDir = warpDir.Unit
-            
-            -- พุ่งสวนทะลุไปเลย 15 บล็อค (ไปโผล่หลังกระสุน)
-            local warpDist = 15
-            local targetPos = myPos + (warpDir * warpDist)
-            
-            if isSafePosition(myPos, targetPos) then
-                myRoot.CFrame = CFrame.new(targetPos)
-            else
-                -- ถ้าสวนไปแล้วติดกำแพง ให้ระบบพยายามไถลออกข้างๆ
-                local safeTarget = findSafeDodge(myPos, warpDir, warpDist)
-                if safeTarget then
-                    myRoot.CFrame = CFrame.new(safeTarget)
-                end
-            end
+        -- ขยับออกไปให้พ้นขอบพอดี
+        local distanceToMove = (hazardRadius + 2) - distXZ
+        
+        local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove)
+        if safeTarget then
+            myRoot.CFrame = CFrame.new(safeTarget)
+        end
+    end
+end
+
+-- --- [ระบบ V7.2] กางเกราะแก้วดันกระสุน (Arrow/Magic) ---
+local function applyGlassBumper(hazard)
+    local rootPart = hazard
+    if hazard:IsA("Model") then
+        rootPart = hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true)
+    end
+    if not rootPart then return end
+
+    -- เช็คระยะก่อนกางเกราะ เพื่อไม่ให้แลค
+    local myChar = LocalPlayer.Character
+    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if myRoot then
+        local dist = (myRoot.Position - rootPart.Position).Magnitude
+        if dist > shieldRange then return end
+    end
+
+    -- ถ้ายังไม่มีเกราะ ให้สร้างครอบมันซะ!
+    if not rootPart:FindFirstChild("ThickGlassBumper") then
+        local bumper = Instance.new("Part")
+        bumper.Name = "ThickGlassBumper"
+        -- สร้างเกราะใหญ่ๆ หนาๆ คลุมมิดกระสุน (ปรับความใหญ่ได้ตรงนี้)
+        bumper.Size = Vector3.new(10, 10, 10) 
+        bumper.CFrame = rootPart.CFrame
+        
+        -- ดีไซน์เกราะแก้ว
+        bumper.Transparency = 0.5
+        bumper.Material = Enum.Material.ForceField
+        bumper.Color = Color3.fromRGB(0, 255, 255)
+        
+        -- ฟิสิกส์เกราะ: ชนได้, ทำดาเมจไม่ได้, ไม่มีน้ำหนัก
+        bumper.CanCollide = true
+        bumper.CanTouch = false
+        bumper.Massless = true
+        bumper.Anchored = rootPart.Anchored
+
+        -- เชื่อมเกราะให้วิ่งไปพร้อมกระสุน
+        local weld = Instance.new("WeldConstraint")
+        weld.Part0 = bumper
+        weld.Part1 = rootPart
+        weld.Parent = bumper
+
+        bumper.Parent = rootPart
+        
+        -- ปิดระบบชนและดาเมจของกระสุนจริงทิ้งไป
+        rootPart.CanCollide = false
+        if rootPart:FindFirstChild("TouchInterest") then
+            rootPart.TouchInterest:Destroy()
         end
     end
 end
@@ -326,14 +284,19 @@ task.spawn(function()
     end
 end)
 
-RunService.Stepped:Connect(function()
+-- Loop สแกน Effects แยกกันทำงาน Eruption วาร์ป / Arrow กางเกราะ
+RunService.Heartbeat:Connect(function()
     if autoDodgeEnabled then
         pcall(function()
             local dungeon = workspace:FindFirstChild("Dungeon")
             local effects = dungeon and dungeon:FindFirstChild("Effects")
             if effects then
                 for _, v in pairs(effects:GetChildren()) do
-                    executeSmartDodgeV6(v)
+                    if v.Name == "Eruption" then
+                        dodgeEruption(v)
+                    elseif v.Name == "Arrow" or v.Name:match("Magic$") then
+                        applyGlassBumper(v)
+                    end
                 end
             end
         end)
@@ -347,7 +310,11 @@ task.spawn(function()
             pcall(function()
                 if getnilinstances then
                     for _, v in pairs(getnilinstances()) do
-                        executeSmartDodgeV6(v)
+                        if v.Name == "Eruption" then
+                            dodgeEruption(v)
+                        elseif v.Name == "Arrow" or v.Name:match("Magic$") then
+                            applyGlassBumper(v)
+                        end
                     end
                 end
             end)
