@@ -150,58 +150,78 @@ local function handleEruption(hazard)
 end
 
 -- ==========================================
--- [ระบบที่ 2] เกราะลิ่มแก้ว (Wedge Deflector)
+-- [ระบบย่อย 2] เสาเข็มแก้วหัวแหลม (ทรงลิ่มคู่ V-Shape)
 -- ==========================================
 local function handleProjectile(hazard)
     local mainPart = hazard:IsA("BasePart") and hazard or (hazard:IsA("Model") and (hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true)))
-    if not mainPart or mainPart:FindFirstChild("WedgeShield") then return end
+    if not mainPart or mainPart:FindFirstChild("UltimateBumperV11") then return end
 
-    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local myChar = LocalPlayer.Character
+    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not myRoot then return end
 
-    if (mainPart.Position - myRoot.Position).Magnitude > shieldRange then return end
+    local dist = (mainPart.Position - myRoot.Position).Magnitude
+    if dist > shieldRange then return end
 
-    local dirToPlayer = (myRoot.Position - mainPart.Position)
-    dirToPlayer = dirToPlayer.Magnitude > 0 and dirToPlayer.Unit or Vector3.new(0, 0, 1)
+    -- ทิศทางจากกระสุน พุ่งหาผู้เล่น
+    local dirToPlayer = (myRoot.Position - mainPart.Position).Unit
 
-    -- สร้าง WedgePart (หัวแหลม)
-    local wedge = Instance.new("WedgePart")
-    wedge.Name = "WedgeShield"
-    wedge.Transparency = 0.6
-    wedge.Material = Enum.Material.Glass
-    wedge.Color = Color3.fromRGB(255, 255, 255)
-    
-    -- [ความหนาและแหลม] กว้าง 12 สูง 12 ยาว 40 บล็อค
-    wedge.Size = Vector3.new(12, 12, 40) 
-    wedge.CanCollide = true
-    wedge.CanTouch = false
-    wedge.Massless = true
-    wedge.Anchored = mainPart.Anchored
+    -- 1. สร้างตัวเสาหลัก (Core)
+    local bumper = Instance.new("Part")
+    bumper.Name = "UltimateBumperV11"
+    bumper.Size = Vector3.new(10, 10, 30) 
+    bumper.Transparency = 0.7
+    bumper.Material = Enum.Material.ForceField
+    bumper.Color = Color3.fromRGB(255, 0, 0)
+    bumper.CanCollide = true
+    bumper.CanTouch = false
+    bumper.Massless = true
+    bumper.Anchored = mainPart.Anchored
 
-    -- ตั้งค่าฟิสิกส์ให้ลื่นที่สุด (เพื่อให้มึงสไลด์ออกข้างได้ง่าย)
-    wedge.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0) -- Friction = 0
+    -- วางตำแหน่งเสาให้ยื่นไปข้างหน้ากระสุน
+    local bumperPos = mainPart.Position + (dirToPlayer * 15)
+    bumper.CFrame = CFrame.lookAt(bumperPos, bumperPos + dirToPlayer)
 
-    -- วางตำแหน่งให้ด้านลาด (Slope) หันมาทางตัวมึง
-    -- ขยับจุดศูนย์กลางยื่นออกมาหน้ากระสุน 15 บล็อค
-    local centerOfWedge = mainPart.Position + (dirToPlayer * 15)
-    
-    -- หมุนลิ่มให้ชี้ไปทางตัวมึงตรงๆ
-    wedge.CFrame = CFrame.lookAt(centerOfWedge, myRoot.Position) * CFrame.Angles(0, math.pi, 0)
-    
-    local weld = Instance.new("WeldConstraint")
-    weld.Part0 = wedge; weld.Part1 = mainPart; weld.Parent = wedge
-    
-    wedge.Parent = mainPart
+    -- 2. สร้างลิ่มฝั่งซ้าย (Left Wedge)
+    local wedgeL = Instance.new("WedgePart")
+    wedgeL.Size = Vector3.new(10, 10, 10)
+    wedgeL.CFrame = bumper.CFrame * CFrame.new(-5, 0, 20) * CFrame.Angles(0, math.rad(90), 0)
+    wedgeL.Parent = bumper
+    wedgeL.CanCollide = true
+    wedgeL.CanTouch = false
+    wedgeL.Transparency = 0.7
+    wedgeL.Material = Enum.Material.ForceField
 
-    -- ปิดการชนของดาเมจจริงและลบ Touch
+    -- 3. สร้างลิ่มฝั่งขวา (Right Wedge)
+    local wedgeR = Instance.new("WedgePart")
+    wedgeR.Size = Vector3.new(10, 10, 10)
+    wedgeR.CFrame = bumper.CFrame * CFrame.new(5, 0, 20) * CFrame.Angles(0, math.rad(-90), 0)
+    wedgeR.Parent = bumper
+    wedgeR.CanCollide = true
+    wedgeR.CanTouch = false
+    wedgeR.Transparency = 0.7
+    wedgeR.Material = Enum.Material.ForceField
+
+    -- [ระบบดัน] ใส่ความเร็วจำลองเพื่อให้มันผลักตัวละครตอนชน
+    bumper.AssemblyLinearVelocity = dirToPlayer * 50
+
+    -- เชื่อมทุกอย่างเข้าด้วยกัน
+    local function weldParts(p0, p1)
+        local w = Instance.new("WeldConstraint")
+        w.Part0 = p0; w.Part1 = p1; w.Parent = p0
+    end
+    weldParts(wedgeL, bumper)
+    weldParts(wedgeR, bumper)
+    weldParts(bumper, mainPart)
+
+    bumper.Parent = mainPart
+
+    -- ปิดดาเมจเดิม
     pcall(function()
         mainPart.CanCollide = false
         for _, v in pairs(hazard:GetDescendants()) do
-            if v:IsA("BasePart") then 
-                v.CanCollide = false 
-                local t = v:FindFirstChild("TouchInterest")
-                if t then t:Destroy() end
-            end
+            if v:IsA("BasePart") then v.CanCollide = false end
+            if v:IsA("TouchInterest") then v:Destroy() end
         end
     end)
 end
