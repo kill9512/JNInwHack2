@@ -18,7 +18,6 @@ local debugEnabled = false
 local autoCoinEnabled = false 
 local autoDodgeEnabled = false
 
--- [1. เอาระยะตรวจจับกลับคืนมา]
 local shieldRange = 100 
 
 local currentWaypoints = {}
@@ -44,11 +43,10 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V3", "วาร์ปสวนทาง Eruption, Arrow, Magic", function(state)
+SupportSection:NewToggle("Smart Dodge V4", "วาร์ปหลบ (จับ Model & ธนู)", function(state)
     autoDodgeEnabled = state
 end)
 
--- Slider ปรับระยะตรวจจับ
 SupportSection:NewSlider("Dodge Detect Range", "ระยะตรวจจับ (บล็อค)", 300, 20, function(s)
     shieldRange = s
 end)
@@ -129,7 +127,7 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- --- [4. ระบบกันทะลุกำแพง/กันตกเหว (อันเดิมที่มึงชมว่าดีเยี่ยม)] ---
+-- --- ระบบกันทะลุกำแพง/กันตกเหว ---
 local function isSafePosition(startPos, targetPos)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
     
@@ -144,17 +142,15 @@ local function isSafePosition(startPos, targetPos)
     return true
 end
 
--- --- [ระบบอัปเดต V3] การคำนวณหลบขั้นเทพ ---
-local function executeSmartDodgeV3(hazard)
+-- --- [ระบบอัปเดต V4] โคตรไว & โยน Eruption ทิ้ง ---
+local function executeSmartDodgeV4(hazard)
     if not hazard or not hazard.Parent then return end
     
-    local isDanger = false
-    -- [2. แก้วงเวทย์ Eruption ให้จับเฉพาะตอนเป็น Model]
-    if (hazard.Name == "Eruption" and hazard:IsA("Model")) or hazard.Name == "Arrow" or hazard.Name:match("Magic$") then
-        isDanger = true
-    end
+    -- [อัปเดต] เช็คแค่ ClassName = Model ล้วนๆ ไม่สนชื่อห่าเหวอะไรทั้งนั้น
+    local isAoE = hazard:IsA("Model")
+    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$"))
     
-    if not isDanger then return end
+    if not (isAoE or isProjectile) then return end
 
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -163,14 +159,13 @@ local function executeSmartDodgeV3(hazard)
     local hazardPos = nil
     local hazardSize = Vector3.new(4, 4, 4) 
     
-    if hazard:IsA("BasePart") then
-        hazardPos = hazard.Position
-        hazardSize = hazard.Size
-    elseif hazard:IsA("Model") then
-        -- ใช้ GetBoundingBox เพื่อความแม่นยำของ Model
+    if isAoE then
         local cframe, size = hazard:GetBoundingBox()
         hazardPos = cframe.Position
         hazardSize = size
+    elseif hazard:IsA("BasePart") then
+        hazardPos = hazard.Position
+        hazardSize = hazard.Size
     end
 
     if not hazardPos then return end
@@ -180,22 +175,19 @@ local function executeSmartDodgeV3(hazard)
     local hazPosXZ = Vector3.new(hazardPos.X, 0, hazardPos.Z)
     local distXZ = (myPosXZ - hazPosXZ).Magnitude
 
-    -- [ตรวจสอบระยะ] ถ้าไกลกว่าที่ตั้งไว้ ให้เมินไปเลย ไม่ต้องคำนวณให้แลค
     if distXZ > shieldRange then return end
 
-    -- [กรณีที่ 1] หลบวงเวทย์ Eruption (Model)
-    if hazard.Name == "Eruption" then
+    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิดที่โผล่มา)
+    if isAoE then
         local radius = math.max(hazardSize.X, hazardSize.Z) / 2
-        if radius < 5 then radius = 10 end -- เผื่อเกมมันส่งค่าบัคมา
+        if radius < 5 then radius = 10 end 
         
-        -- ถ้าเราอยู่ในระยะที่วงเวทย์กำลังจะระเบิด
-        if distXZ < radius + 1 then
+        if distXZ < radius + 1.5 then -- บวกระยะเผื่อให้เซนเซอร์ทำงานไวขึ้น
             local escapeDir = (myPosXZ - hazPosXZ)
             if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
             escapeDir = escapeDir.Unit
             
-            -- ขยับออกไปแค่พ้นขอบวงเวทย์ + เผื่อไว้อีก 2 บล็อค
-            local distanceToMove = (radius + 2) - distXZ
+            local distanceToMove = (radius + 2.5) - distXZ
             local targetPos = myPos + (escapeDir * distanceToMove)
             
             if isSafePosition(myPos, targetPos) then
@@ -204,22 +196,19 @@ local function executeSmartDodgeV3(hazard)
         end
 
     -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic)
-    else
-        -- ถ้าระยะจวนตัว (ใกล้กว่า 10 บล็อค)
-        if distXZ < 10 then
-            -- หาเส้นทางจากของอันตราย พุ่งมาหาตัวเรา
+    elseif isProjectile then
+        if distXZ < 12 then -- เพิ่มระยะจับเซนเซอร์กระสุนให้ไกลขึ้น จะได้วาร์ปสวนทัน
             local dirFromHazard = (myPosXZ - hazPosXZ)
             if dirFromHazard.Magnitude == 0 then dirFromHazard = Vector3.new(1, 0, 0) end
             dirFromHazard = dirFromHazard.Unit
             
-            -- [3. วาร์ปสวนทางกระสุน] กระโดดสวนทะลุไปโผล่ด้านหลัง 12 บล็อค!
+            -- กระโดดสวนทะลุกระสุนไปด้านหลัง
             local dodgeDist = 12
             local targetPos = myPos - (dirFromHazard * dodgeDist)
             
             if isSafePosition(myPos, targetPos) then
                 myRoot.CFrame = CFrame.new(targetPos)
             else
-                -- ถ้าวาร์ปสวนไปแล้วติดกำแพง ลองลดระยะวาร์ปดู เผื่อรอด
                 local shortTarget = myPos - (dirFromHazard * 6)
                 if isSafePosition(myPos, shortTarget) then
                     myRoot.CFrame = CFrame.new(shortTarget)
@@ -266,23 +255,34 @@ task.spawn(function()
     end
 end)
 
--- Loop ตรวจจับอันตรายแบบ Real-time (เร็วสุดๆ)
-RunService.Heartbeat:Connect(function()
+-- [ใหม่] Loop สแกน Effects แบบความเร็วแสง (Stepped ทำงานก่อนระบบฟิสิกส์)
+RunService.Stepped:Connect(function()
     if autoDodgeEnabled then
         pcall(function()
             local dungeon = workspace:FindFirstChild("Dungeon")
             local effects = dungeon and dungeon:FindFirstChild("Effects")
             if effects then
                 for _, v in pairs(effects:GetChildren()) do
-                    executeSmartDodgeV3(v)
-                end
-            end
-            if getnilinstances then
-                for _, v in pairs(getnilinstances()) do
-                    executeSmartDodgeV3(v)
+                    executeSmartDodgeV4(v)
                 end
             end
         end)
+    end
+end)
+
+-- [ใหม่] แยก getnilinstances ออกมารันช้าๆ (ลดอาการแลค!)
+task.spawn(function()
+    while true do
+        task.wait(0.5) 
+        if autoDodgeEnabled then
+            pcall(function()
+                if getnilinstances then
+                    for _, v in pairs(getnilinstances()) do
+                        executeSmartDodgeV4(v)
+                    end
+                end
+            end)
+        end
     end
 end)
 
