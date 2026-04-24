@@ -195,12 +195,25 @@ task.spawn(function()
     end
 end)
 
+-- --- [อัปเดต] ANTI DAMAGE LOOP (เพิ่มระบบ Ghost Mode ให้ตัวละครเรา) ---
 task.spawn(function()
     while true do
         task.wait(0.2) 
         if antiDamageEnabled then
             pcall(function()
-                -- สแกนของที่หลงเหลืออยู่ใน Effects
+                
+                -- [ไฮไลท์เด็ด!] ทำให้ตัวเราเป็นวิญญาณ ป้องกันสคริปต์เกมมาเช็คการชน (Touch)
+                local myChar = LocalPlayer.Character
+                if myChar then
+                    for _, part in pairs(myChar:GetDescendants()) do
+                        -- เช็คว่าเป็นชิ้นส่วนร่างกาย และมี CanTouch ให้ปิดทิ้งเลย
+                        if part:IsA("BasePart") and part.CanTouch then
+                            part.CanTouch = false
+                        end
+                    end
+                end
+
+                -- สแกนของที่หลงเหลืออยู่ใน Effects (ลบเพื่อกันแลคและกันภาพรกตา)
                 local dungeon = workspace:FindFirstChild("Dungeon")
                 local effects = dungeon and dungeon:FindFirstChild("Effects")
                 if effects then
@@ -222,6 +235,19 @@ task.spawn(function()
                             for _, desc in pairs(v:GetDescendants()) do
                                 neutralizeHazard(desc)
                             end
+                        end
+                    end
+                end
+                
+            end)
+        else
+            -- [เพิ่มทางออก] ถ้าเราปิดปุ่ม Anti Damage ให้คืนร่างเดิม เผื่อต้องเดินชนพอร์ทัลวาร์ป
+            pcall(function()
+                local myChar = LocalPlayer.Character
+                if myChar then
+                    for _, part in pairs(myChar:GetDescendants()) do
+                        if part:IsA("BasePart") and not part.CanTouch then
+                            part.CanTouch = true
                         end
                     end
                 end
