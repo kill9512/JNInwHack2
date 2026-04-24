@@ -15,8 +15,7 @@ local followEnabled = false
 local debugEnabled = false
 
 local autoCoinEnabled = false 
-local autoDodgeEnabled = false 
-local isDodging = false -- [ใหม่] ตัวแปรบอกว่ากำลังมุดดินอยู่ สคริปต์อื่นจะได้ไม่กวน
+local antiDamageEnabled = false -- กลับมาใช้ตัวแปรนี้
 
 local currentWaypoints = {}
 local currentWaypointIndex = 1
@@ -41,8 +40,8 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Underground Dodge", "มุดดินหลบ Eruption, Arrow, Magic", function(state)
-    autoDodgeEnabled = state
+SupportSection:NewToggle("Force CanCollide", "เปิดการชน Eruption, Arrow, Magic", function(state)
+    antiDamageEnabled = state
 end)
 
 -- --- UI: Navigation Control ---
@@ -124,9 +123,9 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- --- [ระบบใหม่] ดมกลิ่นอันตรายและมุดดินหลบ (Underground Dodge) ---
-local function checkAndSubterraneanDodge(hazard)
-    if not hazard or not hazard.Parent or isDodging then return end
+-- --- [ใหม่] ฟังก์ชันตั้งค่า CanCollide อย่างเดียว ---
+local function forceCollision(hazard)
+    if not hazard or not hazard.Parent then return end
     
     local isDanger = false
     if hazard.Name == "Eruption" or hazard.Name == "Arrow" or hazard.Name:match("Magic$") then
@@ -134,61 +133,13 @@ local function checkAndSubterraneanDodge(hazard)
     end
     if not isDanger then return end
 
-    local myChar = LocalPlayer.Character
-    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-    if not myRoot then return end
-
-    local hazardPos = nil
     if hazard:IsA("BasePart") then
-        hazardPos = hazard.Position
+        hazard.CanCollide = true
     elseif hazard:IsA("Model") then
-        local p = hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true)
-        if p then hazardPos = p.Position end
-    end
-
-    if hazardPos then
-        -- หาความห่างเฉพาะแนวราบ (แกน X, Z)
-        local myPosXZ = Vector3.new(myRoot.Position.X, 0, myRoot.Position.Z)
-        local hazPosXZ = Vector3.new(hazardPos.X, 0, hazardPos.Z)
-        local distXZ = (myPosXZ - hazPosXZ).Magnitude
-        
-        -- เช็คความสูงด้วย เผื่อของมันอยู่สูงมากๆ จะได้ไม่ต้องมุด
-        local distY = math.abs(myRoot.Position.Y - hazardPos.Y)
-
-        -- ถ้าเข้ามาในระยะ 15 บล็อค และอยู่ชั้นเดียวกัน มุดทันที!
-        if distXZ < 15 and distY < 25 then
-            isDodging = true -- แจ้งเตือนสคริปต์อื่นว่ากูมุดอยู่ อย่าเพิ่งกวน!
-            
-            task.spawn(function()
-                local originalCFrame = myRoot.CFrame
-                -- จุดหลบภัยลึกลงไป 100 บล็อค
-                local safeCFrame = originalCFrame - Vector3.new(0, 100, 0)
-
-                -- 1. สร้างพื้นล่องหนมารองตีน กันร่วงหลุดแมพ
-                local platform = Instance.new("Part")
-                platform.Size = Vector3.new(20, 2, 20)
-                platform.Position = safeCFrame.Position - Vector3.new(0, 3, 0)
-                platform.Anchored = true
-                platform.CanCollide = true
-                platform.Transparency = 1 -- ล่องหน
-                platform.Parent = workspace
-
-                -- 2. กระชากตัวเราลงไปยืนบนพื้นนั้น
-                myRoot.CFrame = safeCFrame
-                
-                -- 3. นิ่งรอให้สกิลพุ่งผ่านไป (0.7 วินาที ชั่วพริบตาเดียว)
-                task.wait(0.7)
-                
-                -- 4. วาร์ปกลับขึ้นมาจุดเดิมเป๊ะๆ
-                if myRoot then
-                    myRoot.CFrame = originalCFrame
-                end
-                
-                -- 5. ลบพื้นทิ้ง และปลดล็อคสถานะมุดดิน
-                platform:Destroy()
-                task.wait(0.2) -- คูลดาวน์แป๊บนึง
-                isDodging = false
-            end)
+        for _, part in pairs(hazard:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = true
+            end
         end
     end
 end
@@ -197,7 +148,7 @@ end
 task.spawn(function()
     while true do
         task.wait(0.1)
-        if autoCoinEnabled and not isDodging then -- ถ้ามุดดินอยู่ไม่ต้องดึงตังค์เดี๋ยวรวน
+        if autoCoinEnabled then
             pcall(function()
                 local myChar = LocalPlayer.Character
                 local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -233,18 +184,18 @@ end)
 task.spawn(function()
     while true do
         task.wait(0.05) 
-        if autoDodgeEnabled and not isDodging then
+        if antiDamageEnabled then
             pcall(function()
                 local dungeon = workspace:FindFirstChild("Dungeon")
                 local effects = dungeon and dungeon:FindFirstChild("Effects")
                 if effects then
                     for _, v in pairs(effects:GetChildren()) do
-                        checkAndSubterraneanDodge(v)
+                        forceCollision(v)
                     end
                 end
                 if getnilinstances then
                     for _, v in pairs(getnilinstances()) do
-                        checkAndSubterraneanDodge(v)
+                        forceCollision(v)
                     end
                 end
             end)
@@ -256,8 +207,7 @@ end)
 task.spawn(function()
     while true do
         task.wait(0.05)
-        -- [สำคัญ] ถ้ากำลังมุดดินอยู่ ให้หยุดการเดินชั่วคราว
-        if not followEnabled or isDodging then continue end
+        if not followEnabled then continue end
         
         pcall(function()
             local target = nil
