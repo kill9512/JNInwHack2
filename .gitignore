@@ -1,1 +1,1 @@
-Nothing should be ignored based on the provided file changes. The only modified file is `SupportHeroes.lua`, which is a source code file and should not be added to .gitignore.
+Nothing to output - the modified file 'SupportHeroes.lua' is a source code file and does not require any additional ignore rules.
