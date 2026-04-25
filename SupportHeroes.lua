@@ -214,7 +214,7 @@ local function executeSmartDodgeV5(hazard)
     if distXZ > shieldRange then return end
 
     if isAoE then
-        if distXZ < hazardRadius + 2.5 then 
+        if distXZ < hazardRadius + 3 then 
             local escapeDir = (myPosXZ - hazPosXZ)
             if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
             escapeDir = escapeDir.Unit
