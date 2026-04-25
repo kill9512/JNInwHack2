@@ -314,6 +314,18 @@ task.spawn(function()
                             end
                         end
                     end
+                    
+                    -- แก้ไข: ตรวจสอบ workspace.Dungeon.Model และเปิด CanCollide ของ Part ข้างใน
+                    if dungeon then
+                        local modelContainer = dungeon:FindFirstChild("Model")
+                        if modelContainer and modelContainer:IsA("Model") then
+                            for _, child in pairs(modelContainer:GetChildren()) do
+                                if child:IsA("BasePart") then
+                                    child.CanCollide = true
+                                end
+                            end
+                        end
+                    end
                 end
             end)
         end
