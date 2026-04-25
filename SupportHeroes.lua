@@ -47,7 +47,7 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V7 (Natural Walk)", "เดินหลบกระสุนแบบธรรมชาติ (Predict 10 Stud)", function(state)
+SupportSection:NewToggle("Smart Dodge V8 (Hybrid)", "วาร์ปหลบวงเวทย์ & เดินหลบกระสุน (Predict 16 Stud)", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -177,7 +177,8 @@ local function executeSmartDodgeV7(hazard)
     if currentTime - lastDodgeTime < dodgeCooldown then return end
 
     local isAoE = hazard:IsA("Model")
-    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$") or hazard.Name:match("Bullet$") or hazard.Name:match("Fireball$"))
+    -- ลบ Bullet และ Fireball ออก เพราะไม่มีในเกม เหลือแค่ Arrow กับ Magic
+    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$"))
     
     if not (isAoE or isProjectile) then return end
 
@@ -224,7 +225,7 @@ local function executeSmartDodgeV7(hazard)
 
     if distXZ > shieldRange then return end
 
-    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด) - ขยับออกด้านนอก (คงเดิมแต่ปรับให้เดินแทนวาร์ปถ้าเป็นไปได้)
+    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด) - วาร์ปออกเหมือนเดิม
     if isAoE then
         if distXZ < hazardRadius + 1.5 then 
             local escapeDir = (myPosXZ - hazPosXZ)
@@ -234,16 +235,16 @@ local function executeSmartDodgeV7(hazard)
             local distanceToMove = (hazardRadius + 1.5) - distXZ
             local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove + 2)
             
-            -- ตรวจสอบพื้นก่อนย้าย
+            -- ตรวจสอบพื้นก่อนวาร์ป
             local checkDown = workspace:Raycast(safeTarget + Vector3.new(0, 5, 0), Vector3.new(0, -10, 0), rayParams)
             if checkDown then
-                -- ใช้ MoveTo แทน CFrame เพื่อให้เดินออกไปอย่างนุ่มนวล
-                myHuman:MoveTo(Vector3.new(safeTarget.X, checkDown.Position.Y + 2.5, safeTarget.Z))
+                -- วาร์ปทันที (CFrame)
+                myRoot.CFrame = CFrame.new(Vector3.new(safeTarget.X, checkDown.Position.Y + 2.5, safeTarget.Z))
                 lastDodgeTime = currentTime
             end
         end
 
-    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Predictive Raycast 10 Stud)
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Predictive Raycast 16 Stud)
     elseif isProjectile then
         local hazardVel = hazard.Velocity
         local projectileSpeed = hazardVel.Magnitude
@@ -261,7 +262,7 @@ local function executeSmartDodgeV7(hazard)
         -- ถ้า dotProduct ต่ำมาก (เช่น < 0.2) แปลว่ากระสุนเฉียดๆ หรือวิ่งผ่านไปแล้ว ไม่ต้องหลบ
         if dotProduct < 0.2 then return end
 
-        -- 2. Raycast ทำนายเส้นทางยาว 10 Stud จากตัวผู้เล่น ไปในทิศทางตั้งฉากกับกระสุน
+        -- 2. Raycast ทำนายเส้นทางยาว 16 Stud จากตัวผู้เล่น ไปในทิศทางตั้งฉากกับกระสุน
         -- เพื่อดูว่าถ้าเราไม่ขยับ กระสุนจะชนไหม?
         -- วิธีที่ดีกว่า: ยิง Raycast จากผู้เล่น ไปยังทิศทางที่กระสุนกำลังจะวิ่งผ่าน (Predicted Path)
         
@@ -276,9 +277,9 @@ local function executeSmartDodgeV7(hazard)
         
         -- ถ้าอยู่ในระยะประชิดที่จะชน
         if distanceToLine < dangerZone then
-            -- ตรวจสอบเพิ่มเติมด้วย Raycast ยาว 10 Stud ในทิศทางที่กระสุนจะวิ่งผ่านตำแหน่งเรา
+            -- ตรวจสอบเพิ่มเติมด้วย Raycast ยาว 16 Stud ในทิศทางที่กระสุนจะวิ่งผ่านตำแหน่งเรา
             -- เพื่อยืนยันว่ามันคือ "อนาคต" ที่จะชน ไม่ใช่ "อดีต" ที่ผ่านไป
-            local predictLength = 10
+            local predictLength = 16 -- เพิ่มจาก 10 เป็น 16 ตามคำขอ
             local rayStart = closestPoint - (projectileDir * 2) -- ถอยหลังมาหน่อยกันพลาด
             local rayEnd = rayStart + (projectileDir * predictLength)
             
@@ -311,8 +312,8 @@ local function executeSmartDodgeV7(hazard)
             local walkTargetPos = myPos + (rightDir * 6)
             
             -- ตรวจสอบพื้นก่อนเดินไปกันตกเหว
-            local rayStart = walkTargetPos + Vector3.new(0, 5, 0)
-            local rayHit = workspace:Raycast(rayStart, Vector3.new(0, -10, 0), rayParams)
+            local rayStartCheck = walkTargetPos + Vector3.new(0, 5, 0)
+            local rayHit = workspace:Raycast(rayStartCheck, Vector3.new(0, -10, 0), rayParams)
             
             if rayHit then
                 -- ปรับระดับความสูงให้พอดีกับพื้น
