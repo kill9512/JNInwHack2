@@ -242,7 +242,7 @@ local function executeSmartDodgeV5(hazard)
     -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic)
     elseif isProjectile then
         -- [แก้ 3: หดระยะจับเซนเซอร์เหลือ 7 หลบแบบเสี้ยววินาที]
-        if distXZ < 7 then 
+        if distXZ < 11 then 
             local dirFromHazard = (myPosXZ - hazPosXZ)
             if dirFromHazard.Magnitude == 0 then dirFromHazard = Vector3.new(1, 0, 0) end
             dirFromHazard = dirFromHazard.Unit
