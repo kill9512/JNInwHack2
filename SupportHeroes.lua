@@ -183,17 +183,13 @@ local function handleEruption(hazard)
         hazardPos = hazard.Position
         hazardRadius = math.max(hazard.Size.X, hazard.Size.Z) / 2
     elseif hazard:IsA("Model") then
-        local parts = {}
-        for _, v in pairs(hazard:GetDescendants()) do
-            if v:IsA("BasePart") then table.insert(parts, v) end
-        end
-        if #parts > 0 then
-            hazardPos = (hazard.PrimaryPart or parts[1]).Position
-            for _, p in pairs(parts) do
-                local r = math.max(p.Size.X, p.Size.Z) / 2
-                if r > hazardRadius then hazardRadius = r end
-            end
+        local pp = hazard.PrimaryPart
+        if pp then
+            hazardPos = pp.Position
+            -- คำนวณรัศมีคร่าวๆ จาก PrimaryPart เพื่อความเร็ว
+            hazardRadius = math.max(pp.Size.X, pp.Size.Z) / 2
         else
+            -- ถ้าไม่มี PrimaryPart ให้ใช้ bounding box แทน (ช้ากว่านิดหน่อยแต่จำเป็น)
             local cframe, size = hazard:GetBoundingBox()
             hazardPos = cframe.Position
             hazardRadius = math.max(size.X, size.Z) / 2
@@ -203,28 +199,30 @@ local function handleEruption(hazard)
     if not hazardPos then return end
     
     local myPos = myRoot.Position
-    local myPosXZ = Vector3.new(myPos.X, 0, myPos.Z)
-    local hazPosXZ = Vector3.new(hazardPos.X, 0, hazardPos.Z)
-    local distXZ = (myPosXZ - hazPosXZ).Magnitude
+    local distXZ = (Vector3.new(myPos.X, 0, myPos.Z) - Vector3.new(hazardPos.X, 0, hazardPos.Z)).Magnitude
 
     if distXZ > shieldRange then return end
 
-    -- ✅ แก้: บวกรัศมีตัวละคร + ระยะปลอดภัยเพิ่ม
-    local playerRadius = 2.5
-    local safeMargin = 1.5
+    -- ✅ ปรับปรุง: คำนวณระยะปลอดภัยให้แม่นยำและหลบทันที
+    local playerRadius = 3
+    local safeMargin = 2
     local safeRadius = hazardRadius + playerRadius + safeMargin 
     
     if distXZ < safeRadius then 
-        local escapeDir = (myPosXZ - hazPosXZ)
-        if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
-        escapeDir = escapeDir.Unit
-        
-        local distanceToMove = safeRadius - distXZ
-        
-        local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove, hazard)
-        if safeTarget then
-            myRoot.CFrame = CFrame.new(safeTarget)
+        -- หาเวกเตอร์หลบที่สั้นที่สุดและตรงที่สุด
+        local escapeDir = (myPos - hazardPos)
+        if escapeDir.Magnitude < 0.1 then 
+            escapeDir = Vector3.new(1, 0, 0) 
+        else
+            escapeDir = escapeDir.Unit
         end
+        
+        -- ขยับออกไปนอกเขตอันตรายทันที + ระยะเผื่อเพิ่ม
+        local moveDistance = (safeRadius - distXZ) + 5
+        local targetPos = myPos + (escapeDir * moveDistance)
+        
+        -- วาร์ปทันทีโดยไม่ต้องหาเส้นทางซับซ้อน (เร็วสุด)
+        myRoot.CFrame = CFrame.new(targetPos.X, myPos.Y, targetPos.Z)
     end
 end
 
