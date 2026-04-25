@@ -232,27 +232,23 @@ end
 -- [ระบบย่อย 2] เกราะเสาเข็มแก้วหัวแหลม ✅ แก้: เกาะติดกระสุน
 -- ==========================================
 local function handleProjectile(hazard)
-    -- ✅ หา MainPart: รองรับ BasePart, UnionOperation, Model
     local mainPart = nil
-    if hazard:IsA("BasePart") then 
-        mainPart = hazard
-    elseif hazard:IsA("Model") then 
-        mainPart = hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true) 
-    end
+    if hazard:IsA("BasePart") then mainPart = hazard
+    elseif hazard:IsA("Model") then mainPart = hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true) end
 
     if not mainPart then return end
     
-    -- ✅ ป้องกันสร้างซ้ำ
-    if mainPart:FindFirstChild("UltimateBumper") then return end 
+    -- ถ้าสร้างเกราะให้ลูกนี้ไปแล้ว ให้ข้ามเลย
+    if mainPart:FindFirstChild("GlassBumper") then return end 
 
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not myRoot then return end
 
-    local distXZ = (Vector3.new(myRoot.Position.X, 0, myRoot.Position.Z) - 
-                   Vector3.new(mainPart.Position.X, 0, mainPart.Position.Z)).Magnitude
+    local distXZ = (Vector3.new(myRoot.Position.X, 0, myRoot.Position.Z) - Vector3.new(mainPart.Position.X, 0, mainPart.Position.Z)).Magnitude
     if distXZ > shieldRange then return end
 
+    -- ทิศทางจากกระสุน ชี้มาหาตัวเรา (เพื่อต่อความยาวเกราะมาทางเรา)
     local dirToPlayer = (myRoot.Position - mainPart.Position)
     if dirToPlayer.Magnitude > 0 then
         dirToPlayer = dirToPlayer.Unit
@@ -260,53 +256,45 @@ local function handleProjectile(hazard)
         dirToPlayer = Vector3.new(0, 0, 1)
     end
 
-    -- 🔷 สร้างเสาเข็มแก้ว
+    -- สร้างเกราะแก้ว
     local bumper = Instance.new("Part")
-    bumper.Name = "UltimateBumper"
+    bumper.Name = "GlassBumper"
     bumper.Transparency = 0.5 
     bumper.Material = Enum.Material.Glass
-    bumper.Color = Color3.fromRGB(255, 100, 100)
-    bumper.Size = Vector3.new(10, 10, 40) 
+    bumper.Color = Color3.fromRGB(0, 255, 255)
+    
+    -- [ไฮไลท์!] ขนาด 6x6 แต่ยาว 16 บล็อค!
+    bumper.Size = Vector3.new(6, 6, 16) 
+    
     bumper.CanCollide = true
-    bumper.CanTouch = false 
+    bumper.CanTouch = false -- ปิดไม่ให้มันทำดาเมจซะเอง
     bumper.Massless = true 
     bumper.Anchored = mainPart.Anchored 
     
-    -- ✅ วางตำแหน่ง: ยื่นมาข้างหน้ากระสุน 20 บล็อค ชี้มาหาเรา
-    local centerOfBumper = mainPart.Position + (dirToPlayer * 20)
-    bumper.CFrame = CFrame.lookAt(centerOfBumper, myRoot.Position)
+    -- ขยับจุดศูนย์กลางเกราะให้ยื่นมาหาตัวเรา 5 บล็อค
+    bumper.CFrame = CFrame.lookAt(mainPart.Position + (dirToPlayer * 5), mainPart.Position + dirToPlayer * 10)
     
-    -- 🔥 เพิ่มหัวแหลมด้วย Cone Mesh
-    local coneMesh = Instance.new("SpecialMesh")
-    coneMesh.MeshType = Enum.MeshType.Cone
-    coneMesh.Scale = Vector3.new(0.9, 0.9, 3)
-    coneMesh.Offset = Vector3.new(0, 0, 20)
-    coneMesh.Parent = bumper
-    
-    -- ✅ ยึดกับ mainPart และใส่เป็นลูกของ mainPart เพื่อให้เกาะติด
     local weld = Instance.new("WeldConstraint")
     weld.Part0 = bumper
     weld.Part1 = mainPart
     weld.Parent = bumper
     
-    bumper.Parent = mainPart  -- ✅ เกาะติดกระสุนจริงๆ
+    bumper.Parent = mainPart
     
-    -- 🔕 ปิดอันตรายของกระสุนเดิม
-    pcall(function()
-        if hazard:IsA("BasePart") then
-            hazard.CanCollide = false
-            local t = hazard:FindFirstChild("TouchInterest")
-            if t then t:Destroy() end
-        elseif hazard:IsA("Model") then
-            for _, p in pairs(hazard:GetDescendants()) do
-                if p:IsA("BasePart") then
-                    p.CanCollide = false
-                    local t = p:FindFirstChild("TouchInterest")
-                    if t then t:Destroy() end
-                end
+    -- ปิดการชนและลบ Touch ของตัวกระสุนทิ้งไปเลย
+    if hazard:IsA("BasePart") then
+        hazard.CanCollide = false
+        local t = hazard:FindFirstChild("TouchInterest")
+        if t then t:Destroy() end
+    elseif hazard:IsA("Model") then
+        for _, p in pairs(hazard:GetDescendants()) do
+            if p:IsA("BasePart") then
+                p.CanCollide = false
+                local t = p:FindFirstChild("TouchInterest")
+                if t then t:Destroy() end
             end
         end
-    end)
+    end
 end
 
 -- ==========================================
