@@ -399,6 +399,25 @@ task.spawn(function()
                 local bestDist = (SelectedMode == "Farthest") and -1 or math.huge
                 local candidates = {} -- เก็บรายชื่อผู้เล่นที่มีค่า HP หรือระยะทางดีที่สุด
                 
+                -- ตัวแปรเก็บเป้าหมายล่าสุดของแต่ละโหมด เพื่อไม่ให้สลับไปมาเมื่อค่าเท่ากัน
+                if SelectedMode == "Max HP" then
+                    if not _lastMaxHPTarget or not _lastMaxHPTarget.Parent or not _lastMaxHPTarget.Character or not _lastMaxHPTarget.Character:FindFirstChild("Humanoid") or _lastMaxHPTarget.Character.Humanoid.Health <= 0 then
+                        _lastMaxHPTarget = nil
+                    end
+                elseif SelectedMode == "Min HP" then
+                    if not _lastMinHPTarget or not _lastMinHPTarget.Parent or not _lastMinHPTarget.Character or not _lastMinHPTarget.Character:FindFirstChild("Humanoid") or _lastMinHPTarget.Character.Humanoid.Health <= 0 then
+                        _lastMinHPTarget = nil
+                    end
+                elseif SelectedMode == "Closest" then
+                    if not _lastClosestTarget or not _lastClosestTarget.Parent or not _lastClosestTarget.Character or not _lastClosestTarget.Character:FindFirstChild("Humanoid") or _lastClosestTarget.Character.Humanoid.Health <= 0 then
+                        _lastClosestTarget = nil
+                    end
+                elseif SelectedMode == "Farthest" then
+                    if not _lastFarthestTarget or not _lastFarthestTarget.Parent or not _lastFarthestTarget.Character or not _lastFarthestTarget.Character:FindFirstChild("Humanoid") or _lastFarthestTarget.Character.Humanoid.Health <= 0 then
+                        _lastFarthestTarget = nil
+                    end
+                end
+
                 local myChar = LocalPlayer.Character
                 local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
 
@@ -439,9 +458,43 @@ task.spawn(function()
                     end
                 end
                 
-                -- สุ่มเลือกจากกลุ่มผู้สมัครที่มีค่าดีที่สุด
+                -- เลือกเป้าหมายจากกลุ่มผู้สมัคร
                 if #candidates > 0 then
-                    target = candidates[math.random(1, #candidates)]
+                    -- ถ้ามีคนเดียว เลือกเลย
+                    if #candidates == 1 then
+                        target = candidates[1]
+                    else
+                        -- ถ้ามีหลายคนที่มีค่าเท่ากัน ให้ตรวจสอบว่าเป้าหมายเก่าอยู่ในลิสต์ไหม
+                        local lastTargetVar = nil
+                        if SelectedMode == "Max HP" then lastTargetVar = _lastMaxHPTarget
+                        elseif SelectedMode == "Min HP" then lastTargetVar = _lastMinHPTarget
+                        elseif SelectedMode == "Closest" then lastTargetVar = _lastClosestTarget
+                        elseif SelectedMode == "Farthest" then lastTargetVar = _lastFarthestTarget
+                        end
+                        
+                        local foundOld = false
+                        if lastTargetVar then
+                            for _, cand in ipairs(candidates) do
+                                if cand == lastTargetVar then
+                                    target = lastTargetVar -- ตามคนเดิม
+                                    foundOld = true
+                                    break
+                                end
+                            end
+                        end
+                        
+                        -- ถ้าคนเก่าไม่อยู่ในลิสต์แล้ว (อาจตายหรือค่าเปลี่ยน) ค่อยสุ่มใหม่
+                        if not foundOld then
+                            target = candidates[math.random(1, #candidates)]
+                        end
+                    end
+                    
+                    -- อัปเดตตัวแปรเก็บเป้าหมายล่าสุด
+                    if SelectedMode == "Max HP" then _lastMaxHPTarget = target
+                    elseif SelectedMode == "Min HP" then _lastMinHPTarget = target
+                    elseif SelectedMode == "Closest" then _lastClosestTarget = target
+                    elseif SelectedMode == "Farthest" then _lastFarthestTarget = target
+                    end
                 end
             end
 
