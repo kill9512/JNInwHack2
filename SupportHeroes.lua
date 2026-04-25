@@ -234,33 +234,71 @@ local function executeSmartDodgeV5(hazard)
             end
         end
 
-    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic)
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) - ใช้ Raycast ยาวๆ + วาร์ปหลบ
     elseif isProjectile then
-        -- [แก้ 3: หดระยะจับเซนเซอร์เหลือ 7 หลบแบบเสี้ยววินาที]
-        if distXZ < 7 then 
-            local dirFromHazard = (myPosXZ - hazPosXZ)
-            if dirFromHazard.Magnitude == 0 then dirFromHazard = Vector3.new(1, 0, 0) end
-            dirFromHazard = dirFromHazard.Unit
+        local myChar = LocalPlayer.Character
+        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        if not myRoot then return end
+        
+        local myPos = myRoot.Position
+        local hazardVel = hazard.Velocity or Vector3.new()
+        local projectileDir = hazardVel.Unit
+        
+        -- ถ้าไม่มี Velocity ให้ใช้ทิศทางจาก hazard ไปหาผู้เล่น
+        if projectileDir.Magnitude == 0 then
+            projectileDir = (myPosXZ - hazPosXZ).Unit
+        end
+        
+        -- สร้าง Raycast จากตำแหน่งกระสุน ไปตามทิศทางยาวๆ (100 stud)
+        local rayOrigin = hazardPos
+        local rayDirection = projectileDir * 100
+        
+        -- ตั้งค่า RaycastParams ให้ exclude ตัวเราและกระสุนเอง
+        rayParams.FilterDescendantsInstances = {myChar, hazard}
+        
+        -- ยิง Raycast ยาวๆ เพื่อเช็คแนวทางการเคลื่อนที่ของกระสุน
+        local rayResult = workspace:Raycast(rayOrigin, rayDirection, rayParams)
+        
+        -- คำนวณระยะห่างจากผู้เล่นถึงแนว Raycast (เส้นทางการบินของกระสุน)
+        local pointOnLine = rayOrigin + projectileDir * ((myPos - rayOrigin):Dot(projectileDir))
+        local distanceToLine = (myPos - pointOnLine).Magnitude
+        
+        -- ระยะปลอดภัยที่ต้องหลบ (รัศมีกระสุน + ระยะเผื่อ)
+        local safeDistance = hazardRadius + 3
+        
+        -- ถ้าผู้เล่นอยู่ใกล้แนวกระสุนเกินไป ให้วาร์ปหลบ
+        if distanceToLine < safeDistance then
+            -- หาเวกเตอร์ตั้งฉากกับทิศทางกระสุน เพื่อวาร์ปออกด้านข้าง
+            local perpendicularDir = (myPos - pointOnLine).Unit
             
-            -- หามุม 90 องศา (Sidestep ซ้าย/ขวา)
-            local rightDir = dirFromHazard:Cross(Vector3.new(0, 1, 0)).Unit
-            local leftDir = -rightDir
-            
-            local dodgeDist = 6 -- สไลด์ข้าง 6 บล็อคก็พ้นแล้ว
-            
-            -- ลองหลบขวาก่อน ถ้าติดกำแพงให้ลองซ้าย
-            local safeTarget = nil
-            if isSafePosition(myPos, myPos + (rightDir * dodgeDist)) then
-                safeTarget = myPos + (rightDir * dodgeDist)
-            elseif isSafePosition(myPos, myPos + (leftDir * dodgeDist)) then
-                safeTarget = myPos + (leftDir * dodgeDist)
-            else
-                -- ถ้าติดทั้งซ้ายขวา (อยู่ในตรอก) ใช้ระบบหาทางออก 360 องศา
-                safeTarget = findSafeDodge(myPos, rightDir, dodgeDist)
+            -- ถ้า player อยู่บนเส้นพอดี (distanceToLine ≈ 0) ให้สุ่มทิศทางตั้งฉาก
+            if perpendicularDir.Magnitude == 0 then
+                perpendicularDir = projectileDir:Cross(Vector3.new(0, 1, 0)).Unit
+                -- ถ้า cross ได้ zero (กระสุนยิงตรงขึ้นหรือลง) ให้ใช้แกนอื่น
+                if perpendicularDir.Magnitude == 0 then
+                    perpendicularDir = projectileDir:Cross(Vector3.new(1, 0, 0)).Unit
+                end
             end
             
-            if safeTarget then
-                myRoot.CFrame = CFrame.new(safeTarget)
+            -- วาร์ปออกไปให้พ้นระยะปลอดภัย (บวกเพิ่มอีกหน่อยให้ชัวร์)
+            local warpDistance = safeDistance + 5
+            local warpTarget = myPos + (perpendicularDir * warpDistance)
+            
+            -- เช็คจุดปลายทางว่าปลอดภัยไหม (ไม่ติดกำแพง ไม่ตกเหว)
+            if isSafePosition(myPos, warpTarget) then
+                myRoot.CFrame = CFrame.new(warpTarget)
+            else
+                -- ถ้าจุดแรกไม่ปลอดภัย ลองทิศตรงข้าม
+                local alternateTarget = myPos - (perpendicularDir * warpDistance)
+                if isSafePosition(myPos, alternateTarget) then
+                    myRoot.CFrame = CFrame.new(alternateTarget)
+                else
+                    -- ถ้าไม่ปลอดภัยทั้งสองด้าน ใช้ระบบ findSafeDodge
+                    local safeTarget = findSafeDodge(myPos, perpendicularDir, warpDistance)
+                    if safeTarget then
+                        myRoot.CFrame = CFrame.new(safeTarget)
+                    end
+                end
             end
         end
     end
