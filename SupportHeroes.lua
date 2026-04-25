@@ -234,7 +234,7 @@ local function executeSmartDodgeV5(hazard)
             end
         end
 
-    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) - ใช้ Raycast ยาวๆ + วาร์ปหลบ
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) - ดัดแปลง BodyVelocity ให้เฉียดผู้เล่น
     elseif isProjectile then
         local myChar = LocalPlayer.Character
         local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -249,63 +249,56 @@ local function executeSmartDodgeV5(hazard)
             projectileDir = (myPosXZ - hazPosXZ).Unit
         end
         
-        -- สร้าง Raycast จากตำแหน่งกระสุน ไปตามทิศทางยาวๆ (100 stud)
-        local rayOrigin = hazardPos
-        local rayDirection = projectileDir * 100
-        
-        -- ตั้งค่า RaycastParams ให้ exclude ตัวเราและกระสุนเอง
-        rayParams.FilterDescendantsInstances = {myChar, hazard}
-        
-        -- ยิง Raycast ยาวๆ เพื่อเช็คแนวทางการเคลื่อนที่ของกระสุน
-        local rayResult = workspace:Raycast(rayOrigin, rayDirection, rayParams)
-        
-        -- คำนวณระยะห่างจากผู้เล่นถึงแนว Raycast (เส้นทางการบินของกระสุน)
-        local pointOnLine = rayOrigin + projectileDir * ((myPos - rayOrigin):Dot(projectileDir))
+        -- คำนวณระยะห่างจากผู้เล่นถึงแนวกระสุน
+        local pointOnLine = hazardPos + projectileDir * ((myPos - hazardPos):Dot(projectileDir))
         local distanceToLine = (myPos - pointOnLine).Magnitude
         
         -- ระยะปลอดภัยที่ต้องหลบ (รัศมีกระสุน + ระยะเผื่อ)
         local safeDistance = hazardRadius + 3
         
-        -- ถ้าผู้เล่นอยู่ใกล้แนวกระสุนเกินไป ให้วาร์ปหลบ
+        -- ถ้าผู้เล่นอยู่ใกล้แนวกระสุนเกินไป ให้จัดการกับ BodyVelocity
         if distanceToLine < safeDistance then
-            -- หาเวกเตอร์ตั้งฉากกับทิศทางกระสุน เพื่อวาร์ปออกด้านข้าง
-            local perpendicularDir = (myPos - pointOnLine).Unit
+            -- หา BodyVelocity หรือ LinearVelocity ในกระสุน
+            local bodyVelocity = hazard:FindFirstChildOfClass("BodyVelocity") or hazard:FindFirstChildOfClass("LinearVelocity")
             
-            -- ถ้า player อยู่บนเส้นพอดี (distanceToLine ≈ 0) ให้สุ่มทิศทางตั้งฉาก
-            if perpendicularDir.Magnitude == 0 then
-                perpendicularDir = projectileDir:Cross(Vector3.new(0, 1, 0)).Unit
-                -- ถ้า cross ได้ zero (กระสุนยิงตรงขึ้นหรือลง) ให้ใช้แกนอื่น
-                if perpendicularDir.Magnitude == 0 then
-                    perpendicularDir = projectileDir:Cross(Vector3.new(1, 0, 0)).Unit
-                end
-            end
-            
-            -- ทำให้เวกเตอร์ตั้งฉากอยู่ในระนาบแนวนอนเท่านั้น (ไม่มีการเปลี่ยนความสูง)
-            perpendicularDir = Vector3.new(perpendicularDir.X, 0, perpendicularDir.Z).Unit
-            
-            -- วาร์ปออกไปให้พ้นระยะปลอดภัย (บวกเพิ่มอีกหน่อยให้ชัวร์)
-            local warpDistance = safeDistance + 5
-            local warpTarget = myPos + (perpendicularDir * warpDistance)
-            
-            -- รักษาระดับความสูงเดิม หรือปรับสูงขึ้นเล็กน้อยเพื่อป้องกันการจม
-            warpTarget = Vector3.new(warpTarget.X, myPos.Y + 0.5, warpTarget.Z)
-            
-            -- เช็คจุดปลายทางว่าปลอดภัยไหม (ไม่ติดกำแพง ไม่ตกเหว)
-            if isSafePosition(myPos, warpTarget) then
-                myRoot.CFrame = CFrame.new(warpTarget)
+            if bodyVelocity then
+                -- วิธีที่ 1: เบนทิศทางกระสุนให้พุ่งขึ้นฟ้า (เนียนที่สุด)
+                local deflectDir = Vector3.new(0, 1, 0) -- พุ่งขึ้นข้างบน
+                bodyVelocity.Velocity = deflectDir * hazardVel.Magnitude
+                
+                -- วิธีที่ 2 (ทางเลือก): ถ้าอยากปัดออกด้านข้างแทน
+                -- local perpendicularDir = (myPos - pointOnLine).Unit
+                -- if perpendicularDir.Magnitude == 0 then
+                --     perpendicularDir = projectileDir:Cross(Vector3.new(0, 1, 0)).Unit
+                -- end
+                -- perpendicularDir = Vector3.new(perpendicularDir.X, 0, perpendicularDir.Z).Unit
+                -- bodyVelocity.Velocity = perpendicularDir * hazardVel.Magnitude
             else
-                -- ถ้าจุดแรกไม่ปลอดภัย ลองทิศตรงข้าม
-                local alternateTarget = myPos - (perpendicularDir * warpDistance)
-                alternateTarget = Vector3.new(alternateTarget.X, myPos.Y + 0.5, alternateTarget.Z)
-                if isSafePosition(myPos, alternateTarget) then
-                    myRoot.CFrame = CFrame.new(alternateTarget)
+                -- ถ้าไม่มี BodyVelocity (ใช้วิธีอื่นเคลื่อนที่) ค่อยวาร์ปผู้เล่น
+                local perpendicularDir = (myPos - pointOnLine).Unit
+                if perpendicularDir.Magnitude == 0 then
+                    perpendicularDir = projectileDir:Cross(Vector3.new(0, 1, 0)).Unit
+                    if perpendicularDir.Magnitude == 0 then
+                        perpendicularDir = projectileDir:Cross(Vector3.new(1, 0, 0)).Unit
+                    end
+                end
+                perpendicularDir = Vector3.new(perpendicularDir.X, 0, perpendicularDir.Z).Unit
+                local warpDistance = safeDistance + 5
+                local warpTarget = myPos + (perpendicularDir * warpDistance)
+                warpTarget = Vector3.new(warpTarget.X, myPos.Y + 0.5, warpTarget.Z)
+                if isSafePosition(myPos, warpTarget) then
+                    myRoot.CFrame = CFrame.new(warpTarget)
                 else
-                    -- ถ้าไม่ปลอดภัยทั้งสองด้าน ใช้ระบบ findSafeDodge
-                    local safeTarget = findSafeDodge(myPos, perpendicularDir, warpDistance)
-                    if safeTarget then
-                        -- รักษาระดับความสูงเดิม
-                        safeTarget = Vector3.new(safeTarget.X, math.max(safeTarget.Y, myPos.Y), safeTarget.Z)
-                        myRoot.CFrame = CFrame.new(safeTarget)
+                    local alternateTarget = myPos - (perpendicularDir * warpDistance)
+                    alternateTarget = Vector3.new(alternateTarget.X, myPos.Y + 0.5, alternateTarget.Z)
+                    if isSafePosition(myPos, alternateTarget) then
+                        myRoot.CFrame = CFrame.new(alternateTarget)
+                    else
+                        local safeTarget = findSafeDodge(myPos, perpendicularDir, warpDistance)
+                        if safeTarget then
+                            safeTarget = Vector3.new(safeTarget.X, math.max(safeTarget.Y, myPos.Y), safeTarget.Z)
+                            myRoot.CFrame = CFrame.new(safeTarget)
+                        end
                     end
                 end
             end
