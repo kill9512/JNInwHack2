@@ -32,6 +32,10 @@ local lastPosition = Vector3.new()
 local lastMoveTick = os.clock()
 local randomTarget = nil 
 
+-- Projectile History สำหรับคำนวณทิศทาง (แก้ Velocity = 0)
+local ProjectileHistory = {}
+local MAX_HISTORY_TIME = 0.5 -- ลบ history เก่าหลัง 0.5 วิ
+
 -- --- UI Sections ---
 local SupportSection = Tab:NewSection("Support Functions") 
 local Section = Tab:NewSection("Interior & Building Navigation")
@@ -164,7 +168,7 @@ local function findSafeDodge(startPos, baseDir, distance)
 end
 
 -- --- [ระบบอัปเดต V5] โคตรแม่นยำ ---
-local function executeSmartDodgeV5(hazard)
+local function executeSmartDodgeV5(hazard, lastPos)
     if not hazard or not hazard.Parent then return end
     
     local isAoE = hazard:IsA("Model")
@@ -174,7 +178,8 @@ local function executeSmartDodgeV5(hazard)
 
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-    if not myRoot then return end
+    local myHuman = myChar and myChar:FindFirstChildOfClass("Humanoid")
+    if not myRoot or not myHuman then return end
 
     local hazardPos = nil
     local hazardRadius = 2 
@@ -240,33 +245,71 @@ local function executeSmartDodgeV5(hazard)
         end
 
 
-    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic)
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) - REWRITTEN
     elseif isProjectile then
-        if distXZ < 12 then 
-            local dirFromHazard = (myPosXZ - hazPosXZ)
-            if dirFromHazard.Magnitude == 0 then dirFromHazard = Vector3.new(1, 0, 0) end
-            dirFromHazard = dirFromHazard.Unit
-            
-            -- หามุม 90 องศา (Sidestep ซ้าย/ขวา)
-            local rightDir = dirFromHazard:Cross(Vector3.new(0, 1, 0)).Unit
-            local leftDir = -rightDir
-            
-            local dodgeDist = 6 -- สไลด์ข้าง 6 บล็อคก็พ้นแล้ว
-            
-            -- ลองหลบขวาก่อน ถ้าติดกำแพงให้ลองซ้าย
-            local safeTarget = nil
-            if isSafePosition(myPos, myPos + (rightDir * dodgeDist)) then
-                safeTarget = myPos + (rightDir * dodgeDist)
-            elseif isSafePosition(myPos, myPos + (leftDir * dodgeDist)) then
-                safeTarget = myPos + (leftDir * dodgeDist)
-            else
-                -- ถ้าติดทั้งซ้ายขวา (อยู่ในตรอก) ใช้ระบบหาทางออก 360 องศา
-                safeTarget = findSafeDodge(myPos, rightDir, dodgeDist)
+        -- ✅ 1. คำนวณทิศทางและความเร็วจาก History (ไม่ใช่ Velocity)
+        local pDir = nil
+        local pSpeed = 0
+        
+        if lastPos then
+            local moveVec = hazardPos - lastPos
+            if moveVec.Magnitude > 0.05 then
+                pDir = moveVec.Unit
+                pSpeed = moveVec.Magnitude / 0.05 -- deltaTime ประมาณ 0.05 จาก Stepped
             end
-            
-            if safeTarget then
-                myRoot.CFrame = CFrame.new(safeTarget)
-            end
+        end
+        
+        -- ถ้าไม่มี history หรือกระสุนไม่เคลื่อนที่ → ข้าม
+        if not pDir or pSpeed < 1 then return end
+        
+        -- ✅ 2. Dot product check (normalize ถูกต้อง)
+        local toMeDir = (myPos - hazardPos).Unit
+        local dot = toMeDir:Dot(pDir)
+        
+        -- dot < 0.3 = กระสุนยิงเข้าหาเรา, dot >= 0.3 = ยิงผ่านหรือออกห่าง
+        if dot < 0.3 then return end
+        
+        -- ✅ 3. Time to Impact prediction
+        local dist = (myPos - hazardPos).Magnitude
+        local timeToHit = dist / pSpeed
+        
+        -- ถ้าช้าเกิน 1 วิ = ไม่ต้องหลบ yet
+        if timeToHit > 1 then return end
+        
+        -- ✅ 4. Trigger distance แบบ dynamic ตามความเร็ว
+        local triggerDist = math.clamp(pSpeed * 0.5, 10, 40)
+        if dist > triggerDist then return end
+        
+        -- ✅ 5. Prediction ตำแหน่งอนาคต
+        local futureTime = 0.25
+        local futureHazardPos = hazardPos + (pDir * pSpeed * futureTime)
+        
+        -- ✅ 6. คำนวณทิศหลบ (Sidestep 90 องศา)
+        local dirFromHazard = (myPosXZ - Vector3.new(futureHazardPos.X, 0, futureHazardPos.Z))
+        if dirFromHazard.Magnitude == 0 then dirFromHazard = Vector3.new(1, 0, 0) end
+        dirFromHazard = dirFromHazard.Unit
+        
+        local rightDir = dirFromHazard:Cross(Vector3.new(0, 1, 0)).Unit
+        local leftDir = -rightDir
+        
+        -- ระยะหลบแบบ dynamic ตามความเร็วกระสุน
+        local dodgeDist = math.clamp(pSpeed * 0.3, 5, 12)
+        
+        -- ✅ 7. ลองหลบขวา/ซ้าย พร้อมเช็คกำแพง
+        local safeTarget = nil
+        if isSafePosition(myPos, myPos + (rightDir * dodgeDist)) then
+            safeTarget = myPos + (rightDir * dodgeDist)
+        elseif isSafePosition(myPos, myPos + (leftDir * dodgeDist)) then
+            safeTarget = myPos + (leftDir * dodgeDist)
+        else
+            -- ถ้าติดทั้งซ้ายขวา ใช้ระบบหาทางออก 360 องศา
+            safeTarget = findSafeDodge(myPos, rightDir, dodgeDist)
+        end
+        
+        -- ✅ 8. เคลื่อนที่แบบ Hybrid (MoveTo + MoveDirection) เพื่อลด latency
+        if safeTarget then
+            myHuman:MoveTo(safeTarget)
+            myHuman:Move((safeTarget - myPos).Unit, true)
         end
     end
 end
@@ -317,7 +360,23 @@ RunService.Stepped:Connect(function()
             local effects = dungeon and dungeon:FindFirstChild("Effects")
             if effects then
                 for _, v in pairs(effects:GetChildren()) do
-                    executeSmartDodgeV5(v)
+                    -- ✅ แก้ timing: ใช้ history ก่อน update
+                    local lastPos = ProjectileHistory[v]
+                    
+                    if lastPos then
+                        executeSmartDodgeV5(v, lastPos)
+                    end
+                    
+                    -- Update history หลังใช้แล้ว
+                    ProjectileHistory[v] = v.Position
+                end
+                
+                -- ✅ ลบ history เก่าเพื่อประหยัด memory
+                local now = tick()
+                for proj, _ in pairs(ProjectileHistory) do
+                    if not proj.Parent or not proj:IsA("BasePart") then
+                        ProjectileHistory[proj] = nil
+                    end
                 end
             end
         end)
@@ -332,7 +391,16 @@ task.spawn(function()
             pcall(function()
                 if getnilinstances then
                     for _, v in pairs(getnilinstances()) do
-                        executeSmartDodgeV5(v)
+                        -- สำหรับ nil instances ก็ใช้ history เช่นกัน
+                        local lastPos = ProjectileHistory[v]
+                        
+                        if lastPos then
+                            executeSmartDodgeV5(v, lastPos)
+                        end
+                        
+                        if v and v:IsA("BasePart") then
+                            ProjectileHistory[v] = v.Position
+                        end
                     end
                 end
             end)
