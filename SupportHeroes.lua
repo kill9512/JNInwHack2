@@ -163,22 +163,24 @@ local function findSafeDodge(startPos, baseDir, distance)
     return startPos + (baseDir * (distance * 0.4))
 end
 
--- --- [ระบบอัปเดต V6] หยุดกระสุนแทนการวาร์ป ---
+-- --- [ระบบอัปเดต V7] Micro-Teleport หลบกระสุน (ไม่แก้ค่า Server) ---
 local function executeSmartDodgeV5(hazard)
     if not hazard or not hazard.Parent then return end
     
     local isAoE = hazard:IsA("Model")
-    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$"))
+    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$") or hazard.Name:match("Bullet") or hazard.Name:match("Fireball"))
     
     if not (isAoE or isProjectile) then return end
 
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-    if not myRoot then return end
+    local myHuman = myChar and myChar:FindFirstChildOfClass("Humanoid")
+    if not myRoot or not myHuman then return end
 
     local hazardPos = nil
     local hazardRadius = 2 
-    
+    local hazardVel = Vector3.new()
+
     -- วัดขนาดจาก Part ข้างใน Model
     if isAoE then
         local parts = {}
@@ -201,6 +203,7 @@ local function executeSmartDodgeV5(hazard)
         end
     elseif hazard:IsA("BasePart") then
         hazardPos = hazard.Position
+        hazardVel = hazard.Velocity
         hazardRadius = math.max(hazard.Size.X, hazard.Size.Z) / 2
     end
 
@@ -213,60 +216,75 @@ local function executeSmartDodgeV5(hazard)
 
     if distXZ > shieldRange then return end
 
-    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด) - ยังคงวาร์ปเพราะมันคือพื้นที่
+    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด) - วาร์ปออกด้านข้าง
     if isAoE then
         if distXZ < hazardRadius + 1.5 then 
             local escapeDir = (myPosXZ - hazPosXZ)
             if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
             escapeDir = escapeDir.Unit
             
-            local distanceToMove = (hazardRadius + 1.5) - distXZ
-            local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove)
-            if safeTarget then
-                -- วาร์ปเฉพาะแนวราบ ไม่แตะแกน Y เพื่อป้องกันจมพื้น
-                myRoot.CFrame = CFrame.new(Vector3.new(safeTarget.X, myPos.Y, safeTarget.Z))
+            local distanceToMove = (hazardRadius + 2.5) - distXZ
+            local targetPos = myPos + (escapeDir * distanceToMove)
+            
+            -- เช็คพื้นก่อนวาร์ป ป้องกันตกเหว
+            local groundCheck = workspace:Raycast(targetPos + Vector3.new(0, 2, 0), Vector3.new(0, -4, 0), rayParams)
+            local newY = myPos.Y
+            if groundCheck then
+                if groundCheck.Position.Y > myPos.Y then newY = groundCheck.Position.Y + 2.5 end
             end
+            -- วาร์ปเฉพาะแนวราบ ตรึง Y ไว้
+            myRoot.CFrame = CFrame.new(targetPos.X, newY, targetPos.Z)
         end
 
-    -- [กรณีที่ 2] หยุดกระสุนพุ่งชน (Arrow, Magic) - แก้ไข BodyVelocity
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) ด้วย Micro-Teleport
     elseif isProjectile then
-        local myPos = myRoot.Position
-        local hazardVel = hazard.Velocity or Vector3.new()
+        -- คำนวณทิศทางกระสุน
         local projectileDir = hazardVel.Unit
-        
-        if projectileDir.Magnitude == 0 then
+        if projectileDir.Magnitude == 0 or projectileDir ~= projectileDir then -- ตรวจสอบ NaN
             projectileDir = (myPosXZ - hazPosXZ).Unit
         end
         
-        -- คำนวณระยะห่างจากผู้เล่นถึงแนวกระสุน
-        local pointOnLine = hazardPos + projectileDir * ((myPos - hazardPos):Dot(projectileDir))
-        local distanceToLine = (myPos - pointOnLine).Magnitude
+        -- คำนวณจุดที่ใกล้ผู้เล่นที่สุดบนเส้นทางกระสุน
+        local toPlayer = myPos - hazardPos
+        local projection = toPlayer:Dot(projectileDir)
+        local closestPoint = hazardPos + (projectileDir * projection)
         
-        local safeDistance = hazardRadius + 4 -- ระยะเริ่มเบรกกระสุน
+        -- ระยะจากผู้เล่นถึงแนวกระสุน
+        local distToLine = (myPos - closestPoint).Magnitude
         
-        -- ถ้าผู้เล่นอยู่ใกล้แนวกระสุนเกินไป ให้จัดการกับ BodyVelocity
-        if distanceToLine < safeDistance then
-            -- 1. หาและปิด BodyVelocity / LinearVelocity
-            for _, velocityObj in pairs(hazard:GetChildren()) do
-                if velocityObj:IsA("BodyVelocity") or velocityObj:IsA("LinearVelocity") then
-                    velocityObj.Velocity = Vector3.new(0, 0, 0)
-                    velocityObj.MaxForce = Vector3.new(0, 0, 0)
-                end
-                -- 2. หาและปิด BodyAngularVelocity (กันหมุนปั่น)
-                if velocityObj:IsA("BodyAngularVelocity") or velocityObj:IsA("AngularVelocity") then
-                    velocityObj.AngularVelocity = Vector3.new(0, 0, 0)
-                    velocityObj.MaxTorque = Vector3.new(0, 0, 0)
-                end
+        -- ระยะปลอดภัย (รัศมีกระสุน + ระยะเผื่อความปลอดภัย)
+        local safeMargin = hazardRadius + 4
+        
+        -- เช็คทิศทางว่ากระสุนกำลังพุ่งมาหาเราไหม (ไม่ใช่พุ่งผ่านไปแล้ว)
+        local isComingTowards = projection > 0 and (closestPoint - myPos).Magnitude < (hazardVel.Magnitude * 0.5) + 10
+
+        if distToLine < safeMargin and isComingTowards then
+            -- หาเวกเตอร์ตั้งฉากเพื่อเลื่อนตัวออกข้าง
+            local dodgeDir = (myPos - closestPoint).Unit
+            
+            -- ถ้าอยู่ตรงกลางเป๊ะๆ ให้สุ่มทิศทางซ้ายขวา
+            if dodgeDir.Magnitude == 0 or dodgeDir ~= dodgeDir then
+                local rightVec = projectileDir:Cross(Vector3.new(0, 1, 0))
+                dodgeDir = rightVec.Unit
             end
             
-            -- 3. สั่งหยุดการเคลื่อนที่ของ Part หลักโดยตรง (กรณีไม่มี BodyVelocity หรือแรงตกค้าง)
-            if hazard:IsA("BasePart") then
-                hazard.Velocity = Vector3.new(0, 0, 0)
-                hazard.RotVelocity = Vector3.new(0, 0, 0)
-            elseif hazard.PrimaryPart then
-                hazard.PrimaryPart.Velocity = Vector3.new(0, 0, 0)
-                hazard.PrimaryPart.RotVelocity = Vector3.new(0, 0, 0)
+            -- จุดปลายทางที่จะวาร์ป (เลื่อนออกข้างนิดหน่อย)
+            local dodgeTarget = myPos + (dodgeDir * (safeMargin + 1))
+            
+            -- **สำคัญ**: ตรึงค่า Y ไว้ที่ระดับเดิม หรือเช็คพื้นใกล้เคียง เพื่อไม่ให้ลอยหรือจม
+            local rayDown = workspace:Raycast(dodgeTarget + Vector3.new(0, 3, 0), Vector3.new(0, -10, 0), rayParams)
+            local finalY = myPos.Y -- ค่าเริ่มต้นใช้ความสูงเดิม
+            
+            if rayDown then
+                -- ถ้าเจอพื้น ให้ใช้ความสูงเหนือพื้นนิดหน่อย
+                finalY = rayDown.Position.Y + 2.5
+            else
+                -- ถ้าไม่เจอพื้น (เหว) ให้คงความสูงเดิมไว้ (อย่าให้ตก)
+                finalY = myPos.Y
             end
+            
+            -- สั่งวาร์ปทันที (Micro-Teleport)
+            myRoot.CFrame = CFrame.new(dodgeTarget.X, finalY, dodgeTarget.Z)
         end
     end
 end
