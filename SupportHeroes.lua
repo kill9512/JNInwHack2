@@ -236,8 +236,8 @@ local function handleProjectile(hazard)
 
     if not mainPart then return end
     
-    -- ถ้าสร้างเกราะให้ลูกนี้ไปแล้ว ให้ข้ามเลย
-    if mainPart:FindFirstChild("GlassBumper") then return end 
+    -- ถ้าสร้างเกราะให้ลูกนี้ไปแล้ว ให้ข้ามเลย (เช็คทั้ง GlassSpike และส่วนประกอบ)
+    if mainPart:FindFirstChild("GlassSpike_Left") or mainPart:FindFirstChild("GlassSpike_Right") then return end 
 
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -254,32 +254,64 @@ local function handleProjectile(hazard)
         dirToPlayer = Vector3.new(0, 0, 1)
     end
 
-    -- สร้างเกราะแก้วรูปสามเหลี่ยมหัวแหลม (ใช้ WedgePart)
-    local bumper = Instance.new("WedgePart")
-    bumper.Name = "GlassSpike"
-    bumper.Transparency = 0.5 
-    bumper.Material = Enum.Material.Glass
-    bumper.Color = Color3.fromRGB(0, 255, 255)
+    -- สร้างฐานสำหรับยึด WedgePart ทั้งสอง
+    local spikeBase = Instance.new("Part")
+    spikeBase.Name = "GlassSpike_Base"
+    spikeBase.Size = Vector3.new(0.1, 0.1, 0.1)
+    spikeBase.Transparency = 1
+    spikeBase.CanCollide = false
+    spikeBase.Anchored = true
+    spikeBase.Position = mainPart.Position + (dirToPlayer * 5)
+    spikeBase.Parent = mainPart
     
-    -- [ไฮไลท์!] เปลี่ยนเป็นแท่งสามเหลี่ยมยาว 10 บล็อค แต่เล็กและแหลม
-    bumper.Size = Vector3.new(4, 4, 10) 
+    local baseWeld = Instance.new("WeldConstraint")
+    baseWeld.Part0 = spikeBase
+    baseWeld.Part1 = mainPart
+    baseWeld.Parent = spikeBase
+
+    -- สร้าง WedgePart ซ้าย
+    local leftSpike = Instance.new("WedgePart")
+    leftSpike.Name = "GlassSpike_Left"
+    leftSpike.Transparency = 0.5 
+    leftSpike.Material = Enum.Material.Glass
+    leftSpike.Color = Color3.fromRGB(0, 255, 255)
+    leftSpike.Size = Vector3.new(3, 3, 10)
+    leftSpike.CanCollide = true
+    leftSpike.CanTouch = false
+    leftSpike.Massless = true
+    leftSpike.Anchored = true
     
-    bumper.CanCollide = true
-    bumper.CanTouch = false -- ปิดไม่ให้มันทำดาเมจซะเอง
-    bumper.Massless = true 
-    bumper.Anchored = mainPart.Anchored 
+    -- จัดตำแหน่งซ้าย: เลื่อนไปทางซ้ายของทิศทาง แล้วหันหัวแหลมเข้าหาผู้เล่น
+    local leftPos = spikeBase.Position + (dirToPlayer:Cross(Vector3.new(0, 1, 0)) * 1.5)
+    leftSpike.CFrame = CFrame.lookAt(leftPos, leftPos + dirToPlayer * 10)
+    leftSpike.Parent = spikeBase
     
-    -- ขยับจุดศูนย์กลางเกราะให้ยื่นมาหาตัวเรา 5 บล็อค และหันหัวแหลมเข้าหาผู้เล่น
-    local spikePos = mainPart.Position + (dirToPlayer * 5)
-    -- หันหัวแหลมของ WedgePart เข้าหาผู้เล่น (WedgePart จะชี้ไปตามแกน Z บวก)
-    bumper.CFrame = CFrame.lookAt(spikePos, spikePos + dirToPlayer * 10)
+    local leftWeld = Instance.new("WeldConstraint")
+    leftWeld.Part0 = leftSpike
+    leftWeld.Part1 = spikeBase
+    leftWeld.Parent = leftSpike
+
+    -- สร้าง WedgePart ขวา
+    local rightSpike = Instance.new("WedgePart")
+    rightSpike.Name = "GlassSpike_Right"
+    rightSpike.Transparency = 0.5 
+    rightSpike.Material = Enum.Material.Glass
+    rightSpike.Color = Color3.fromRGB(0, 255, 255)
+    rightSpike.Size = Vector3.new(3, 3, 10)
+    rightSpike.CanCollide = true
+    rightSpike.CanTouch = false
+    rightSpike.Massless = true
+    rightSpike.Anchored = true
     
-    local weld = Instance.new("WeldConstraint")
-    weld.Part0 = bumper
-    weld.Part1 = mainPart
-    weld.Parent = bumper
+    -- จัดตำแหน่งขวา: เลื่อนไปทางขวาของทิศทาง แล้วหันหัวแหลมเข้าหาผู้เล่น
+    local rightPos = spikeBase.Position - (dirToPlayer:Cross(Vector3.new(0, 1, 0)) * 1.5)
+    rightSpike.CFrame = CFrame.lookAt(rightPos, rightPos + dirToPlayer * 10)
+    rightSpike.Parent = spikeBase
     
-    bumper.Parent = mainPart
+    local rightWeld = Instance.new("WeldConstraint")
+    rightWeld.Part0 = rightSpike
+    rightWeld.Part1 = spikeBase
+    rightWeld.Parent = rightSpike
     
     -- ปิดการชนและลบ Touch ของตัวกระสุนทิ้งไปเลย
     if hazard:IsA("BasePart") then
