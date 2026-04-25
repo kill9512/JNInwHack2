@@ -214,7 +214,7 @@ local function executeSmartDodgeV5(hazard)
     if distXZ > shieldRange then return end
 
     if isAoE then
-        if distXZ < hazardRadius + 2 then 
+        if distXZ < hazardRadius + 2.5 then 
             local escapeDir = (myPosXZ - hazPosXZ)
             if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
             escapeDir = escapeDir.Unit
@@ -266,10 +266,10 @@ local function executeSmartDodgeV5(hazard)
         if approachDot > 0.4 then
             local timeToImpact = distXZ / speed
 
-            if timeToImpact < 0.6 or distXZ < 10 then
+            if timeToImpact < 0.6 or distXZ < 12 then
                 local dodgeRight = flatProjDir:Cross(Vector3.new(0, 1, 0)).Unit
                 local dodgeLeft = -dodgeRight
-                local dodgeDist = 6 
+                local dodgeDist = 8 
 
                 local safeTarget = nil
 
