@@ -42,7 +42,7 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V6", "หลบกระสุนแบบ Predictive Evasion (ใหม่!)", function(state)
+SupportSection:NewToggle("Smart Dodge (Raycast Gap)", "หลบกระสุนด้วย Raycast Gap Finder (ใหม่!)", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -163,189 +163,96 @@ local function findSafeDodge(startPos, baseDir, distance)
     return startPos + (baseDir * (distance * 0.4))
 end
 
--- [V6] ระบบคำนวณจุดหลบกระสุนแบบ Predictive Evasion
-local function findSafeDodgeV6(myPos, projectilePos, projectileVelocity)
-    local myPosXZ = Vector3.new(myPos.X, 0, myPos.Z)
-    local projPosXZ = Vector3.new(projectilePos.X, 0, projectilePos.Z)
+-- [ใหม่] ระบบ Raycast Gap Finder - ยิงเส้นตรงหาจุดวาร์ป
+local function findSafeGap(myPos, projectilePos, projectileDir)
+    -- คำนวณทิศทางจากกระสุนมาหาเรา
+    local toPlayer = (myPos - projectilePos).Unit
     
-    -- เวกเตอร์จากกระสุนมาหาเรา
-    local toPlayer = (myPosXZ - projPosXZ)
-    local dist = toPlayer.Magnitude
+    -- ถ้าทิศทางกระสุนไม่พุ่งมาทางเรา ไม่ต้องหลบ
+    local dotProduct = projectileDir:Dot(toPlayer)
+    if dotProduct < 0.8 then return nil end
     
-    if dist == 0 then toPlayer = Vector3.new(1, 0, 0) end
-    toPlayer = toPlayer.Unit
+    -- ยิง Raycast จากกระสุนมาหาเรา เพื่อจำลองวิถีโจมตี
+    local rayOrigin = projectilePos + Vector3.new(0, 1, 0) -- ยกสูงนิดหน่อย
+    local rayDirection = toPlayer * 100 -- ยิงยาว 100 บล็อค
     
-    -- คำนวณความเร็วกระสุน (ถ้าไม่มี velocity data ใช้ default)
-    local projSpeed = projectileVelocity and projectileVelocity.Magnitude or 50
-    local timeToImpact = dist / projSpeed
+    local hit = workspace:Raycast(rayOrigin, rayDirection, rayParams)
     
-    -- ระยะที่ต้องหลบ = ความเร็วผู้เล่น * เวลา + buffer
-    local dodgeDistance = math.min(8, math.max(4, timeToImpact * 15))
-    
-    -- เวกเตอร์ตั้งฉากกับทิศทางกระสุน (ซ้าย/ขวา)
-    local rightDir = toPlayer:Cross(Vector3.new(0, 1, 0)).Unit
-    local leftDir = -rightDir
-    
-    -- ตรวจสอบว่ากระสุนพุ่งตรงมาหาเราหรือไม่ (Dot Product)
-    local projectileDir = projectileVelocity and projectileVelocity.Unit or toPlayer
-    local dotProduct = toPlayer:Dot(projectileDir)
-    
-    -- ถ้า dotProduct ใกล้ 1 แสดงว่าพุ่งตรงมา ถ้าใกล้ 0 หรือติดลบแสดงว่าเฉียดหรือผ่านไปแล้ว
-    if dotProduct < 0.7 then
-        -- กระสุนไม่พุ่งตรงมา ไม่ต้องหลบ หรือหลบแค่เล็กน้อย
-        dodgeDistance = dodgeDistance * 0.3
-    end
-    
-    -- ลองหลบด้านขวา
-    local rightTarget = myPos + (rightDir * dodgeDistance)
-    if isSafePosition(myPos, rightTarget) then
-        return rightTarget, "right"
-    end
-    
-    -- ลองหลบด้านซ้าย
-    local leftTarget = myPos + (leftDir * dodgeDistance)
-    if isSafePosition(myPos, leftTarget) then
-        return leftTarget, "left"
-    end
-    
-    -- ถ้าซ้ายขวาติดหมด ลองใช้ระบบ 360 องศา
-    local backupDir = rightDir
-    local angles = {90, -90, 45, -45, 135, -135, 180}
-    for _, angle in ipairs(angles) do
-        local rotatedDir = CFrame.Angles(0, math.rad(angle), 0) * backupDir
-        local testTarget = myPos + (rotatedDir * dodgeDistance)
-        if isSafePosition(myPos, testTarget) then
-            return testTarget, "backup"
+    -- ถ้าไม่มีอะไรขวาง หรือชนเราโดยตรง แสดงว่าอยู่ในวิถีอันตราย
+    if not hit or (hit.Part and hit.Part:IsDescendantOf(LocalPlayer.Character)) then
+        -- หาจุดปลอดภัยด้านซ้าย-ขวา ของเส้นวิถี
+        local rightDir = toPlayer:Cross(Vector3.new(0, 1, 0)).Unit
+        local leftDir = -rightDir
+        
+        local gapDistance = 4 -- ระยะห่างจากเส้นวิถี
+        
+        -- ลองขวา
+        local rightTarget = myPos + (rightDir * gapDistance)
+        if isSafePosition(myPos, rightTarget) then
+            return rightTarget, "right_gap"
+        end
+        
+        -- ลองซ้าย
+        local leftTarget = myPos + (leftDir * gapDistance)
+        if isSafePosition(myPos, leftTarget) then
+            return leftTarget, "left_gap"
+        end
+        
+        -- สำรอง: ถอยหลัง
+        local backTarget = myPos - (toPlayer * 5)
+        if isSafePosition(myPos, backTarget) then
+            return backTarget, "back"
         end
     end
     
-    -- ทางสุดท้าย: ถอยหลังตรงๆ
-    local backTarget = myPos - (toPlayer * (dodgeDistance * 0.5))
-    if isSafePosition(myPos, backTarget) then
-        return backTarget, "back"
-    end
-    
-    return myPos + (rightDir * 3), "emergency"
+    return nil
 end
 
--- --- [ระบบอัปเดต V5] โคตรแม่นยำ ---
-local function executeSmartDodgeV5(hazard)
+-- --- [ระบบอัปเดต Raycast Gap Finder] ---
+local function executeSmartDodge(hazard)
     if not hazard or not hazard.Parent then return end
     
-    local isAoE = hazard:IsA("Model")
     local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$"))
-    
-    if not (isAoE or isProjectile) then return end
+    if not isProjectile then return end
 
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not myRoot then return end
 
     local hazardPos = nil
-    local hazardRadius = 2 
+    local projectileDir = nil
     
-    -- [แก้ 1: วัดขนาดจาก Part ข้างใน Model แทน BoundingBox]
-    if isAoE then
-        local parts = {}
-        for _, v in pairs(hazard:GetDescendants()) do
-            if v:IsA("BasePart") then table.insert(parts, v) end
-        end
-        
-        if #parts > 0 then
-            -- ใช้จุดศูนย์กลางของชิ้นแรกหรือชิ้นหลัก
-            local centerPart = hazard.PrimaryPart or parts[1]
-            hazardPos = centerPart.Position
-            
-            -- หาชิ้นที่ใหญ่ที่สุดใน Model เพื่อกำหนดรัศมีวงเวทย์
-            for _, p in pairs(parts) do
-                local r = math.max(p.Size.X, p.Size.Z) / 2
-                if r > hazardRadius then hazardRadius = r end
-            end
-        else
-            -- ถ้ามันว่างเปล่าจริงๆ ค่อยใช้ BoundingBox กางเกงใน
-            local cframe, size = hazard:GetBoundingBox()
-            hazardPos = cframe.Position
-            hazardRadius = math.max(size.X, size.Z) / 2
-        end
-    elseif hazard:IsA("BasePart") then
+    -- หาตำแหน่งและทิศทางของกระสุน
+    if hazard:IsA("BasePart") then
         hazardPos = hazard.Position
-        hazardRadius = math.max(hazard.Size.X, hazard.Size.Z) / 2
+        if hazard.Velocity.Magnitude > 1 then
+            projectileDir = hazard.Velocity.Unit
+        end
+    elseif hazard:IsA("Model") and hazard.PrimaryPart then
+        hazardPos = hazard.PrimaryPart.Position
+        if hazard.PrimaryPart.Velocity.Magnitude > 1 then
+            projectileDir = hazard.PrimaryPart.Velocity.Unit
+        end
     end
 
     if not hazardPos then return end
     
+    -- ถ้าไม่มี velocity data ให้ใช้ทิศทางจากกระสุนมาหาเราแทน
+    if not projectileDir then
+        projectileDir = (myRoot.Position - hazardPos).Unit
+    end
+    
     local myPos = myRoot.Position
-    local myPosXZ = Vector3.new(myPos.X, 0, myPos.Z)
-    local hazPosXZ = Vector3.new(hazardPos.X, 0, hazardPos.Z)
-    local distXZ = (myPosXZ - hazPosXZ).Magnitude
-
-    if distXZ > shieldRange then return end
-
-    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด)
-    if isAoE then
-        -- ถ้าเราอยู่ในวง (บวกระยะเผื่อ 1.5 บล็อค เพื่อให้หลุดขอบชัวร์ๆ)
-        if distXZ < hazardRadius + 1.5 then 
-            local escapeDir = (myPosXZ - hazPosXZ)
-            if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
-            escapeDir = escapeDir.Unit
-            
-            -- คำนวณระยะที่ต้องก้าวออกไปให้พ้นขอบพอดีเป๊ะ
-            local distanceToMove = (hazardRadius + 1.5) - distXZ
-            
-            -- ใช้ฟังก์ชันดิ้นรน 360 องศา เผื่อติดมุม
-            local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove)
-            if safeTarget then
-                myRoot.CFrame = CFrame.new(safeTarget)
-            end
-        end
-
-    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) - ใช้ V6 Predictive Evasion
-    elseif isProjectile then
-        -- พยายามหาความเร็วของกระสุนจาก Velocity หรือ AssemblyLinearVelocity
-        local projectileVelocity = nil
-        if hazard:IsA("BasePart") and hazard.Velocity then
-            projectileVelocity = hazard.Velocity
-        elseif hazard:IsA("Model") and hazard.PrimaryPart and hazard.PrimaryPart.Velocity then
-            projectileVelocity = hazard.PrimaryPart.Velocity
-        end
-        
-        -- ใช้ระบบ V6 ถ้ามี velocity data, มิฉะนั้นใช้วิธีเดิม
-        if projectileVelocity and projectileVelocity.Magnitude > 1 then
-            -- โหมด V6: คำนวณจุดหลบแบบ Predictive
-            local safeTarget, dodgeType = findSafeDodgeV6(myPos, hazardPos, projectileVelocity)
-            if safeTarget and (safeTarget - myPos).Magnitude > 0.5 then
-                myRoot.CFrame = CFrame.new(safeTarget)
-            end
-        else
-            -- โหมดเดิม (Fallback): ถ้าไม่มี velocity data
-            -- [แก้ 3: หดระยะจับเซนเซอร์เหลือ 7 หลบแบบเสี้ยววินาที]
-            if distXZ < 7 then 
-                local dirFromHazard = (myPosXZ - hazPosXZ)
-                if dirFromHazard.Magnitude == 0 then dirFromHazard = Vector3.new(1, 0, 0) end
-                dirFromHazard = dirFromHazard.Unit
-                
-                -- หามุม 90 องศา (Sidestep ซ้าย/ขวา)
-                local rightDir = dirFromHazard:Cross(Vector3.new(0, 1, 0)).Unit
-                local leftDir = -rightDir
-                
-                local dodgeDist = 6 -- สไลด์ข้าง 6 บล็อคก็พ้นแล้ว
-                
-                -- ลองหลบขวาก่อน ถ้าติดกำแพงให้ลองซ้าย
-                local safeTarget = nil
-                if isSafePosition(myPos, myPos + (rightDir * dodgeDist)) then
-                    safeTarget = myPos + (rightDir * dodgeDist)
-                elseif isSafePosition(myPos, myPos + (leftDir * dodgeDist)) then
-                    safeTarget = myPos + (leftDir * dodgeDist)
-                else
-                    -- ถ้าติดทั้งซ้ายขวา (อยู่ในตรอก) ใช้ระบบหาทางออก 360 องศา
-                    safeTarget = findSafeDodge(myPos, rightDir, dodgeDist)
-                end
-                
-                if safeTarget then
-                    myRoot.CFrame = CFrame.new(safeTarget)
-                end
-            end
-        end
+    local dist = (myPos - hazardPos).Magnitude
+    
+    -- เช็คระยะตรวจจับ
+    if dist > shieldRange then return end
+    
+    -- ใช้ระบบ Raycast Gap Finder
+    local safeTarget, dodgeType = findSafeGap(myPos, hazardPos, projectileDir)
+    
+    if safeTarget and (safeTarget - myPos).Magnitude > 0.5 then
+        myRoot.CFrame = CFrame.new(safeTarget)
     end
 end
 
@@ -408,7 +315,7 @@ RunService.Stepped:Connect(function()
             local effects = dungeon and dungeon:FindFirstChild("Effects")
             if effects then
                 for _, v in pairs(effects:GetChildren()) do
-                    executeSmartDodgeV5(v)
+                    executeSmartDodge(v)
                 end
             end
         end)
@@ -423,7 +330,7 @@ task.spawn(function()
             pcall(function()
                 if getnilinstances then
                     for _, v in pairs(getnilinstances()) do
-                        executeSmartDodgeV5(v)
+                        executeSmartDodge(v)
                     end
                 end
             end)
