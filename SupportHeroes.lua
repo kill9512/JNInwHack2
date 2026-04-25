@@ -46,7 +46,7 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V7 (Hybrid)", "วาร์ปหนีวงเวทย์ & เดินหลบกระสุน", function(state)
+SupportSection:NewToggle("Smart Dodge V8 (Hybrid)", "วาร์ปหลบวงเวทย์ & เดินหลบกระสุน (Predict 16 Stud)", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -168,6 +168,12 @@ local function executeSmartDodgeV7(hazard)
     local currentTime = tick()
     if currentTime - lastDodgeTime < dodgeCooldown then return end
 
+    local isAoE = hazard:IsA("Model")
+    -- ลบ Bullet และ Fireball ออก เพราะไม่มีในเกม เหลือแค่ Arrow กับ Magic
+    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$"))
+    
+    if not (isAoE or isProjectile) then return end
+
     local myChar = LocalPlayer.Character
     local myHuman = myChar and myChar:FindFirstChildOfClass("Humanoid")
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -218,7 +224,7 @@ local function executeSmartDodgeV7(hazard)
 
     if distXZ > shieldRange then return end
 
-    -- [กรณีที่ 1] หลบวงเวทย์ (Model) -> ใช้การวาร์ป (Teleport) เหมือนเดิม
+    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด) - วาร์ปออกเหมือนเดิม
     if isAoE then
         if distXZ < hazardRadius + 1.5 then 
             local escapeDir = (myPosXZ - hazPosXZ)
@@ -231,12 +237,13 @@ local function executeSmartDodgeV7(hazard)
             -- ตรวจสอบพื้นก่อนวาร์ป
             local checkDown = workspace:Raycast(safeTarget + Vector3.new(0, 5, 0), Vector3.new(0, -10, 0), rayParams)
             if checkDown then
+                -- วาร์ปทันที (CFrame)
                 myRoot.CFrame = CFrame.new(Vector3.new(safeTarget.X, checkDown.Position.Y + 2.5, safeTarget.Z))
                 lastDodgeTime = currentTime
             end
         end
 
-    -- [กรณีที่ 2] หลบกระสุน (Arrow, Magic) -> ใช้การเดิน (Walk)
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Predictive Raycast 16 Stud)
     elseif isProjectile then
         local hazardVel = hazard.Velocity
         local projectileSpeed = hazardVel.Magnitude
@@ -246,22 +253,68 @@ local function executeSmartDodgeV7(hazard)
         
         local projectileDir = hazardVel.Unit
         
-        -- คำนวณจุดที่ใกล้ผู้เล่นที่สุดบนเส้นทางกระสุน
-        local toPlayer = myPos - hazardPos
-        local projection = toPlayer:Dot(projectileDir)
+        -- 1. เช็คว่ากระสุนกำลังมุ่งหน้ามาหาผู้เล่นหรือไม่ (Dot Product)
+        -- ถ้าค่าเป็นบวก แสดงว่ามุมระหว่าง "ทิศกระสุน" กับ "ทิศไปผู้เล่น" น้อยกว่า 90 องศา (กำลังจะมาชน)
+        local toPlayer = (myPos - hazardPos).Unit
+        local dotProduct = projectileDir:Dot(toPlayer)
         
-        -- เช็คเฉพาะกระสุนที่กำลังจะมาถึง หรือกำลังผ่านพอดี (ไม่เช็คตัวที่ผ่านไปแล้วไกลๆ)
-        if projection > -5 and projection < 20 then 
-            local closestPoint = hazardPos + (projectileDir * projection)
-            local distanceToLine = (myPos - closestPoint).Magnitude
+        -- ถ้า dotProduct ต่ำมาก (เช่น < 0.2) แปลว่ากระสุนเฉียดๆ หรือวิ่งผ่านไปแล้ว ไม่ต้องหลบ
+        if dotProduct < 0.2 then return end
+
+        -- 2. Raycast ทำนายเส้นทางยาว 16 Stud จากตัวผู้เล่น ไปในทิศทางตั้งฉากกับกระสุน
+        -- เพื่อดูว่าถ้าเราไม่ขยับ กระสุนจะชนไหม?
+        -- วิธีที่ดีกว่า: ยิง Raycast จากผู้เล่น ไปยังทิศทางที่กระสุนกำลังจะวิ่งผ่าน (Predicted Path)
+        
+        -- คำนวณจุดที่ใกล้ผู้เล่นที่สุดบนเส้นทางการบินของกระสุน
+        local toPlayerVec = myPos - hazardPos
+        local projection = toPlayerVec:Dot(projectileDir)
+        local closestPoint = hazardPos + (projectileDir * projection)
+        local distanceToLine = (myPos - closestPoint).Magnitude
+        
+        -- ระยะอันตราย (รัศมีกระสุน + ตัวผู้เล่น + เผื่อ误差)
+        local dangerZone = hazardRadius + 4 
+        
+        -- ถ้าอยู่ในระยะประชิดที่จะชน
+        if distanceToLine < dangerZone then
+            -- ตรวจสอบเพิ่มเติมด้วย Raycast ยาว 16 Stud ในทิศทางที่กระสุนจะวิ่งผ่านตำแหน่งเรา
+            -- เพื่อยืนยันว่ามันคือ "อนาคต" ที่จะชน ไม่ใช่ "อดีต" ที่ผ่านไป
+            local predictLength = 16 -- เพิ่มจาก 10 เป็น 16 ตามคำขอ
+            local rayStart = closestPoint - (projectileDir * 2) -- ถอยหลังมาหน่อยกันพลาด
+            local rayEnd = rayStart + (projectileDir * predictLength)
+            
+            local hit = workspace:Raycast(rayStart, rayEnd - rayStart, rayParams)
             
             -- ระยะปลอดภัย
             local safeDistance = hazardRadius + 4 
             
-            if distanceToLine < safeDistance then
-                -- แก้ไข: เพิ่มระยะ Raycast เป็น 16 สตั๊ด
-                local predictDist = 16 
-                local futurePos = hazardPos + (projectileDir * predictDist)
+            -- ถ้าเวลาที่จะชนเป็นลบ (< 0) แปลว่ากระสุนวิ่งผ่านจุดที่ใกล้เราที่สุดไปแล้ว -> ไม่ต้องหลบ!
+            if timeToImpact < 0 then return end
+            
+            -- ถ้าเวลาที่จะชนน้อยมาก (< 0.1) และเรากำลังขยับอยู่แล้ว อาจจะไม่ต้องสั่งเพิ่ม
+            if timeToImpact > 0.5 then 
+                -- ยังอีกนาน ค่อยว่ากันใหม่ frame หน้า
+                return 
+            end
+
+            -- ถึงตรงนี้แสดงว่า: กำลังจะชนแน่ๆ ภายในเสี้ยววินาที
+            -- สั่งเดินหลบด้านข้าง (Sidestep) ด้วย MoveTo เพื่อความชัวร์
+            local rightDir = Vector3.new(-projectileDir.Z, 0, projectileDir.X)
+            
+            -- สุ่มซ้ายขวา
+            if math.random() > 0.5 then
+                rightDir = -rightDir
+            end
+            
+            -- คำนวณจุดปลายทางที่จะเดินไป (ห่างไป 6 บล็อค ด้านข้าง)
+            local walkTargetPos = myPos + (rightDir * 6)
+            
+            -- ตรวจสอบพื้นก่อนเดินไปกันตกเหว
+            local rayStartCheck = walkTargetPos + Vector3.new(0, 5, 0)
+            local rayHit = workspace:Raycast(rayStartCheck, Vector3.new(0, -10, 0), rayParams)
+            
+            if rayHit then
+                -- ปรับระดับความสูงให้พอดีกับพื้น
+                local finalTarget = Vector3.new(walkTargetPos.X, rayHit.Position.Y + 2.5, walkTargetPos.Z)
                 
                 -- คำนวณทิศทางการหลบ (ตั้งฉากกับทิศทางกระสุน)
                 local rightDir = Vector3.new(-projectileDir.Z, 0, projectileDir.X)
