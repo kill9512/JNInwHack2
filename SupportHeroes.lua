@@ -38,7 +38,7 @@ local Section = Tab:NewSection("Interior & Building Navigation")
 local MoveSection = Tab:NewSection("Navigation Control")
 
 -- --- UI: Support Functions ---
-SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก CoinStack และ TreasureChest อัตโนมัติ", function(state)
+SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก CoinStack อัตโนมัติ", function(state)
     autoCoinEnabled = state
 end)
 
@@ -279,7 +279,6 @@ task.spawn(function()
                     local treasure = dungeon and dungeon:FindFirstChild("Treasure")
                     if treasure then
                         for _, item in pairs(treasure:GetChildren()) do
-                            -- เก็บ CoinStack
                             if item.Name == "CoinStack" then
                                 if item:IsA("BasePart") then
                                     item.CanCollide = false
@@ -292,19 +291,6 @@ task.spawn(function()
                                             if part:FindFirstChild("TouchInterest") then
                                                 part.CFrame = myRoot.CFrame
                                             end
-                                        end
-                                    end
-                                end
-                            -- เก็บ TreasureChest
-                            elseif item.Name == "TreasureChest" then
-                                if item:IsA("BasePart") then
-                                    item.CanCollide = false
-                                    item.CFrame = myRoot.CFrame
-                                elseif item:IsA("Model") then
-                                    item:PivotTo(myRoot.CFrame)
-                                    for _, part in pairs(item:GetDescendants()) do
-                                        if part:IsA("BasePart") then
-                                            part.CanCollide = false
                                         end
                                     end
                                 end
