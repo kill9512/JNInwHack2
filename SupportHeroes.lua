@@ -318,10 +318,12 @@ task.spawn(function()
                     -- แก้ไข: ตรวจสอบ workspace.Dungeon.Model และเปิด CanCollide ของทุก Part ข้างใน (รวมถึงส่วนที่ซ้อนอยู่)
                     if dungeon then
                         local modelContainer = dungeon:FindFirstChild("Model")
-                        if modelContainer then
-                            for _, part in pairs(modelContainer:GetDescendants()) do
-                                if part:IsA("BasePart") then
-                                    part.CanCollide = true
+                        if modelContainer and modelContainer:IsA("Model") then
+                            for _, descendant in pairs(modelContainer:GetDescendants()) do
+                                if descendant:IsA("BasePart") then
+                                    descendant.CanCollide = true
+                                    -- บางเกมอาจมี CollisionGroup ที่ทำให้เดินทะลุได้ ลอง reset เครือข่าย collision
+                                    descendant.CollisionGroup = "Default" 
                                 end
                             end
                         end
