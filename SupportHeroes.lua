@@ -214,7 +214,7 @@ local function executeSmartDodgeV5(hazard)
     if distXZ > shieldRange then return end
 
     if isAoE then
-        if distXZ < hazardRadius + 3 then 
+        if distXZ < hazardRadius + 2 then 
             local escapeDir = (myPosXZ - hazPosXZ)
             if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
             escapeDir = escapeDir.Unit
@@ -302,7 +302,7 @@ task.spawn(function()
                     local treasure = dungeon and dungeon:FindFirstChild("Treasure")
                     if treasure then
                         for _, item in pairs(treasure:GetChildren()) do
-                            if item.Name == "CoinStack" or item.Name == "TreasureChest" then
+                            if item.Name == "CoinStack" or item.Name == "TreasureChest" or item.Name == "IngotStack" then
                                 if item:IsA("BasePart") then
                                     item.CanCollide = false
                                     item.CFrame = myRoot.CFrame
