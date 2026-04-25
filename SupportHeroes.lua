@@ -299,7 +299,7 @@ local function executeSmartDodgeV7(hazard)
             end
 
             -- ถึงตรงนี้แสดงว่า: กำลังจะชนแน่ๆ ภายในเสี้ยววินาที
-            -- สั่งเดินหลบด้านข้าง (Sidestep)
+            -- สั่งเดินหลบด้านข้าง (Sidestep) ด้วย MoveTo เพื่อความชัวร์
             local rightDir = Vector3.new(-projectileDir.Z, 0, projectileDir.X)
             
             -- สุ่มซ้ายขวา
@@ -307,42 +307,23 @@ local function executeSmartDodgeV7(hazard)
                 rightDir = -rightDir
             end
             
-            -- กำหนดทิศทางการเดิน (MoveVector) สำหรับ Humanoid:Move
-            -- MoveVector คือ (X, Z) โดย X คือซ้าย/ขวา, Z คือหน้า/หลัง เทียบกับกล้องหรือตัวละคร
-            -- แต่เพื่อให้ง่าย เราจะใช้วิธีคำนวณทิศทางสัมพัทธ์กับตัวละคร
+            -- คำนวณจุดปลายทางที่จะเดินไป (ห่างไป 6 บล็อค ด้านข้าง)
+            local walkTargetPos = myPos + (rightDir * 6)
             
-            -- คำนวณทิศทางโลก (World Space) ที่จะเดิน
-            local walkTarget = myPos + (rightDir * 5) -- เป้าหมายสมมติห่างไป 5 บล็อค
+            -- ตรวจสอบพื้นก่อนเดินไปกันตกเหว
+            local rayStart = walkTargetPos + Vector3.new(0, 5, 0)
+            local rayHit = workspace:Raycast(rayStart, Vector3.new(0, -10, 0), rayParams)
             
-            -- แปลงเป็นทิศทางสัมพัทธ์กับตัวละคร (Relative to Character)
-            local charLookVector = myRoot.CFrame.LookVector
-            local charRightVector = myRoot.CFrame.RightVector
-            
-            -- Dot Product หาว่าทิศที่จะหลบ อยู่ทางซ้ายหรือขวาของตัวละคร
-            local dotRight = charRightVector:Dot(rightDir)
-            local dotForward = charLookVector:Dot(rightDir)
-            
-            local moveX = 0
-            local moveZ = 0
-            
-            -- ถ้าทิศหลบอยู่ทางขวาของตัวละคร
-            if dotRight > 0.5 then moveX = 1 
-            -- ถ้าทิศหลบอยู่ทางซ้ายของตัวละคร
-            elseif dotRight < -0.5 then moveX = -1 
+            if rayHit then
+                -- ปรับระดับความสูงให้พอดีกับพื้น
+                local finalTarget = Vector3.new(walkTargetPos.X, rayHit.Position.Y + 2.5, walkTargetPos.Z)
+                
+                -- สั่งเดินไปยังจุดนั้น (MoveTo จะทำให้ Humanoid เดินเองอัตโนมัติ)
+                myHuman:MoveTo(finalTarget)
+                
+                -- อัปเดตเวลาเพื่อไม่ให้สั่งซ้ำในเฟรมถัดไปทันที
+                lastDodgeTime = currentTime
             end
-            
-            -- ถ้าทิศหลบอยู่ข้างหน้า/ข้างหลังผสมด้วย (กรณีเฉียงๆ)
-            if math.abs(dotRight) <= 0.5 then
-                if dotForward > 0 then moveZ = 1 else moveZ = -1 end
-                -- ปรับ X เล็กน้อยถ้าเฉียง
-                if dotRight > 0 then moveX = 0.5 elseif dotRight < 0 then moveX = -0.5 end
-            end
-
-            -- สั่งเดิน! (ใช้ Move ซึ่งเป็นการเดินปกติ ไม่ใช่วาร์ป)
-            myHuman:Move(Vector3.new(moveX, 0, moveZ))
-            
-            -- อัปเดตเวลาเพื่อไม่ให้สั่งซ้ำในเฟรมถัดไปทันที
-            lastDodgeTime = currentTime
         end
     end
 end
