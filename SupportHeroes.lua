@@ -224,7 +224,7 @@ local function executeSmartDodgeV5(hazard)
     -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด)
     if isAoE then
         -- ถ้าเราอยู่ในวง (บวกระยะเผื่อ 1.5 บล็อค เพื่อให้หลุดขอบชัวร์ๆ)
-        if distXZ < hazardRadius + 3 then 
+        if distXZ < hazardRadius + 2 then 
             local escapeDir = (myPosXZ - hazPosXZ)
             if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
             escapeDir = escapeDir.Unit
