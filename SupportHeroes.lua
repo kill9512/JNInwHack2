@@ -253,54 +253,62 @@ local function executeSmartDodgeV5(hazard, lastPos)
         
         if lastPos then
             local moveVec = hazardPos - lastPos
-            if moveVec.Magnitude > 0.05 then
+            local moveDist = moveVec.Magnitude
+            if moveDist > 0.1 then
                 pDir = moveVec.Unit
-                pSpeed = moveVec.Magnitude / 0.05 -- deltaTime ประมาณ 0.05 จาก Stepped
+                pSpeed = moveDist / 0.05 -- deltaTime ประมาณ 0.05 จาก Stepped
             end
         end
         
         -- ถ้าไม่มี history หรือกระสุนไม่เคลื่อนที่ → ข้าม
-        if not pDir or pSpeed < 1 then return end
+        if not pDir or pSpeed < 5 then return end
         
         -- ✅ 2. Dot product check (normalize ถูกต้อง)
         local toMeDir = (myPos - hazardPos).Unit
         local dot = toMeDir:Dot(pDir)
         
-        -- dot < 0.3 = กระสุนยิงเข้าหาเรา, dot >= 0.3 = ยิงผ่านหรือออกห่าง
-        if dot < 0.3 then return end
+        -- dot > 0.3 = กระสุนยิงเข้าหาเรา, dot <= 0.3 = ยิงผ่านหรือออกห่าง
+        if dot <= 0.3 then return end
         
         -- ✅ 3. Time to Impact prediction
         local dist = (myPos - hazardPos).Magnitude
         local timeToHit = dist / pSpeed
         
         -- ถ้าช้าเกิน 1 วิ = ไม่ต้องหลบ yet
-        if timeToHit > 1 then return end
+        if timeToHit > 1.2 then return end
         
         -- ✅ 4. Trigger distance แบบ dynamic ตามความเร็ว
-        local triggerDist = math.clamp(pSpeed * 0.5, 10, 40)
+        local triggerDist = math.clamp(pSpeed * 0.6, 8, 35)
         if dist > triggerDist then return end
         
         -- ✅ 5. Prediction ตำแหน่งอนาคต
-        local futureTime = 0.25
+        local futureTime = math.min(timeToHit, 0.3)
         local futureHazardPos = hazardPos + (pDir * pSpeed * futureTime)
         
         -- ✅ 6. คำนวณทิศหลบ (Sidestep 90 องศา)
         local dirFromHazard = (myPosXZ - Vector3.new(futureHazardPos.X, 0, futureHazardPos.Z))
-        if dirFromHazard.Magnitude == 0 then dirFromHazard = Vector3.new(1, 0, 0) end
-        dirFromHazard = dirFromHazard.Unit
+        if dirFromHazard.Magnitude < 0.1 then 
+            -- ถ้าอยู่ตรงกลางกระสุนพอดี ให้ใช้ทิศตั้งฉากกับทิศกระสุน
+            dirFromHazard = pDir:Cross(Vector3.new(0, 1, 0)).Unit
+        else
+            dirFromHazard = dirFromHazard.Unit
+        end
         
         local rightDir = dirFromHazard:Cross(Vector3.new(0, 1, 0)).Unit
         local leftDir = -rightDir
         
         -- ระยะหลบแบบ dynamic ตามความเร็วกระสุน
-        local dodgeDist = math.clamp(pSpeed * 0.3, 5, 12)
+        local dodgeDist = math.clamp(pSpeed * 0.4, 6, 15)
         
         -- ✅ 7. ลองหลบขวา/ซ้าย พร้อมเช็คกำแพง
         local safeTarget = nil
-        if isSafePosition(myPos, myPos + (rightDir * dodgeDist)) then
-            safeTarget = myPos + (rightDir * dodgeDist)
-        elseif isSafePosition(myPos, myPos + (leftDir * dodgeDist)) then
-            safeTarget = myPos + (leftDir * dodgeDist)
+        local rightTarget = myPos + (rightDir * dodgeDist)
+        local leftTarget = myPos + (leftDir * dodgeDist)
+        
+        if isSafePosition(myPos, rightTarget) then
+            safeTarget = rightTarget
+        elseif isSafePosition(myPos, leftTarget) then
+            safeTarget = leftTarget
         else
             -- ถ้าติดทั้งซ้ายขวา ใช้ระบบหาทางออก 360 องศา
             safeTarget = findSafeDodge(myPos, rightDir, dodgeDist)
