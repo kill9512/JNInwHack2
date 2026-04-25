@@ -14,6 +14,7 @@ local SelectedPlayerName = nil
 local followDistance = 5
 local followEnabled = false
 local debugEnabled = false
+local followByPercentHP = false
 
 local autoCoinEnabled = false
 local autoDodgeEnabled = false
@@ -86,6 +87,10 @@ MoveSection:NewToggle("Enable Follow", "Start Logic", function(s)
 end)
 MoveSection:NewToggle("Show Path", "Visuals", function(s) debugEnabled = s end)
 MoveSection:NewSlider("Distance", "Gap", 20, 1, function(s) followDistance = s end)
+
+MoveSection:NewToggle("Follow by % HP", "ใช้ % เลือดแทนค่าจริง (Min/Max HP)", function(s)
+    followByPercentHP = s
+end)
 
 -- --- Helper Functions ---
 local function clearVisuals()
@@ -401,7 +406,17 @@ task.spawn(function()
                         
                         -- เช็คโหมดเลือด
                         if SelectedMode == "Max HP" or SelectedMode == "Min HP" then
-                            local hp = p.Character.Humanoid.Health
+                            local hp, maxHp
+                            if followByPercentHP then
+                                -- ใช้ % เลือด (Health / MaxHealth)
+                                hp = p.Character.Humanoid.Health / p.Character.Humanoid.MaxHealth
+                                maxHp = 1 -- ใช้เป็นค่าเปรียบเทียบสำหรับ % (สูงสุดคือ 1 หรือ 100%)
+                            else
+                                -- ใช้ค่าเลือดปกติ
+                                hp = p.Character.Humanoid.Health
+                                maxHp = math.huge
+                            end
+                            
                             if (SelectedMode == "Max HP" and hp > bestHP) or (SelectedMode == "Min HP" and hp < bestHP) then
                                 bestHP = hp; target = p
                             end
