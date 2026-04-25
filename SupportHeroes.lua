@@ -240,33 +240,111 @@ local function executeSmartDodgeV5(hazard)
         end
 
 
-    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic)
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) - Smart Dodge V5.1
     elseif isProjectile then
-        if distXZ < 12 then 
-            local dirFromHazard = (myPosXZ - hazPosXZ)
-            if dirFromHazard.Magnitude == 0 then dirFromHazard = Vector3.new(1, 0, 0) end
-            dirFromHazard = dirFromHazard.Unit
-            
-            -- หามุม 90 องศา (Sidestep ซ้าย/ขวา)
-            local rightDir = dirFromHazard:Cross(Vector3.new(0, 1, 0)).Unit
-            local leftDir = -rightDir
-            
-            local dodgeDist = 6 -- สไลด์ข้าง 6 บล็อคก็พ้นแล้ว
-            
-            -- ลองหลบขวาก่อน ถ้าติดกำแพงให้ลองซ้าย
-            local safeTarget = nil
-            if isSafePosition(myPos, myPos + (rightDir * dodgeDist)) then
-                safeTarget = myPos + (rightDir * dodgeDist)
-            elseif isSafePosition(myPos, myPos + (leftDir * dodgeDist)) then
-                safeTarget = myPos + (leftDir * dodgeDist)
+        -- พยายามหาทิศทางจริงของกระสุน (Velocity-based Direction)
+        local projectileDir = nil
+        
+        -- ลองอ่านจาก Velocity ถ้ามี
+        if hazard:IsA("BasePart") and hazard.Velocity and hazard.Velocity.Magnitude > 0.1 then
+            local velXZ = Vector3.new(hazard.Velocity.X, 0, hazard.Velocity.Z)
+            if velXZ.Magnitude > 0.1 then
+                projectileDir = velXZ.Unit
+            end
+        end
+        
+        -- ถ้าไม่มี Velocity หรือเป็น 0 ให้ใช้ทิศจากตำแหน่ง (fallback)
+        if not projectileDir then
+            projectileDir = (myPosXZ - hazPosXZ)
+            if projectileDir.Magnitude == 0 then 
+                projectileDir = Vector3.new(1, 0, 0) 
             else
-                -- ถ้าติดทั้งซ้ายขวา (อยู่ในตรอก) ใช้ระบบหาทางออก 360 องศา
-                safeTarget = findSafeDodge(myPos, rightDir, dodgeDist)
+                projectileDir = projectileDir.Unit
             end
+        end
+        
+        -- คำนวณความเร็วคร่าวๆ เพื่อปรับระยะหลบ (Overshoot Factor)
+        local speedFactor = 1
+        if hazard:IsA("BasePart") and hazard.Velocity then
+            local speed = hazard.Velocity.Magnitude
+            if speed > 80 then speedFactor = 1.8      -- กระสุนเร็วมาก ต้องหนีไกล
+            elseif speed > 40 then speedFactor = 1.4  -- กระสุนปานกลาง
+            elseif speed > 20 then speedFactor = 1.2  -- กระสุนช้า
+            end
+        end
+        
+        -- ระยะหลบพื้นฐาน + ปรับตามความเร็ว
+        local baseDodgeDist = 6 * speedFactor
+        
+        -- สร้าง Candidate Directions หลายแบบ:
+        -- 1. พุ่งเฉียงหน้า-ข้าง (Forward-Diagonal) ← ดีที่สุด เพราะไม่ตัดเส้น trajectory
+        -- 2. พุ่งเฉียงหลัง-ข้าง (Backward-Diagonal) ← กรณีกระสุนเร็วมาก
+        -- 3. หลบข้างล้วน (Pure Sidestep) ← แบบเดิม
+        
+        local forwardDiagRight = (projectileDir + projectileDir:Cross(Vector3.new(0, 1, 0)).Unit).Unit
+        local forwardDiagLeft = (projectileDir - projectileDir:Cross(Vector3.new(0, 1, 0)).Unit).Unit
+        local backwardDiagRight = (-projectileDir + projectileDir:Cross(Vector3.new(0, 1, 0)).Unit).Unit
+        local backwardDiagLeft = (-projectileDir - projectileDir:Cross(Vector3.new(0, 1, 0)).Unit).Unit
+        local pureRight = projectileDir:Cross(Vector3.new(0, 1, 0)).Unit
+        local pureLeft = -pureRight
+        
+        -- รายการทิศที่จะลอง (เรียงตามลำดับความชอบ)
+        local dodgeCandidates = {
+            { dir = forwardDiagRight, dist = baseDodgeDist * 1.1, priority = 1 },  -- เฉียงหน้าขวา (ดีที่สุด)
+            { dir = forwardDiagLeft, dist = baseDodgeDist * 1.1, priority = 2 },   -- เฉียงหน้าซ้าย
+            { dir = backwardDiagRight, dist = baseDodgeDist * 1.3, priority = 3 }, -- เฉียงหลังขวา (เผื่อกระสุนเร็ว)
+            { dir = backwardDiagLeft, dist = baseDodgeDist * 1.3, priority = 4 },  -- เฉียงหลังซ้าย
+            { dir = pureRight, dist = baseDodgeDist, priority = 5 },               -- ขวา纯属
+            { dir = pureLeft, dist = baseDodgeDist, priority = 6 },                -- ซ้าย纯属
+        }
+        
+        -- ฟังก์ชันเช็คจุดว่า "ตัดเส้น trajectory ของกระสุนไหม"
+        local function isCuttingTrajectory(startPos, targetPos, projDir, projPos)
+            -- เวกเตอร์จากกระสุนไปยังจุดปลายทางของเรา
+            local vecToTarget = targetPos - projPos
+            local vecToTargetXZ = Vector3.new(vecToTarget.X, 0, vecToTarget.Z)
             
-            if safeTarget then
-                myRoot.CFrame = CFrame.new(safeTarget)
+            -- ถ้าจุดปลายทางอยู่ "ข้างหน้า" กระสุน และใกล้เส้นทางการวิ่ง
+            local dotProduct = vecToTargetXZ:Dot(projDir)
+            if dotProduct < 0 then return false end -- จุดอยู่ด้านหลังกระสุน ไม่ตัดแน่นอน
+            
+            -- วัดระยะห่างจากเส้น trajectory (cross product magnitude)
+            local crossMag = vecToTargetXZ:Cross(projDir).Magnitude
+            local safetyMargin = 4 -- ระยะปลอดภัยจากเส้นยิง
+            
+            return crossMag < safetyMargin
+        end
+        
+        -- เลือกจุดที่ดีที่สุด: ปลอดภัย + ไม่ตัดเส้นทาง + ไกลพอ
+        local bestTarget = nil
+        local bestScore = math.huge
+        
+        for _, candidate in ipairs(dodgeCandidates) do
+            local testTarget = myPos + (candidate.dir * candidate.dist)
+            
+            -- เช็ค 1: เป็นจุดที่เดินไปถึงได้ไหม (ไม่มีกำแพง/เหว)
+            if isSafePosition(myPos, testTarget) then
+                -- เช็ค 2: จุดนี้ไม่ตัดเส้น trajectory ของกระสุน
+                if not isCuttingTrajectory(myPos, testTarget, projectileDir, hazPosXZ) then
+                    -- คะแนน: ยิ่ง priority ต่ำ + ระยะเหมาะสม =越好
+                    local score = candidate.priority + (math.abs(candidate.dist - baseDodgeDist) * 0.1)
+                    
+                    if score < bestScore then
+                        bestScore = score
+                        bestTarget = testTarget
+                    end
+                end
             end
+        end
+        
+        -- Fallback: ถ้าทุกจุดตัดเส้น trajectory หรือติดหมด ให้ใช้ findSafeDodge แบบ 360 องศา
+        if not bestTarget then
+            bestTarget = findSafeDodge(myPos, pureRight, baseDodgeDist)
+        end
+        
+        -- บังคับหลบถ้ามีจุดปลอดภัย
+        if bestTarget then
+            myRoot.CFrame = CFrame.new(bestTarget)
         end
     end
 end
