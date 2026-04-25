@@ -218,8 +218,15 @@ local function executeSmartDodgeV7(hazard)
 
     if distXZ > shieldRange then return end
 
-    -- [กรณีที่ 1] หลบวงเวทย์ (Model) -> ใช้การวาร์ป (Teleport) เหมือนเดิม
+    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด) - วาร์ปออกเหมือนเดิม + เปิด CanCollide
     if isAoE then
+        -- เปิด CanCollide สำหรับทุก Part ใน Model เพื่อไม่ให้เดินทะลุ
+        for _, part in pairs(hazard:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = true
+            end
+        end
+
         if distXZ < hazardRadius + 1.5 then 
             local escapeDir = (myPosXZ - hazPosXZ)
             if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
@@ -263,9 +270,11 @@ local function executeSmartDodgeV7(hazard)
                 local predictDist = 16 
                 local futurePos = hazardPos + (projectileDir * predictDist)
                 
-                -- คำนวณทิศทางการหลบ (ตั้งฉากกับทิศทางกระสุน)
-                local rightDir = Vector3.new(-projectileDir.Z, 0, projectileDir.X)
-                if math.random() > 0.5 then rightDir = -rightDir end
+                -- บังคับหลบทันที Overrides การควบคุมผู้เล่น
+                -- สั่งหยุดการเคลื่อนที่เดิมก่อน
+                myHuman.MoveDirection = Vector3.new(0, 0, 0)
+                -- แล้วสั่งเดินไปจุดปลอดภัยทันที
+                myHuman:MoveTo(finalTarget)
                 
                 local stepDistance = 6 
                 local dodgeTarget = myPos + (rightDir * stepDistance)
