@@ -258,49 +258,19 @@ local function executeSmartDodgeV5(hazard)
         
         -- ถ้าผู้เล่นอยู่ใกล้แนวกระสุนเกินไป ให้จัดการกับ BodyVelocity
         if distanceToLine < safeDistance then
-            -- หา BodyVelocity หรือ LinearVelocity ในกระสุน
-            local bodyVelocity = hazard:FindFirstChildOfClass("BodyVelocity") or hazard:FindFirstChildOfClass("LinearVelocity")
+            -- หา BodyVelocity หรือ LinearVelocity ทั้งหมดในกระสุนและปิดการทำงาน
+            for _, velocityObj in pairs(hazard:GetChildren()) do
+                if velocityObj:IsA("BodyVelocity") or velocityObj:IsA("LinearVelocity") then
+                    velocityObj.Velocity = Vector3.new(0, 0, 0)
+                    velocityObj.MaxForce = Vector3.new(0, 0, 0)
+                end
+            end
             
-            if bodyVelocity then
-                -- วิธีที่ 1: เบนทิศทางกระสุนให้พุ่งขึ้นฟ้า (เนียนที่สุด)
-                local deflectDir = Vector3.new(0, 1, 0) -- พุ่งขึ้นข้างบน
-                bodyVelocity.Velocity = deflectDir * hazardVel.Magnitude
-                
-                -- วิธีที่ 2 (ทางเลือก): ถ้าอยากปัดออกด้านข้างแทน
-                -- local perpendicularDir = (myPos - pointOnLine).Unit
-                -- if perpendicularDir.Magnitude == 0 then
-                --     perpendicularDir = projectileDir:Cross(Vector3.new(0, 1, 0)).Unit
-                -- end
-                -- perpendicularDir = Vector3.new(perpendicularDir.X, 0, perpendicularDir.Z).Unit
-                -- bodyVelocity.Velocity = perpendicularDir * hazardVel.Magnitude
-            else
-                -- ถ้าไม่มี BodyVelocity (ใช้วิธีอื่นเคลื่อนที่) ค่อยวาร์ปผู้เล่น
-                local perpendicularDir = (myPos - pointOnLine).Unit
-                if perpendicularDir.Magnitude == 0 then
-                    perpendicularDir = projectileDir:Cross(Vector3.new(0, 1, 0)).Unit
-                    if perpendicularDir.Magnitude == 0 then
-                        perpendicularDir = projectileDir:Cross(Vector3.new(1, 0, 0)).Unit
-                    end
-                end
-                perpendicularDir = Vector3.new(perpendicularDir.X, 0, perpendicularDir.Z).Unit
-                local warpDistance = safeDistance + 5
-                local warpTarget = myPos + (perpendicularDir * warpDistance)
-                warpTarget = Vector3.new(warpTarget.X, myPos.Y + 0.5, warpTarget.Z)
-                if isSafePosition(myPos, warpTarget) then
-                    myRoot.CFrame = CFrame.new(warpTarget)
-                else
-                    local alternateTarget = myPos - (perpendicularDir * warpDistance)
-                    alternateTarget = Vector3.new(alternateTarget.X, myPos.Y + 0.5, alternateTarget.Z)
-                    if isSafePosition(myPos, alternateTarget) then
-                        myRoot.CFrame = CFrame.new(alternateTarget)
-                    else
-                        local safeTarget = findSafeDodge(myPos, perpendicularDir, warpDistance)
-                        if safeTarget then
-                            safeTarget = Vector3.new(safeTarget.X, math.max(safeTarget.Y, myPos.Y), safeTarget.Z)
-                            myRoot.CFrame = CFrame.new(safeTarget)
-                        end
-                    end
-                end
+            -- ทางเลือกเสริม: ถ้ายังมีแรงอื่นๆ อยู่ ให้ตั้งค่า Velocity ของ Part หลักเป็น 0 ด้วย
+            if hazard:IsA("BasePart") then
+                hazard.Velocity = Vector3.new(0, 0, 0)
+            elseif hazard.PrimaryPart then
+                hazard.PrimaryPart.Velocity = Vector3.new(0, 0, 0)
             end
         end
     end
