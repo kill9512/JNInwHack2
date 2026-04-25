@@ -397,6 +397,7 @@ task.spawn(function()
                 -- ✅ [แก้ไขจุดที่ 2] เพิ่มลอจิก Closest และ Farthest ควบคู่กับระบบ Max/Min HP เดิม
                 local bestHP = (SelectedMode == "Max HP") and -1 or math.huge
                 local bestDist = (SelectedMode == "Farthest") and -1 or math.huge
+                local candidates = {} -- เก็บรายชื่อผู้เล่นที่มีค่า HP หรือระยะทางดีที่สุด
                 
                 local myChar = LocalPlayer.Character
                 local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -418,18 +419,29 @@ task.spawn(function()
                             end
                             
                             if (SelectedMode == "Max HP" and hp > bestHP) or (SelectedMode == "Min HP" and hp < bestHP) then
-                                bestHP = hp; target = p
+                                bestHP = hp
+                                candidates = {p} -- รีเซ็ตรายการผู้สมัครใหม่
+                            elseif hp == bestHP then
+                                table.insert(candidates, p) -- เพิ่มผู้สมัครที่มีค่าเท่ากัน
                             end
                             
                         -- เช็คโหมดระยะทาง (ต้องมี myRoot ถึงจะหาระยะได้)
                         elseif (SelectedMode == "Closest" or SelectedMode == "Farthest") and myRoot and p.Character:FindFirstChild("HumanoidRootPart") then
                             local dist = (p.Character.HumanoidRootPart.Position - myRoot.Position).Magnitude
                             if (SelectedMode == "Farthest" and dist > bestDist) or (SelectedMode == "Closest" and dist < bestDist) then
-                                bestDist = dist; target = p
+                                bestDist = dist
+                                candidates = {p} -- รีเซ็ตรายการผู้สมัครใหม่
+                            elseif dist == bestDist then
+                                table.insert(candidates, p) -- เพิ่มผู้สมัครที่มีระยะเท่ากัน
                             end
                         end
                         
                     end
+                end
+                
+                -- สุ่มเลือกจากกลุ่มผู้สมัครที่มีค่าดีที่สุด
+                if #candidates > 0 then
+                    target = candidates[math.random(1, #candidates)]
                 end
             end
 
