@@ -166,6 +166,62 @@ local function findSafeDodge(startPos, baseDir, distance)
     return startPos + (baseDir * (distance * 0.4))
 end
 
+-- ฟังก์ชันตรวจสอบและปรับตำแหน่งปลายทางไม่ให้ติด Model (Anti-Clip)
+local function validateTargetPosition(char, targetPos)
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return targetPos end
+    
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return targetPos end
+    
+    -- ขนาดของตัวละครโดยประมาณ (ใช้ HumanoidRadius หรือค่าเฉลี่ย)
+    local radius = 2.5 
+    local checkHeight = 4.5
+    
+    rayParams.FilterDescendantsInstances = {char}
+    
+    -- ตรวจสอบจุดที่จะวาร์ปโดยการยิง Raycast ลงล่าง และรอบทิศทาง
+    local groundCheckPos = targetPos + Vector3.new(0, 3, 0)
+    local groundHit = workspace:Raycast(groundCheckPos, Vector3.new(0, -checkHeight - 2, 0), rayParams)
+    
+    -- ถ้าไม่มีพื้นรองรับ ให้เลื่อนตำแหน่งหาจุดที่มีพื้น
+    if not groundHit then
+        -- พยายามหาพื้นใกล้เคียงโดยการสุ่มมุม
+        for _, angle in ipairs({0, 45, 90, 135, 180, 225, 270, 315}) do
+            local offsetDir = CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(1, 0, 0)
+            local searchPos = targetPos + (offsetDir * 3)
+            local searchGroundHit = workspace:Raycast(searchPos + Vector3.new(0, 3, 0), Vector3.new(0, -checkHeight - 2, 0), rayParams)
+            if searchGroundHit then
+                targetPos = searchPos
+                groundHit = searchGroundHit
+                break
+            end
+        end
+    end
+    
+    -- ถ้ายังไม่มีพื้น ให้คืนตำแหน่งเดิม (ยอมเสี่ยงดีกว่าไม่ขยับ)
+    if not groundHit then return targetPos end
+    
+    -- ปรับความสูงให้ยืนบนพื้นพอดี
+    local finalPos = groundHit.Position + Vector3.new(0, 2.5, 0)
+    
+    -- ตรวจสอบการชนในแนวราบ (ป้องกันการติดกำแพง)
+    local directions = {
+        Vector3.new(1, 0, 0), Vector3.new(-1, 0, 0),
+        Vector3.new(0, 0, 1), Vector3.new(0, 0, -1)
+    }
+    
+    for _, dir in ipairs(directions) do
+        local sideHit = workspace:Raycast(finalPos, dir * radius, rayParams)
+        if sideHit then
+            -- ถ้าเจอสิ่งกีดขวาง ให้ดันตำแหน่งออกไปในทิศตรงข้าม
+            finalPos = finalPos - (dir * (radius - sideHit.Distance + 0.5))
+        end
+    end
+    
+    return finalPos
+end
+
 -- --- [ระบบอัปเดต V7] โคตรแม่นยำ (ดึงค่า BodyVelocity) ---
 local function executeSmartDodgeV5(hazard)
     if not hazard or not hazard.Parent then return end
@@ -229,7 +285,16 @@ local function executeSmartDodgeV5(hazard)
             local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove)
             
             if safeTarget then
-                myRoot.CFrame = CFrame.new(safeTarget)
+                -- ใช้ฟังก์ชันตรวจสอบตำแหน่งปลายทางเพื่อป้องกันการติด Model
+                local validatedTarget = validateTargetPosition(myChar, safeTarget)
+                
+                -- ใช้ Humanoid:MoveTo แทนการตั้ง CFrame โดยตรง เพื่อป้องกันการติด model
+                local hum = myChar:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    hum:MoveTo(validatedTarget)
+                else
+                    myRoot.CFrame = CFrame.new(validatedTarget)
+                end
             end
         end
 
@@ -299,7 +364,16 @@ local function executeSmartDodgeV5(hazard)
                 end
 
                 if safeTarget then
-                    myRoot.CFrame = CFrame.new(safeTarget)
+                    -- ใช้ฟังก์ชันตรวจสอบตำแหน่งปลายทางเพื่อป้องกันการติด Model
+                    local validatedTarget = validateTargetPosition(myChar, safeTarget)
+                    
+                    -- ใช้ Humanoid:MoveTo แทนการตั้ง CFrame โดยตรง เพื่อป้องกันการติด model
+                    local hum = myChar:FindFirstChildOfClass("Humanoid")
+                    if hum then
+                        hum:MoveTo(validatedTarget)
+                    else
+                        myRoot.CFrame = CFrame.new(validatedTarget)
+                    end
                 end
             end
         end
