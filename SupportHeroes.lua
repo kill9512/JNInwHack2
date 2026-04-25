@@ -7,6 +7,7 @@ local Players = game.Players
 local LocalPlayer = Players.LocalPlayer
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
+local Debris = game:GetService("Debris")
 
 -- --- Settings Variables ---
 local SelectedMode = "Manual"
@@ -18,6 +19,7 @@ local debugEnabled = false
 local autoCoinEnabled = false 
 local autoDodgeEnabled = false
 local shieldRange = 100 
+local dodgeSpeedMultiplier = 2.5 -- ความเร็วในการหลบข้าง
 
 local currentWaypoints = {}
 local currentWaypointIndex = 1
@@ -32,6 +34,10 @@ local lastPosition = Vector3.new()
 local lastMoveTick = os.clock()
 local randomTarget = nil 
 
+-- สถานะการหลบกระสุนเพื่อป้องกันการสั่น
+local lastDodgeTime = 0
+local dodgeCooldown = 0.1 -- เวลารอระหว่างการหลบแต่ละครั้ง (วินาที)
+
 -- --- UI Sections ---
 local SupportSection = Tab:NewSection("Support Functions") 
 local Section = Tab:NewSection("Interior & Building Navigation")
@@ -42,7 +48,7 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V5", "หลบขอบวงเวทย์ & หยุดกระสุน (ไม่วาร์ป)", function(state)
+SupportSection:NewToggle("Smart Dodge V6 (Sidestep)", "หลบวงเวทย์ & เดินหลบกระสุน (ไม่แก้ค่าเซิร์ฟเวอร์)", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -143,7 +149,7 @@ local function isSafePosition(startPos, targetPos)
     return true
 end
 
--- [ใหม่] ถัาทางหลักติดกำแพง ให้หมุนหาทางออกรอบตัว 360 องศา
+-- [ใหม่] ถ้าทางหลักติดกำแพง ให้หมุนหาทางออกรอบตัว 360 องศา
 local function findSafeDodge(startPos, baseDir, distance)
     -- ลองทางหลักก่อน
     local target = startPos + (baseDir * distance)
@@ -163,25 +169,28 @@ local function findSafeDodge(startPos, baseDir, distance)
     return startPos + (baseDir * (distance * 0.4))
 end
 
--- --- [ระบบอัปเดต V7] Micro-Teleport หลบกระสุน (ไม่แก้ค่า Server) ---
-local function executeSmartDodgeV5(hazard)
+-- --- [ระบบอัปเดต V6] Predictive Sidestep (ไม่แก้ค่า Server) ---
+local function executeSmartDodgeV6(hazard)
     if not hazard or not hazard.Parent then return end
     
+    local currentTime = tick()
+    if currentTime - lastDodgeTime < dodgeCooldown then return end
+
     local isAoE = hazard:IsA("Model")
-    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$") or hazard.Name:match("Bullet") or hazard.Name:match("Fireball"))
+    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$") or hazard.Name:match("Bullet$") or hazard.Name:match("Fireball$"))
     
     if not (isAoE or isProjectile) then return end
 
     local myChar = LocalPlayer.Character
-    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
     local myHuman = myChar and myChar:FindFirstChildOfClass("Humanoid")
-    if not myRoot or not myHuman then return end
+    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    
+    if not myRoot or not myHuman or myHuman.Health <= 0 then return end
 
     local hazardPos = nil
     local hazardRadius = 2 
-    local hazardVel = Vector3.new()
-
-    -- วัดขนาดจาก Part ข้างใน Model
+    
+    -- หาตำแหน่งและขนาดของอันตราย
     if isAoE then
         local parts = {}
         for _, v in pairs(hazard:GetDescendants()) do
@@ -203,7 +212,6 @@ local function executeSmartDodgeV5(hazard)
         end
     elseif hazard:IsA("BasePart") then
         hazardPos = hazard.Position
-        hazardVel = hazard.Velocity
         hazardRadius = math.max(hazard.Size.X, hazard.Size.Z) / 2
     end
 
@@ -216,75 +224,85 @@ local function executeSmartDodgeV5(hazard)
 
     if distXZ > shieldRange then return end
 
-    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด) - วาร์ปออกด้านข้าง
+    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด) - ขยับออกด้านนอก
     if isAoE then
         if distXZ < hazardRadius + 1.5 then 
             local escapeDir = (myPosXZ - hazPosXZ)
             if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
             escapeDir = escapeDir.Unit
             
-            local distanceToMove = (hazardRadius + 2.5) - distXZ
-            local targetPos = myPos + (escapeDir * distanceToMove)
+            local distanceToMove = (hazardRadius + 1.5) - distXZ
+            local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove + 2) -- เพิ่มระยะเผื่อ
             
-            -- เช็คพื้นก่อนวาร์ป ป้องกันตกเหว
-            local groundCheck = workspace:Raycast(targetPos + Vector3.new(0, 2, 0), Vector3.new(0, -4, 0), rayParams)
-            local newY = myPos.Y
-            if groundCheck then
-                if groundCheck.Position.Y > myPos.Y then newY = groundCheck.Position.Y + 2.5 end
+            -- ตรวจสอบพื้นก่อนย้าย
+            local checkDown = workspace:Raycast(safeTarget + Vector3.new(0, 5, 0), Vector3.new(0, -10, 0), rayParams)
+            if checkDown then
+                myRoot.CFrame = CFrame.new(Vector3.new(safeTarget.X, checkDown.Position.Y + 2.5, safeTarget.Z))
+                lastDodgeTime = currentTime
             end
-            -- วาร์ปเฉพาะแนวราบ ตรึง Y ไว้
-            myRoot.CFrame = CFrame.new(targetPos.X, newY, targetPos.Z)
         end
 
-    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) ด้วย Micro-Teleport
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Predictive Sidestep)
     elseif isProjectile then
-        -- คำนวณทิศทางกระสุน
-        local projectileDir = hazardVel.Unit
-        if projectileDir.Magnitude == 0 or projectileDir ~= projectileDir then -- ตรวจสอบ NaN
-            projectileDir = (myPosXZ - hazPosXZ).Unit
-        end
+        local hazardVel = hazard.Velocity
+        local projectileSpeed = hazardVel.Magnitude
         
-        -- คำนวณจุดที่ใกล้ผู้เล่นที่สุดบนเส้นทางกระสุน
+        -- ถ้ากระสุนไม่เคลื่อนที่ หรือช้าเกินไป ไม่ต้องหลบ (อาจเป็นกับดักวางนิ่ง)
+        if projectileSpeed < 5 then return end
+        
+        local projectileDir = hazardVel.Unit
+        
+        -- คำนวณจุดที่ใกล้ผู้เล่นที่สุดบนเส้นทางการบินของกระสุน
         local toPlayer = myPos - hazardPos
         local projection = toPlayer:Dot(projectileDir)
-        local closestPoint = hazardPos + (projectileDir * projection)
         
-        -- ระยะจากผู้เล่นถึงแนวกระสุน
-        local distToLine = (myPos - closestPoint).Magnitude
-        
-        -- ระยะปลอดภัย (รัศมีกระสุน + ระยะเผื่อความปลอดภัย)
-        local safeMargin = hazardRadius + 4
-        
-        -- เช็คทิศทางว่ากระสุนกำลังพุ่งมาหาเราไหม (ไม่ใช่พุ่งผ่านไปแล้ว)
-        local isComingTowards = projection > 0 and (closestPoint - myPos).Magnitude < (hazardVel.Magnitude * 0.5) + 10
-
-        if distToLine < safeMargin and isComingTowards then
-            -- หาเวกเตอร์ตั้งฉากเพื่อเลื่อนตัวออกข้าง
-            local dodgeDir = (myPos - closestPoint).Unit
+        -- ถ้า projection เป็นลบ แสดงว่ากระสุนวิ่งหนีผู้เล่น หรือยังไม่มาถึงจุดที่ขนานกับผู้เล่น
+        -- แต่เราเช็คเผื่อไว้หน่อยกันกระสุนโค้ง
+        if projection > -10 then 
+            local closestPoint = hazardPos + (projectileDir * projection)
+            local distanceToLine = (myPos - closestPoint).Magnitude
             
-            -- ถ้าอยู่ตรงกลางเป๊ะๆ ให้สุ่มทิศทางซ้ายขวา
-            if dodgeDir.Magnitude == 0 or dodgeDir ~= dodgeDir then
-                local rightVec = projectileDir:Cross(Vector3.new(0, 1, 0))
-                dodgeDir = rightVec.Unit
+            -- ระยะปลอดภัย (รัศมีกระสุน + ระยะตัวผู้เล่น + เผื่อ误差)
+            local safeDistance = hazardRadius + 4 
+            
+            if distanceToLine < safeDistance then
+                -- คำนวณทิศทางการหลบ (ตั้งฉากกับทิศทางกระสุน)
+                -- เลือกด้านซ้ายหรือขวาสุ่มๆ หรือด้านที่ว่างกว่า
+                local rightDir = Vector3.new(-projectileDir.Z, 0, projectileDir.X)
+                
+                -- สุ่มซ้ายหรือขวา เพื่อไม่ให้บอทหลบทิศทางเดิมตลอด
+                if math.random() > 0.5 then
+                    rightDir = -rightDir
+                end
+                
+                -- ระยะที่จะก้าวข้าม (Sidestep distance)
+                local stepDistance = 6 
+                local dodgeTarget = myPos + (rightDir * stepDistance)
+                
+                -- ตรวจสอบว่าจุดที่จะไปมีพื้นรองรับไหม (กันตกเหว)
+                local rayStart = dodgeTarget + Vector3.new(0, 5, 0)
+                local rayHit = workspace:Raycast(rayStart, Vector3.new(0, -10, 0), rayParams)
+                
+                if rayHit then
+                    -- ปรับระดับความสูงให้เท่ากับพื้นปกติ ไม่ลอยหรือจม
+                    local finalPos = Vector3.new(dodgeTarget.X, rayHit.Position.Y + 2.5, dodgeTarget.Z)
+                    
+                    -- สั่งเดินแทนการวาร์ปตรงๆ เพื่อให้ฟิสิกส์ Humanoid ทำงาน (ลดการกระตุก)
+                    -- แต่ใช้ MoveTo ด้วยความเร็วสูงจำลองการวาร์ป
+                    myHuman:MoveTo(finalPos)
+                    
+                    -- แก้ไข WalkSpeed ชั่วคราวเพื่อให้ถึงจุดทันที
+                    local originalSpeed = myHuman.WalkSpeed
+                    myHuman.WalkSpeed = 500 -- เร่งความเร็วสูงสุด
+                    
+                    task.spawn(function()
+                        task.wait(0.1)
+                        if myHuman then myHuman.WalkSpeed = originalSpeed end
+                    end)
+                    
+                    lastDodgeTime = currentTime
+                end
             end
-            
-            -- จุดปลายทางที่จะวาร์ป (เลื่อนออกข้างนิดหน่อย)
-            local dodgeTarget = myPos + (dodgeDir * (safeMargin + 1))
-            
-            -- **สำคัญ**: ตรึงค่า Y ไว้ที่ระดับเดิม หรือเช็คพื้นใกล้เคียง เพื่อไม่ให้ลอยหรือจม
-            local rayDown = workspace:Raycast(dodgeTarget + Vector3.new(0, 3, 0), Vector3.new(0, -10, 0), rayParams)
-            local finalY = myPos.Y -- ค่าเริ่มต้นใช้ความสูงเดิม
-            
-            if rayDown then
-                -- ถ้าเจอพื้น ให้ใช้ความสูงเหนือพื้นนิดหน่อย
-                finalY = rayDown.Position.Y + 2.5
-            else
-                -- ถ้าไม่เจอพื้น (เหว) ให้คงความสูงเดิมไว้ (อย่าให้ตก)
-                finalY = myPos.Y
-            end
-            
-            -- สั่งวาร์ปทันที (Micro-Teleport)
-            myRoot.CFrame = CFrame.new(dodgeTarget.X, finalY, dodgeTarget.Z)
         end
     end
 end
@@ -302,22 +320,7 @@ task.spawn(function()
                     local treasure = dungeon and dungeon:FindFirstChild("Treasure")
                     if treasure then
                         for _, item in pairs(treasure:GetChildren()) do
-                            if item.Name == "CoinStack" then
-                                if item:IsA("BasePart") then
-                                    item.CanCollide = false
-                                    item.CFrame = myRoot.CFrame
-                                elseif item:IsA("Model") then
-                                    item:PivotTo(myRoot.CFrame)
-                                    for _, part in pairs(item:GetDescendants()) do
-                                        if part:IsA("BasePart") then
-                                            part.CanCollide = false
-                                            if part:FindFirstChild("TouchInterest") then
-                                                part.CFrame = myRoot.CFrame
-                                            end
-                                        end
-                                    end
-                                end
-                            elseif item.Name == "TreasureChest" then
+                            if item.Name == "CoinStack" or item.Name == "TreasureChest" then
                                 if item:IsA("BasePart") then
                                     item.CanCollide = false
                                     item.CFrame = myRoot.CFrame
@@ -338,15 +341,15 @@ task.spawn(function()
     end
 end)
 
--- Loop สแกนแบบ Stepped (รันก่อนฟิสิกส์ชนกัน)
-RunService.Stepped:Connect(function()
+-- ใช้ Heartbeat สำหรับการหลบกระสุนเพื่อให้ทันกับฟิสิกส์และการเคลื่อนที่
+RunService.Heartbeat:Connect(function()
     if autoDodgeEnabled then
         pcall(function()
             local dungeon = workspace:FindFirstChild("Dungeon")
             local effects = dungeon and dungeon:FindFirstChild("Effects")
             if effects then
                 for _, v in pairs(effects:GetChildren()) do
-                    executeSmartDodgeV5(v)
+                    executeSmartDodgeV6(v)
                 end
             end
         end)
@@ -361,7 +364,7 @@ task.spawn(function()
             pcall(function()
                 if getnilinstances then
                     for _, v in pairs(getnilinstances()) do
-                        executeSmartDodgeV5(v)
+                        executeSmartDodgeV6(v)
                     end
                 end
             end)
