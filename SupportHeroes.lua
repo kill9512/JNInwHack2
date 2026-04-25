@@ -7,7 +7,6 @@ local Players = game.Players
 local LocalPlayer = Players.LocalPlayer
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
-local Debris = game:GetService("Debris")
 
 -- --- Settings Variables ---
 local SelectedMode = "Manual"
@@ -33,9 +32,9 @@ local lastPosition = Vector3.new()
 local lastMoveTick = os.clock()
 local randomTarget = nil 
 
--- Cooldown การหลบเพื่อไม่ให้สั่งเดินรัวๆ
+-- Dodge Cooldown
 local lastDodgeTime = 0
-local dodgeCooldown = 0.3 -- รอ 0.3 วิ ก่อนตัดสินใจหลบครั้งใหม่
+local dodgeCooldown = 0.3 
 
 -- --- UI Sections ---
 local SupportSection = Tab:NewSection("Support Functions") 
@@ -47,7 +46,7 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V7 (Natural Walk)", "เดินหลบกระสุนแบบธรรมชาติ (Predict 10 Stud)", function(state)
+SupportSection:NewToggle("Smart Dodge V7 (Hybrid)", "วาร์ปหนีวงเวทย์ & เดินหลบกระสุน", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -131,16 +130,14 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- --- ระบบสแกนหาจุดปลอดภัย (แก้บัคติดมุม) ---
+-- --- ระบบสแกนหาจุดปลอดภัย ---
 local function isSafePosition(startPos, targetPos)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
     
-    -- เช็คกำแพงขวางทาง
     local dir = targetPos - startPos
     local wallHit = workspace:Raycast(startPos, dir, rayParams)
     if wallHit then return false end 
 
-    -- เช็คเหว (ยิงเลเซอร์ลงพื้น)
     local groundOrigin = targetPos + Vector3.new(0, 3, 0)
     local groundHit = workspace:Raycast(groundOrigin, Vector3.new(0, -10, 0), rayParams)
     if not groundHit then return false end 
@@ -148,13 +145,10 @@ local function isSafePosition(startPos, targetPos)
     return true
 end
 
--- [ใหม่] ถ้าทางหลักติดกำแพง ให้หมุนหาทางออกรอบตัว 360 องศา
 local function findSafeDodge(startPos, baseDir, distance)
-    -- ลองทางหลักก่อน
     local target = startPos + (baseDir * distance)
     if isSafePosition(startPos, target) then return target end
     
-    -- ถ้าติดกำแพง ลองกวาดมุม 45, 90, 135, 180 องศา ทั้งซ้ายขวา
     local angles = {45, -45, 90, -90, 135, -135, 180}
     for _, angle in ipairs(angles) do
         local rotatedDir = CFrame.Angles(0, math.rad(angle), 0) * baseDir
@@ -164,22 +158,15 @@ local function findSafeDodge(startPos, baseDir, distance)
         end
     end
     
-    -- ถ้าติดทุกทางจริงๆ (โดนขังขอบแมพ) ยอมขยับไปทางหลักนิดนึงก็ยังดี
     return startPos + (baseDir * (distance * 0.4))
 end
 
--- --- [ระบบอัปเดต V7] Natural Sidestep with Raycast Prediction ---
+-- --- [ระบบอัปเดต V7] Hybrid: วาร์ปวงเวทย์ / เดินหลบกระสุน ---
 local function executeSmartDodgeV7(hazard)
     if not hazard or not hazard.Parent then return end
 
     local currentTime = tick()
-    -- เช็ค Cooldown เพื่อไม่ให้สั่งเดินรัวเกินไป
     if currentTime - lastDodgeTime < dodgeCooldown then return end
-
-    local isAoE = hazard:IsA("Model")
-    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$") or hazard.Name:match("Bullet$") or hazard.Name:match("Fireball$"))
-    
-    if not (isAoE or isProjectile) then return end
 
     local myChar = LocalPlayer.Character
     local myHuman = myChar and myChar:FindFirstChildOfClass("Humanoid")
@@ -187,10 +174,17 @@ local function executeSmartDodgeV7(hazard)
     
     if not myRoot or not myHuman or myHuman.Health <= 0 then return end
 
+    -- ตรวจสอบประเภทอันตราย
+    local isAoE = hazard:IsA("Model")
+    -- แก้ไข: ลบ Bullet และ Fireball ออก เหลือแค่สิ่งที่น่าจะมีในเกมจริง
+    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$"))
+    
+    if not (isAoE or isProjectile) then return end
+
     local hazardPos = nil
     local hazardRadius = 2 
     
-    -- หาตำแหน่งและขนาดของอันตราย
+    -- หาตำแหน่งและขนาด
     if isAoE then
         local parts = {}
         for _, v in pairs(hazard:GetDescendants()) do
@@ -224,7 +218,7 @@ local function executeSmartDodgeV7(hazard)
 
     if distXZ > shieldRange then return end
 
-    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด) - ขยับออกด้านนอก (คงเดิมแต่ปรับให้เดินแทนวาร์ปถ้าเป็นไปได้)
+    -- [กรณีที่ 1] หลบวงเวทย์ (Model) -> ใช้การวาร์ป (Teleport) เหมือนเดิม
     if isAoE then
         if distXZ < hazardRadius + 1.5 then 
             local escapeDir = (myPosXZ - hazPosXZ)
@@ -234,95 +228,59 @@ local function executeSmartDodgeV7(hazard)
             local distanceToMove = (hazardRadius + 1.5) - distXZ
             local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove + 2)
             
-            -- ตรวจสอบพื้นก่อนย้าย
+            -- ตรวจสอบพื้นก่อนวาร์ป
             local checkDown = workspace:Raycast(safeTarget + Vector3.new(0, 5, 0), Vector3.new(0, -10, 0), rayParams)
             if checkDown then
-                -- ใช้ MoveTo แทน CFrame เพื่อให้เดินออกไปอย่างนุ่มนวล
-                myHuman:MoveTo(Vector3.new(safeTarget.X, checkDown.Position.Y + 2.5, safeTarget.Z))
+                myRoot.CFrame = CFrame.new(Vector3.new(safeTarget.X, checkDown.Position.Y + 2.5, safeTarget.Z))
                 lastDodgeTime = currentTime
             end
         end
 
-    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Predictive Raycast 10 Stud)
+    -- [กรณีที่ 2] หลบกระสุน (Arrow, Magic) -> ใช้การเดิน (Walk)
     elseif isProjectile then
         local hazardVel = hazard.Velocity
         local projectileSpeed = hazardVel.Magnitude
         
-        -- ถ้ากระสุนช้ามากหรือนิ่ง ไม่ต้องหลบ (อาจเป็นกับดักวางนิ่ง)
+        -- ถ้ากระสุนช้าเกินไปหรือหยุดนิ่ง ไม่ต้องหลบ
         if projectileSpeed < 5 then return end
         
         local projectileDir = hazardVel.Unit
         
-        -- 1. เช็คว่ากระสุนกำลังมุ่งหน้ามาหาผู้เล่นหรือไม่ (Dot Product)
-        -- ถ้าค่าเป็นบวก แสดงว่ามุมระหว่าง "ทิศกระสุน" กับ "ทิศไปผู้เล่น" น้อยกว่า 90 องศา (กำลังจะมาชน)
-        local toPlayer = (myPos - hazardPos).Unit
-        local dotProduct = projectileDir:Dot(toPlayer)
+        -- คำนวณจุดที่ใกล้ผู้เล่นที่สุดบนเส้นทางกระสุน
+        local toPlayer = myPos - hazardPos
+        local projection = toPlayer:Dot(projectileDir)
         
-        -- ถ้า dotProduct ต่ำมาก (เช่น < 0.2) แปลว่ากระสุนเฉียดๆ หรือวิ่งผ่านไปแล้ว ไม่ต้องหลบ
-        if dotProduct < 0.2 then return end
-
-        -- 2. Raycast ทำนายเส้นทางยาว 10 Stud จากตัวผู้เล่น ไปในทิศทางตั้งฉากกับกระสุน
-        -- เพื่อดูว่าถ้าเราไม่ขยับ กระสุนจะชนไหม?
-        -- วิธีที่ดีกว่า: ยิง Raycast จากผู้เล่น ไปยังทิศทางที่กระสุนกำลังจะวิ่งผ่าน (Predicted Path)
-        
-        -- คำนวณจุดที่ใกล้ผู้เล่นที่สุดบนเส้นทางการบินของกระสุน
-        local toPlayerVec = myPos - hazardPos
-        local projection = toPlayerVec:Dot(projectileDir)
-        local closestPoint = hazardPos + (projectileDir * projection)
-        local distanceToLine = (myPos - closestPoint).Magnitude
-        
-        -- ระยะอันตราย (รัศมีกระสุน + ตัวผู้เล่น + เผื่อ误差)
-        local dangerZone = hazardRadius + 4 
-        
-        -- ถ้าอยู่ในระยะประชิดที่จะชน
-        if distanceToLine < dangerZone then
-            -- ตรวจสอบเพิ่มเติมด้วย Raycast ยาว 10 Stud ในทิศทางที่กระสุนจะวิ่งผ่านตำแหน่งเรา
-            -- เพื่อยืนยันว่ามันคือ "อนาคต" ที่จะชน ไม่ใช่ "อดีต" ที่ผ่านไป
-            local predictLength = 10
-            local rayStart = closestPoint - (projectileDir * 2) -- ถอยหลังมาหน่อยกันพลาด
-            local rayEnd = rayStart + (projectileDir * predictLength)
+        -- เช็คเฉพาะกระสุนที่กำลังจะมาถึง หรือกำลังผ่านพอดี (ไม่เช็คตัวที่ผ่านไปแล้วไกลๆ)
+        if projection > -5 and projection < 20 then 
+            local closestPoint = hazardPos + (projectileDir * projection)
+            local distanceToLine = (myPos - closestPoint).Magnitude
             
-            local hit = workspace:Raycast(rayStart, rayEnd - rayStart, rayParams)
+            -- ระยะปลอดภัย
+            local safeDistance = hazardRadius + 4 
             
-            -- ถ้าเจอะอะไรในแนวกระสุน (ซึ่งควรจะเป็นตัวเรา หรือพื้นที่รอบๆ เราที่กำลังจะถูกชน)
-            -- แต่เพื่อให้ชัวร์ว่าเราจะไม่หลบกระสุนที่เพิ่งผ่านไป:
-            -- เราเช็คเวลาโดยประมาณ: กระสุนจะใช้เวลาเท่าไหร่กว่าจะถึงจุดที่ใกล้เราที่สุด
-            local timeToImpact = projection / projectileSpeed
-            
-            -- ถ้าเวลาที่จะชนเป็นลบ (< 0) แปลว่ากระสุนวิ่งผ่านจุดที่ใกล้เราที่สุดไปแล้ว -> ไม่ต้องหลบ!
-            if timeToImpact < 0 then return end
-            
-            -- ถ้าเวลาที่จะชนน้อยมาก (< 0.1) และเรากำลังขยับอยู่แล้ว อาจจะไม่ต้องสั่งเพิ่ม
-            if timeToImpact > 0.5 then 
-                -- ยังอีกนาน ค่อยว่ากันใหม่ frame หน้า
-                return 
-            end
-
-            -- ถึงตรงนี้แสดงว่า: กำลังจะชนแน่ๆ ภายในเสี้ยววินาที
-            -- สั่งเดินหลบด้านข้าง (Sidestep) ด้วย MoveTo เพื่อความชัวร์
-            local rightDir = Vector3.new(-projectileDir.Z, 0, projectileDir.X)
-            
-            -- สุ่มซ้ายขวา
-            if math.random() > 0.5 then
-                rightDir = -rightDir
-            end
-            
-            -- คำนวณจุดปลายทางที่จะเดินไป (ห่างไป 6 บล็อค ด้านข้าง)
-            local walkTargetPos = myPos + (rightDir * 6)
-            
-            -- ตรวจสอบพื้นก่อนเดินไปกันตกเหว
-            local rayStart = walkTargetPos + Vector3.new(0, 5, 0)
-            local rayHit = workspace:Raycast(rayStart, Vector3.new(0, -10, 0), rayParams)
-            
-            if rayHit then
-                -- ปรับระดับความสูงให้พอดีกับพื้น
-                local finalTarget = Vector3.new(walkTargetPos.X, rayHit.Position.Y + 2.5, walkTargetPos.Z)
+            if distanceToLine < safeDistance then
+                -- แก้ไข: เพิ่มระยะ Raycast เป็น 16 สตั๊ด
+                local predictDist = 16 
+                local futurePos = hazardPos + (projectileDir * predictDist)
                 
-                -- สั่งเดินไปยังจุดนั้น (MoveTo จะทำให้ Humanoid เดินเองอัตโนมัติ)
-                myHuman:MoveTo(finalTarget)
+                -- คำนวณทิศทางการหลบ (ตั้งฉากกับทิศทางกระสุน)
+                local rightDir = Vector3.new(-projectileDir.Z, 0, projectileDir.X)
+                if math.random() > 0.5 then rightDir = -rightDir end
                 
-                -- อัปเดตเวลาเพื่อไม่ให้สั่งซ้ำในเฟรมถัดไปทันที
-                lastDodgeTime = currentTime
+                local stepDistance = 6 
+                local dodgeTarget = myPos + (rightDir * stepDistance)
+                
+                -- ตรวจสอบพื้นก่อนเดิน
+                local rayStart = dodgeTarget + Vector3.new(0, 5, 0)
+                local rayHit = workspace:Raycast(rayStart, Vector3.new(0, -10, 0), rayParams)
+                
+                if rayHit then
+                    local finalPos = Vector3.new(dodgeTarget.X, rayHit.Position.Y + 2.5, dodgeTarget.Z)
+                    
+                    -- สั่งเดินไปจุดปลอดภัย
+                    myHuman:MoveTo(finalPos)
+                    lastDodgeTime = currentTime
+                end
             end
         end
     end
@@ -362,7 +320,6 @@ task.spawn(function()
     end
 end)
 
--- ใช้ Heartbeat สำหรับการหลบกระสุนเพื่อให้ทันกับฟิสิกส์และการเคลื่อนที่
 RunService.Heartbeat:Connect(function()
     if autoDodgeEnabled then
         pcall(function()
@@ -377,7 +334,6 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
--- แยก GetNil Instances ออกมารันช้าๆ ลดแลค
 task.spawn(function()
     while true do
         task.wait(0.5) 
