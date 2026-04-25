@@ -222,6 +222,33 @@ local function validateTargetPosition(char, targetPos)
     return finalPos
 end
 
+-- ฟังก์ชันวาร์ปขึ้นด้านบนเมื่อติด AoE เต็มพื้น (Anti-Ground-AoE-Stuck)
+local function warpUpWhenStuckInAoE(myChar, myRoot, hazardPos, hazardRadius)
+    local upOffset = hazardRadius + 8 -- วาร์ปขึ้นไปสูงกว่าขอบเขต AoE
+    local warpTarget = myRoot.Position + Vector3.new(0, upOffset, 0)
+    
+    -- ตรวจสอบว่าด้านบนปลอดภัย (ไม่ติดเพดานหรือ ceiling)
+    rayParams.FilterDescendantsInstances = {myChar}
+    local ceilingCheck = workspace:Raycast(myRoot.Position, Vector3.new(0, upOffset + 5, 0), rayParams)
+    
+    if ceilingCheck then
+        -- ถ้าเจอเพดาน ให้วาร์ปไปแค่ก่อนถึงเพดานเล็กน้อย
+        warpTarget = ceilingCheck.Position + Vector3.new(0, 2.5, 0)
+    end
+    
+    -- ใช้ validatedTargetPosition เพื่อความชัวร์อีกครั้ง
+    local validatedTarget = validateTargetPosition(myChar, warpTarget)
+    
+    local hum = myChar:FindFirstChildOfClass("Humanoid")
+    if hum then
+        hum:MoveTo(validatedTarget)
+    else
+        myRoot.CFrame = CFrame.new(validatedTarget)
+    end
+    
+    return true
+end
+
 -- --- [ระบบอัปเดต V7] โคตรแม่นยำ (ดึงค่า BodyVelocity) ---
 local function executeSmartDodgeV5(hazard)
     if not hazard or not hazard.Parent then return end
@@ -276,6 +303,7 @@ local function executeSmartDodgeV5(hazard)
     if distXZ > shieldRange then return end
 
     if isAoE then
+        -- กรณีที่ 1: ระยะใกล้ขอบ AoE พยายามหลบออกด้านข้าง
         if distXZ < hazardRadius + 1.5 then 
             local escapeDir = (myPosXZ - hazPosXZ)
             if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
@@ -296,6 +324,9 @@ local function executeSmartDodgeV5(hazard)
                     myRoot.CFrame = CFrame.new(validatedTarget)
                 end
             end
+        -- กรณีที่ 2: ระยะประชิดหรืออยู่ใน AoE เต็มพื้น ให้วาร์ปขึ้นด้านบนทันที
+        elseif distXZ < hazardRadius * 0.5 then
+            warpUpWhenStuckInAoE(myChar, myRoot, hazardPos, hazardRadius)
         end
 
     -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) - อัปเกรด V7 (เสริมลอจิกวาร์ปสวน 180 องศาเมื่อติดกำแพง)
