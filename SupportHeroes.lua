@@ -263,8 +263,8 @@ local function handleProjectile(hazard)
     bumper.Material = Enum.Material.Glass
     bumper.Color = Color3.fromRGB(0, 255, 255)
     
-    -- [ไฮไลท์!] ขนาด 6x6 แต่ยาว 16 บล็อค!
-    bumper.Size = Vector3.new(6, 6, 16) 
+    -- [ไฮไลท์!] ขนาด 6x6 แต่ยาว 10 บล็อค!
+    bumper.Size = Vector3.new(6, 6, 10) 
     
     bumper.CanCollide = true
     bumper.CanTouch = false -- ปิดไม่ให้มันทำดาเมจซะเอง
