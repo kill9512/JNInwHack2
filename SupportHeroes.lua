@@ -167,47 +167,35 @@ end
 local function executeSmartDodgeV5(hazard)
     if not hazard or not hazard.Parent then return end
     
-    local isAoE = hazard:IsA("Model")
     local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$"))
-    
-    if not (isAoE or isProjectile) then return end
+    if not isProjectile then return end
 
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not myRoot then return end
 
     local hazardPos = nil
-    local hazardRadius = 2 
+    local projectileDir = nil
     
-    -- [แก้ 1: วัดขนาดจาก Part ข้างใน Model แทน BoundingBox]
-    if isAoE then
-        local parts = {}
-        for _, v in pairs(hazard:GetDescendants()) do
-            if v:IsA("BasePart") then table.insert(parts, v) end
-        end
-        
-        if #parts > 0 then
-            -- ใช้จุดศูนย์กลางของชิ้นแรกหรือชิ้นหลัก
-            local centerPart = hazard.PrimaryPart or parts[1]
-            hazardPos = centerPart.Position
-            
-            -- หาชิ้นที่ใหญ่ที่สุดใน Model เพื่อกำหนดรัศมีวงเวทย์
-            for _, p in pairs(parts) do
-                local r = math.max(p.Size.X, p.Size.Z) / 2
-                if r > hazardRadius then hazardRadius = r end
-            end
-        else
-            -- ถ้ามันว่างเปล่าจริงๆ ค่อยใช้ BoundingBox กางเกงใน
-            local cframe, size = hazard:GetBoundingBox()
-            hazardPos = cframe.Position
-            hazardRadius = math.max(size.X, size.Z) / 2
-        end
-    elseif hazard:IsA("BasePart") then
+    -- หาตำแหน่งและทิศทางของกระสุน
+    if hazard:IsA("BasePart") then
         hazardPos = hazard.Position
-        hazardRadius = math.max(hazard.Size.X, hazard.Size.Z) / 2
+        if hazard.Velocity.Magnitude > 1 then
+            projectileDir = hazard.Velocity.Unit
+        end
+    elseif hazard:IsA("Model") and hazard.PrimaryPart then
+        hazardPos = hazard.PrimaryPart.Position
+        if hazard.PrimaryPart.Velocity.Magnitude > 1 then
+            projectileDir = hazard.PrimaryPart.Velocity.Unit
+        end
     end
 
     if not hazardPos then return end
+    
+    -- ถ้าไม่มี velocity data ให้ใช้ทิศทางจากกระสุนมาหาเราแทน
+    if not projectileDir then
+        projectileDir = (myRoot.Position - hazardPos).Unit
+    end
     
     local myPos = myRoot.Position
     local myPosXZ = Vector3.new(myPos.X, 0, myPos.Z)
@@ -311,7 +299,7 @@ RunService.Stepped:Connect(function()
             local effects = dungeon and dungeon:FindFirstChild("Effects")
             if effects then
                 for _, v in pairs(effects:GetChildren()) do
-                    executeSmartDodgeV5(v)
+                    executeSmartDodge(v)
                 end
             end
         end)
@@ -326,7 +314,7 @@ task.spawn(function()
             pcall(function()
                 if getnilinstances then
                     for _, v in pairs(getnilinstances()) do
-                        executeSmartDodgeV5(v)
+                        executeSmartDodge(v)
                     end
                 end
             end)
