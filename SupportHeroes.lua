@@ -203,9 +203,9 @@ local function handleEruption(hazard)
 
     if distXZ > shieldRange then return end
 
-    -- ✅ ปรับปรุง: คำนวณระยะปลอดภัยให้แม่นยำและหลบทันที
+    -- ✅ ปรับปรุง: คำนวณระยะปลอดภัยให้แม่นยำและหลบทันที (ลดระยะปลอดภัยเหลือ 1.5)
     local playerRadius = 3
-    local safeMargin = 2
+    local safeMargin = 1.5 -- ลดจาก 2 เหลือ 1.5 ตามความต้องการ
     local safeRadius = hazardRadius + playerRadius + safeMargin 
     
     if distXZ < safeRadius then 
@@ -254,23 +254,25 @@ local function handleProjectile(hazard)
         dirToPlayer = Vector3.new(0, 0, 1)
     end
 
-    -- สร้างเกราะแก้ว
-    local bumper = Instance.new("Part")
-    bumper.Name = "GlassBumper"
+    -- สร้างเกราะแก้วรูปสามเหลี่ยมหัวแหลม (ใช้ WedgePart)
+    local bumper = Instance.new("WedgePart")
+    bumper.Name = "GlassSpike"
     bumper.Transparency = 0.5 
     bumper.Material = Enum.Material.Glass
     bumper.Color = Color3.fromRGB(0, 255, 255)
     
-    -- [ไฮไลท์!] ขนาด 6x6 แต่ยาว 10 บล็อค!
-    bumper.Size = Vector3.new(6, 6, 10) 
+    -- [ไฮไลท์!] เปลี่ยนเป็นแท่งสามเหลี่ยมยาว 10 บล็อค แต่เล็กและแหลม
+    bumper.Size = Vector3.new(4, 4, 10) 
     
     bumper.CanCollide = true
     bumper.CanTouch = false -- ปิดไม่ให้มันทำดาเมจซะเอง
     bumper.Massless = true 
     bumper.Anchored = mainPart.Anchored 
     
-    -- ขยับจุดศูนย์กลางเกราะให้ยื่นมาหาตัวเรา 5 บล็อค
-    bumper.CFrame = CFrame.lookAt(mainPart.Position + (dirToPlayer * 5), mainPart.Position + dirToPlayer * 10)
+    -- ขยับจุดศูนย์กลางเกราะให้ยื่นมาหาตัวเรา 5 บล็อค และหันหัวแหลมเข้าหาผู้เล่น
+    local spikePos = mainPart.Position + (dirToPlayer * 5)
+    -- หันหัวแหลมของ WedgePart เข้าหาผู้เล่น (WedgePart จะชี้ไปตามแกน Z บวก)
+    bumper.CFrame = CFrame.lookAt(spikePos, spikePos + dirToPlayer * 10)
     
     local weld = Instance.new("WeldConstraint")
     weld.Part0 = bumper
