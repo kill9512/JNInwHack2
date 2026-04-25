@@ -92,7 +92,25 @@ local function clearVisuals()
         if v.Name == "WP_Debug" or v.Name == "DirectTrace" or v.Name == "ProbeTrace" then v:Destroy() end
     end
 end
+-- ✅ ฟังก์ชันล้างเสาเข็มเก่าที่หมดอายุ
+local function cleanupOldBumpers()
+    for _, v in pairs(workspace:GetChildren()) do
+        if v.Name == "UltimateBumper" then
+            local linked = v:GetAttribute("LinkedHazard")
+            if not linked or not linked.Parent then
+                v:Destroy()
+            end
+        end
+    end
+end
 
+-- ✅ รันล้างทุก 10 วินาที
+task.spawn(function()
+    while true do
+        task.wait(10)
+        cleanupOldBumpers()
+    end
+end)
 local function updateDebug(name, startPos, endPos, color)
     if not debugEnabled then 
         if workspace.Terrain:FindFirstChild(name) then workspace.Terrain[name]:Destroy() end
@@ -183,13 +201,14 @@ local function getNearestEnemy(myPosXZ)
 end
 
 -- ==========================================
--- ✅ [ระบบหลัก: Smart Dodge V6 + เสาเข็มแก้วหัวแหลม]
+-- ✅ [ระบบหลัก: Smart Dodge V6 + เสาเข็มแก้วหัวแหลม] - แก้ไขแล้ว
 -- ==========================================
 local function executeSmartDodgeV6(hazard)
     if not hazard or not hazard.Parent then return end
     
-    local isAoE = hazard:IsA("Model")
-    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$"))
+    -- ✅ แก้: ตรวจชื่อกระสุนก่อน ตรวจประเภททีหลัง
+    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$") or hazard.Name:match("Projectile") or hazard.Name:match("Bullet"))
+    local isAoE = (hazard:IsA("Model") and not isProjectile) or hazard.Name:match("Eruption") or hazard.Name:match("AoE") or hazard.Name:match("Explosion")
     
     if not (isAoE or isProjectile) then return end
 
@@ -217,9 +236,20 @@ local function executeSmartDodgeV6(hazard)
             hazardPos = cframe.Position
             hazardRadius = math.max(size.X, size.Z) / 2
         end
-    elseif hazard:IsA("BasePart") then
-        hazardPos = hazard.Position
-        hazardRadius = math.max(hazard.Size.X, hazard.Size.Z) / 2
+    elseif isProjectile then
+        -- ✅ สำหรับกระสุน: หา MainPart เพื่อใช้สร้างเสาเข็ม
+        if hazard:IsA("BasePart") then
+            hazardPos = hazard.Position
+            hazardRadius = math.max(hazard.Size.X, hazard.Size.Z) / 2
+        elseif hazard:IsA("Model") then
+            local mainPart = hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true)
+            if mainPart then
+                hazardPos = mainPart.Position
+                hazardRadius = math.max(mainPart.Size.X, mainPart.Size.Z) / 2
+            else
+                return
+            end
+        end
     end
 
     if not hazardPos then return end
@@ -235,7 +265,6 @@ local function executeSmartDodgeV6(hazard)
     -- [กรณีที่ 1] หลบ Eruption/AoE
     -- ===============================
     if isAoE then
-        -- ✅ เพิ่มค่าเผื่อขนาดตัวละคร + ระยะปลอดภัย
         local playerRadius = 2.5
         local safeMargin = 1.5
         local totalSafeRadius = hazardRadius + playerRadius + safeMargin
@@ -257,7 +286,6 @@ local function executeSmartDodgeV6(hazard)
             local targetPosXZ = hazPosXZ + (escapeDir * totalSafeRadius)
             local targetPos = Vector3.new(targetPosXZ.X, myPos.Y, targetPosXZ.Z)
             
-            -- ✅ ส่ง hazard เข้าไปให้เรดาร์มองข้าม
             if isSafePosition(myPos, targetPos, hazard) then
                 myRoot.CFrame = CFrame.new(targetPos)
             else
@@ -275,13 +303,18 @@ local function executeSmartDodgeV6(hazard)
         end
         
     -- ===============================
-    -- [กรณีที่ 2] กระสุนพุ่งชน + เสาเข็มแก้วหัวแหลม
+    -- [กรณีที่ 2] กระสุนพุ่งชน + เสาเข็มแก้วหัวแหลม ✅
     -- ===============================
     elseif isProjectile then
+        -- ✅ หา MainPart ของกระสุน (รองรับทั้ง BasePart และ Model)
         local mainPart = hazard:IsA("BasePart") and hazard or 
                         (hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true))
         if not mainPart then return end
-        if mainPart:FindFirstChild("UltimateBumper") then return end
+        
+        -- ✅ ป้องกันสร้างเสาเข็มซ้ำ
+        if mainPart:FindFirstChild("UltimateBumper") or hazard:FindFirstChild("UltimateBumper") then 
+            return 
+        end
 
         local distXZProj = (Vector3.new(myRoot.Position.X, 0, myRoot.Position.Z) - 
                            Vector3.new(mainPart.Position.X, 0, mainPart.Position.Z)).Magnitude
@@ -293,45 +326,56 @@ local function executeSmartDodgeV6(hazard)
         -- 🔷 สร้างเกราะเสาเข็มแก้ว
         local bumper = Instance.new("Part")
         bumper.Name = "UltimateBumper"
-        bumper.Transparency = 0.4 
-        bumper.Material = Enum.Material.Glass
-        bumper.Color = Color3.fromRGB(255, 100, 100)
+        bumper.Transparency = 0.3 
+        bumper.Material = Enum.Material.ForceField  -- ✅ ใช้ ForceField ให้ดูเป็นเกราะพลังงาน
+        bumper.Color = Color3.fromRGB(100, 200, 255) -- ✅ สีฟ้าใส ดูเป็นเกราะ
         bumper.Size = Vector3.new(10, 10, 40) 
         bumper.CanCollide = true
         bumper.CanTouch = false 
         bumper.Massless = true 
-        bumper.Anchored = mainPart.Anchored 
+        bumper.Anchored = true  -- ✅ Anchored เสมอ เพื่อให้เกราะนิ่ง
         
+        -- ✅ วางตำแหน่ง: ยื่นมาข้างหน้ากระสุน 20 บล็อค ชี้มาหาเรา
         local centerOfBumper = mainPart.Position + (dirToPlayer * 20)
         bumper.CFrame = CFrame.lookAt(centerOfBumper, myRoot.Position)
         
         -- 🔥 เพิ่มหัวแหลมด้วย Cone Mesh
         local coneMesh = Instance.new("SpecialMesh")
         coneMesh.MeshType = Enum.MeshType.Cone
-        coneMesh.Scale = Vector3.new(1, 1, 2.5)
-        coneMesh.Offset = Vector3.new(0, 0, 20)
+        coneMesh.Scale = Vector3.new(0.9, 0.9, 3)  -- ✅ ทำให้แหลมยิ่งขึ้น
+        coneMesh.Offset = Vector3.new(0, 0, 20)     -- ✅ เลื่อนไปไว้ที่หัวเสา
         coneMesh.Parent = bumper
         
+        -- ✅ ยึดเสาเข็มกับกระสุนด้วย Weld
         local weld = Instance.new("WeldConstraint")
         weld.Part0 = bumper
         weld.Part1 = mainPart
         weld.Parent = bumper
-        bumper.Parent = mainPart
+        bumper.Parent = workspace  -- ✅ ใส่ใน workspace โดยตรง เพื่อความเสถียร
+        
+        -- ✅ เก็บ reference ไว้ลบทีหลังถ้าต้องการ (ป้องกันการสะสม)
+        bumper:SetAttribute("LinkedHazard", hazard)
+        task.defer(function()
+            task.wait(30)  -- ✅ ลบเกราะหลัง 30 วิ ป้องกันแลค
+            if bumper and bumper.Parent then bumper:Destroy() end
+        end)
         
         -- 🔕 ปิดการทำงานของกระสุนเดิม
-        if hazard:IsA("BasePart") then
-            hazard.CanCollide = false
-            local t = hazard:FindFirstChild("TouchInterest")
-            if t then t:Destroy() end
-        elseif hazard:IsA("Model") then
-            for _, p in pairs(hazard:GetDescendants()) do
-                if p:IsA("BasePart") then
-                    p.CanCollide = false
-                    local t = p:FindFirstChild("TouchInterest")
-                    if t then t:Destroy() end
+        pcall(function()
+            if hazard:IsA("BasePart") then
+                hazard.CanCollide = false
+                local t = hazard:FindFirstChild("TouchInterest")
+                if t then t:Destroy() end
+            elseif hazard:IsA("Model") then
+                for _, p in pairs(hazard:GetDescendants()) do
+                    if p:IsA("BasePart") then
+                        p.CanCollide = false
+                        local t = p:FindFirstChild("TouchInterest")
+                        if t then t:Destroy() end
+                    end
                 end
             end
-        end
+        end)
         
         -- 🚀 วาร์ปสวนหน้า (ระบบเดิม)
         if distXZProj < 12 then 
