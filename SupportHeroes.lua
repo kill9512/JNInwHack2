@@ -38,11 +38,11 @@ local Section = Tab:NewSection("Interior & Building Navigation")
 local MoveSection = Tab:NewSection("Navigation Control")
 
 -- --- UI: Support Functions ---
-SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก CoinStack และ TreasureChest อัตโนมัติ", function(state)
+SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก CoinStack อัตโนมัติ", function(state)
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge (Raycast Gap)", "หลบกระสุนด้วย Raycast Gap Finder (ใหม่!)", function(state)
+SupportSection:NewToggle("Smart Dodge V5", "หลบขอบวงเวทย์ & สไลด์กระสุน", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -163,53 +163,8 @@ local function findSafeDodge(startPos, baseDir, distance)
     return startPos + (baseDir * (distance * 0.4))
 end
 
--- [ใหม่] ระบบ Raycast Gap Finder - ยิงเส้นตรงหาจุดวาร์ป
-local function findSafeGap(myPos, projectilePos, projectileDir)
-    -- คำนวณทิศทางจากกระสุนมาหาเรา
-    local toPlayer = (myPos - projectilePos).Unit
-    
-    -- ถ้าทิศทางกระสุนไม่พุ่งมาทางเรา ไม่ต้องหลบ
-    local dotProduct = projectileDir:Dot(toPlayer)
-    if dotProduct < 0.8 then return nil end
-    
-    -- ยิง Raycast จากกระสุนมาหาเรา เพื่อจำลองวิถีโจมตี
-    local rayOrigin = projectilePos + Vector3.new(0, 1, 0) -- ยกสูงนิดหน่อย
-    local rayDirection = toPlayer * 100 -- ยิงยาว 100 บล็อค
-    
-    local hit = workspace:Raycast(rayOrigin, rayDirection, rayParams)
-    
-    -- ถ้าไม่มีอะไรขวาง หรือชนเราโดยตรง แสดงว่าอยู่ในวิถีอันตราย
-    if not hit or (hit.Part and hit.Part:IsDescendantOf(LocalPlayer.Character)) then
-        -- หาจุดปลอดภัยด้านซ้าย-ขวา ของเส้นวิถี
-        local rightDir = toPlayer:Cross(Vector3.new(0, 1, 0)).Unit
-        local leftDir = -rightDir
-        
-        local gapDistance = 4 -- ระยะห่างจากเส้นวิถี
-        
-        -- ลองขวา
-        local rightTarget = myPos + (rightDir * gapDistance)
-        if isSafePosition(myPos, rightTarget) then
-            return rightTarget, "right_gap"
-        end
-        
-        -- ลองซ้าย
-        local leftTarget = myPos + (leftDir * gapDistance)
-        if isSafePosition(myPos, leftTarget) then
-            return leftTarget, "left_gap"
-        end
-        
-        -- สำรอง: ถอยหลัง
-        local backTarget = myPos - (toPlayer * 5)
-        if isSafePosition(myPos, backTarget) then
-            return backTarget, "back"
-        end
-    end
-    
-    return nil
-end
-
--- --- [ระบบอัปเดต Raycast Gap Finder] ---
-local function executeSmartDodge(hazard)
+-- --- [ระบบอัปเดต V5] โคตรแม่นยำ ---
+local function executeSmartDodgeV5(hazard)
     if not hazard or not hazard.Parent then return end
     
     local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$"))
@@ -243,16 +198,59 @@ local function executeSmartDodge(hazard)
     end
     
     local myPos = myRoot.Position
-    local dist = (myPos - hazardPos).Magnitude
-    
-    -- เช็คระยะตรวจจับ
-    if dist > shieldRange then return end
-    
-    -- ใช้ระบบ Raycast Gap Finder
-    local safeTarget, dodgeType = findSafeGap(myPos, hazardPos, projectileDir)
-    
-    if safeTarget and (safeTarget - myPos).Magnitude > 0.5 then
-        myRoot.CFrame = CFrame.new(safeTarget)
+    local myPosXZ = Vector3.new(myPos.X, 0, myPos.Z)
+    local hazPosXZ = Vector3.new(hazardPos.X, 0, hazardPos.Z)
+    local distXZ = (myPosXZ - hazPosXZ).Magnitude
+
+    if distXZ > shieldRange then return end
+
+    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด)
+    if isAoE then
+        -- ถ้าเราอยู่ในวง (บวกระยะเผื่อ 1.5 บล็อค เพื่อให้หลุดขอบชัวร์ๆ)
+        if distXZ < hazardRadius + 1.5 then 
+            local escapeDir = (myPosXZ - hazPosXZ)
+            if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
+            escapeDir = escapeDir.Unit
+            
+            -- คำนวณระยะที่ต้องก้าวออกไปให้พ้นขอบพอดีเป๊ะ
+            local distanceToMove = (hazardRadius + 1.5) - distXZ
+            
+            -- ใช้ฟังก์ชันดิ้นรน 360 องศา เผื่อติดมุม
+            local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove)
+            if safeTarget then
+                myRoot.CFrame = CFrame.new(safeTarget)
+            end
+        end
+
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic)
+    elseif isProjectile then
+        -- [แก้ 3: หดระยะจับเซนเซอร์เหลือ 7 หลบแบบเสี้ยววินาที]
+        if distXZ < 7 then 
+            local dirFromHazard = (myPosXZ - hazPosXZ)
+            if dirFromHazard.Magnitude == 0 then dirFromHazard = Vector3.new(1, 0, 0) end
+            dirFromHazard = dirFromHazard.Unit
+            
+            -- หามุม 90 องศา (Sidestep ซ้าย/ขวา)
+            local rightDir = dirFromHazard:Cross(Vector3.new(0, 1, 0)).Unit
+            local leftDir = -rightDir
+            
+            local dodgeDist = 6 -- สไลด์ข้าง 6 บล็อคก็พ้นแล้ว
+            
+            -- ลองหลบขวาก่อน ถ้าติดกำแพงให้ลองซ้าย
+            local safeTarget = nil
+            if isSafePosition(myPos, myPos + (rightDir * dodgeDist)) then
+                safeTarget = myPos + (rightDir * dodgeDist)
+            elseif isSafePosition(myPos, myPos + (leftDir * dodgeDist)) then
+                safeTarget = myPos + (leftDir * dodgeDist)
+            else
+                -- ถ้าติดทั้งซ้ายขวา (อยู่ในตรอก) ใช้ระบบหาทางออก 360 องศา
+                safeTarget = findSafeDodge(myPos, rightDir, dodgeDist)
+            end
+            
+            if safeTarget then
+                myRoot.CFrame = CFrame.new(safeTarget)
+            end
+        end
     end
 end
 
@@ -269,7 +267,6 @@ task.spawn(function()
                     local treasure = dungeon and dungeon:FindFirstChild("Treasure")
                     if treasure then
                         for _, item in pairs(treasure:GetChildren()) do
-                            -- เก็บ CoinStack
                             if item.Name == "CoinStack" then
                                 if item:IsA("BasePart") then
                                     item.CanCollide = false
@@ -282,19 +279,6 @@ task.spawn(function()
                                             if part:FindFirstChild("TouchInterest") then
                                                 part.CFrame = myRoot.CFrame
                                             end
-                                        end
-                                    end
-                                end
-                            -- เก็บ TreasureChest
-                            elseif item.Name == "TreasureChest" then
-                                if item:IsA("BasePart") then
-                                    item.CanCollide = false
-                                    item.CFrame = myRoot.CFrame
-                                elseif item:IsA("Model") then
-                                    item:PivotTo(myRoot.CFrame)
-                                    for _, part in pairs(item:GetDescendants()) do
-                                        if part:IsA("BasePart") then
-                                            part.CanCollide = false
                                         end
                                     end
                                 end
