@@ -221,28 +221,28 @@ local function executeSmartDodgeV5(hazard)
 
     if distXZ > shieldRange then return end
 
-    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด)
+    -- [กรณีที่ 1] หลบวงเวทย์ (Model) -> ใช้การวาร์ป (Teleport) เหมือนเดิม
     if isAoE then
-        -- ถ้าเราอยู่ในวง (บวกระยะเผื่อ 1.5 บล็อค เพื่อให้หลุดขอบชัวร์ๆ)
         if distXZ < hazardRadius + 1.5 then 
             local escapeDir = (myPosXZ - hazPosXZ)
             if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
             escapeDir = escapeDir.Unit
             
-            -- คำนวณระยะที่ต้องก้าวออกไปให้พ้นขอบพอดีเป๊ะ
             local distanceToMove = (hazardRadius + 1.5) - distXZ
+            local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove + 2)
             
-            -- ใช้ฟังก์ชันดิ้นรน 360 องศา เผื่อติดมุม
-            local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove)
-            if safeTarget then
-                myRoot.CFrame = CFrame.new(safeTarget)
+            -- ตรวจสอบพื้นก่อนวาร์ป
+            local checkDown = workspace:Raycast(safeTarget + Vector3.new(0, 5, 0), Vector3.new(0, -10, 0), rayParams)
+            if checkDown then
+                myRoot.CFrame = CFrame.new(Vector3.new(safeTarget.X, checkDown.Position.Y + 2.5, safeTarget.Z))
+                lastDodgeTime = currentTime
             end
         end
 
+
     -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic)
     elseif isProjectile then
-        -- [แก้ 3: หดระยะจับเซนเซอร์เหลือ 7 หลบแบบเสี้ยววินาที]
-        if distXZ < 11 then 
+        if distXZ < 16 then 
             local dirFromHazard = (myPosXZ - hazPosXZ)
             if dirFromHazard.Magnitude == 0 then dirFromHazard = Vector3.new(1, 0, 0) end
             dirFromHazard = dirFromHazard.Unit
@@ -284,7 +284,7 @@ task.spawn(function()
                     local treasure = dungeon and dungeon:FindFirstChild("Treasure")
                     if treasure then
                         for _, item in pairs(treasure:GetChildren()) do
-                            if item.Name == "CoinStack" then
+                            if item.Name == "CoinStack" or item.Name == "TreasureChest" then
                                 if item:IsA("BasePart") then
                                     item.CanCollide = false
                                     item.CFrame = myRoot.CFrame
