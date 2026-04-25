@@ -232,6 +232,7 @@ end
 -- [ระบบย่อย 2] เกราะเสาเข็มแก้วหัวแหลม ✅ แก้: เกาะติดกระสุน
 -- ==========================================
 local function handleProjectile(hazard)
+    -- ✅ หา MainPart: รองรับ BasePart, UnionOperation, Model
     local mainPart = nil
     if hazard:IsA("BasePart") then 
         mainPart = hazard
@@ -241,7 +242,7 @@ local function handleProjectile(hazard)
 
     if not mainPart then return end
     
-    -- ✅ ป้องกันสร้างซ้ำ (เช็กชื่อเดิม)
+    -- ✅ ป้องกันสร้างซ้ำ
     if mainPart:FindFirstChild("UltimateBumper") then return end 
 
     local myChar = LocalPlayer.Character
@@ -265,10 +266,7 @@ local function handleProjectile(hazard)
     bumper.Transparency = 0.5 
     bumper.Material = Enum.Material.Glass
     bumper.Color = Color3.fromRGB(255, 100, 100)
-    
-    -- ขนาด 10x10x40
     bumper.Size = Vector3.new(10, 10, 40) 
-    
     bumper.CanCollide = true
     bumper.CanTouch = false 
     bumper.Massless = true 
@@ -285,7 +283,7 @@ local function handleProjectile(hazard)
     coneMesh.Offset = Vector3.new(0, 0, 20)
     coneMesh.Parent = bumper
     
-    -- ✅ สำคัญ: ยึดกับ mainPart และใส่เป็นลูกของ mainPart เพื่อให้เกาะติด
+    -- ✅ ยึดกับ mainPart และใส่เป็นลูกของ mainPart เพื่อให้เกาะติด
     local weld = Instance.new("WeldConstraint")
     weld.Part0 = bumper
     weld.Part1 = mainPart
@@ -294,19 +292,32 @@ local function handleProjectile(hazard)
     bumper.Parent = mainPart  -- ✅ เกาะติดกระสุนจริงๆ
     
     -- 🔕 ปิดอันตรายของกระสุนเดิม
-    if hazard:IsA("BasePart") then
-        hazard.CanCollide = false
-        local t = hazard:FindFirstChild("TouchInterest")
-        if t then t:Destroy() end
-    elseif hazard:IsA("Model") then
-        for _, p in pairs(hazard:GetDescendants()) do
-            if p:IsA("BasePart") then
-                p.CanCollide = false
-                local t = p:FindFirstChild("TouchInterest")
-                if t then t:Destroy() end
+    pcall(function()
+        if hazard:IsA("BasePart") then
+            hazard.CanCollide = false
+            local t = hazard:FindFirstChild("TouchInterest")
+            if t then t:Destroy() end
+        elseif hazard:IsA("Model") then
+            for _, p in pairs(hazard:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    p.CanCollide = false
+                    local t = p:FindFirstChild("TouchInterest")
+                    if t then t:Destroy() end
+                end
             end
         end
-    end
+    end)
+end
+
+-- ==========================================
+-- ✅ ฟังก์ชันเช็กชื่อกระสุนแบบง่ายและชัวร์
+-- ==========================================
+local function isProjectileHazard(obj)
+    if not obj or not obj.Name then return false end
+    local n = obj.Name:lower()
+    -- ✅ เช็กชื่อ: "arrow" หรือ มีคำว่า "magic" อยู่ในชื่อ (ไม่สนตัวใหญ่เล็ก)
+    if n == "arrow" or n:find("magic") then return true end
+    return false
 end
 
 -- --- SUPPORT LOOPS ---
@@ -346,7 +357,7 @@ task.spawn(function()
     end
 end)
 
--- ✅ แยกระบบตรวจจับแบบเดิมที่ทำงานได้จริง
+-- ✅ ลูปตรวจจับแบบใหม่: ใช้ฟังก์ชันเช็กชื่อที่ชัวร์กว่า
 RunService.Stepped:Connect(function()
     if autoDodgeEnabled then
         pcall(function()
@@ -354,9 +365,10 @@ RunService.Stepped:Connect(function()
             local effects = dungeon and dungeon:FindFirstChild("Effects")
             if effects then
                 for _, v in pairs(effects:GetChildren()) do
-                    if v.Name == "Eruption" then
+                    -- ✅ แยกประเภทด้วยฟังก์ชันใหม่
+                    if v.Name:lower() == "eruption" or v.Name:lower():find("eruption") then
                         handleEruption(v)
-                    elseif v.Name == "Arrow" or v.Name:match("Magic$") then
+                    elseif isProjectileHazard(v) then
                         handleProjectile(v)
                     end
                 end
@@ -372,9 +384,9 @@ task.spawn(function()
             pcall(function()
                 if getnilinstances then
                     for _, v in pairs(getnilinstances()) do
-                        if v.Name == "Eruption" then
+                        if v.Name:lower() == "eruption" or v.Name:lower():find("eruption") then
                             handleEruption(v)
-                        elseif v.Name == "Arrow" or v.Name:match("Magic$") then
+                        elseif isProjectileHazard(v) then
                             handleProjectile(v)
                         end
                     end
