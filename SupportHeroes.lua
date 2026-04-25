@@ -1,4 +1,4 @@
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua "))()
 local Window = Library.CreateLib("KONG GUISUS - EXPLORER", "DarkTheme")
 local Tab = Window:NewTab("Main")
 
@@ -42,7 +42,7 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V5", "หลบขอบวงเวทย์ & สไลด์กระสุน", function(state)
+SupportSection:NewToggle("Smart Dodge V5", "หลบขอบวงเวทย์ & หยุดกระสุน (ไม่วาร์ป)", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -163,7 +163,7 @@ local function findSafeDodge(startPos, baseDir, distance)
     return startPos + (baseDir * (distance * 0.4))
 end
 
--- --- [ระบบอัปเดต V5] โคตรแม่นยำ ---
+-- --- [ระบบอัปเดต V6] หยุดกระสุนแทนการวาร์ป ---
 local function executeSmartDodgeV5(hazard)
     if not hazard or not hazard.Parent then return end
     
@@ -179,7 +179,7 @@ local function executeSmartDodgeV5(hazard)
     local hazardPos = nil
     local hazardRadius = 2 
     
-    -- [แก้ 1: วัดขนาดจาก Part ข้างใน Model แทน BoundingBox]
+    -- วัดขนาดจาก Part ข้างใน Model
     if isAoE then
         local parts = {}
         for _, v in pairs(hazard:GetDescendants()) do
@@ -187,17 +187,14 @@ local function executeSmartDodgeV5(hazard)
         end
         
         if #parts > 0 then
-            -- ใช้จุดศูนย์กลางของชิ้นแรกหรือชิ้นหลัก
             local centerPart = hazard.PrimaryPart or parts[1]
             hazardPos = centerPart.Position
             
-            -- หาชิ้นที่ใหญ่ที่สุดใน Model เพื่อกำหนดรัศมีวงเวทย์
             for _, p in pairs(parts) do
                 local r = math.max(p.Size.X, p.Size.Z) / 2
                 if r > hazardRadius then hazardRadius = r end
             end
         else
-            -- ถ้ามันว่างเปล่าจริงๆ ค่อยใช้ BoundingBox กางเกงใน
             local cframe, size = hazard:GetBoundingBox()
             hazardPos = cframe.Position
             hazardRadius = math.max(size.X, size.Z) / 2
@@ -216,35 +213,27 @@ local function executeSmartDodgeV5(hazard)
 
     if distXZ > shieldRange then return end
 
-    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด)
+    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด) - ยังคงวาร์ปเพราะมันคือพื้นที่
     if isAoE then
-        -- ถ้าเราอยู่ในวง (บวกระยะเผื่อ 1.5 บล็อค เพื่อให้หลุดขอบชัวร์ๆ)
         if distXZ < hazardRadius + 1.5 then 
             local escapeDir = (myPosXZ - hazPosXZ)
             if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
             escapeDir = escapeDir.Unit
             
-            -- คำนวณระยะที่ต้องก้าวออกไปให้พ้นขอบพอดีเป๊ะ
             local distanceToMove = (hazardRadius + 1.5) - distXZ
-            
-            -- ใช้ฟังก์ชันดิ้นรน 360 องศา เผื่อติดมุม
             local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove)
             if safeTarget then
-                myRoot.CFrame = CFrame.new(safeTarget)
+                -- วาร์ปเฉพาะแนวราบ ไม่แตะแกน Y เพื่อป้องกันจมพื้น
+                myRoot.CFrame = CFrame.new(Vector3.new(safeTarget.X, myPos.Y, safeTarget.Z))
             end
         end
 
-    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) - ดัดแปลง BodyVelocity ให้เฉียดผู้เล่น
+    -- [กรณีที่ 2] หยุดกระสุนพุ่งชน (Arrow, Magic) - แก้ไข BodyVelocity
     elseif isProjectile then
-        local myChar = LocalPlayer.Character
-        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-        if not myRoot then return end
-        
         local myPos = myRoot.Position
         local hazardVel = hazard.Velocity or Vector3.new()
         local projectileDir = hazardVel.Unit
         
-        -- ถ้าไม่มี Velocity ให้ใช้ทิศทางจาก hazard ไปหาผู้เล่น
         if projectileDir.Magnitude == 0 then
             projectileDir = (myPosXZ - hazPosXZ).Unit
         end
@@ -253,24 +242,30 @@ local function executeSmartDodgeV5(hazard)
         local pointOnLine = hazardPos + projectileDir * ((myPos - hazardPos):Dot(projectileDir))
         local distanceToLine = (myPos - pointOnLine).Magnitude
         
-        -- ระยะปลอดภัยที่ต้องหลบ (รัศมีกระสุน + ระยะเผื่อ)
-        local safeDistance = hazardRadius + 3
+        local safeDistance = hazardRadius + 4 -- ระยะเริ่มเบรกกระสุน
         
         -- ถ้าผู้เล่นอยู่ใกล้แนวกระสุนเกินไป ให้จัดการกับ BodyVelocity
         if distanceToLine < safeDistance then
-            -- หา BodyVelocity หรือ LinearVelocity ทั้งหมดในกระสุนและปิดการทำงาน
+            -- 1. หาและปิด BodyVelocity / LinearVelocity
             for _, velocityObj in pairs(hazard:GetChildren()) do
                 if velocityObj:IsA("BodyVelocity") or velocityObj:IsA("LinearVelocity") then
                     velocityObj.Velocity = Vector3.new(0, 0, 0)
                     velocityObj.MaxForce = Vector3.new(0, 0, 0)
                 end
+                -- 2. หาและปิด BodyAngularVelocity (กันหมุนปั่น)
+                if velocityObj:IsA("BodyAngularVelocity") or velocityObj:IsA("AngularVelocity") then
+                    velocityObj.AngularVelocity = Vector3.new(0, 0, 0)
+                    velocityObj.MaxTorque = Vector3.new(0, 0, 0)
+                end
             end
             
-            -- ทางเลือกเสริม: ถ้ายังมีแรงอื่นๆ อยู่ ให้ตั้งค่า Velocity ของ Part หลักเป็น 0 ด้วย
+            -- 3. สั่งหยุดการเคลื่อนที่ของ Part หลักโดยตรง (กรณีไม่มี BodyVelocity หรือแรงตกค้าง)
             if hazard:IsA("BasePart") then
                 hazard.Velocity = Vector3.new(0, 0, 0)
+                hazard.RotVelocity = Vector3.new(0, 0, 0)
             elseif hazard.PrimaryPart then
                 hazard.PrimaryPart.Velocity = Vector3.new(0, 0, 0)
+                hazard.PrimaryPart.RotVelocity = Vector3.new(0, 0, 0)
             end
         end
     end
@@ -289,7 +284,6 @@ task.spawn(function()
                     local treasure = dungeon and dungeon:FindFirstChild("Treasure")
                     if treasure then
                         for _, item in pairs(treasure:GetChildren()) do
-                            -- เก็บ CoinStack
                             if item.Name == "CoinStack" then
                                 if item:IsA("BasePart") then
                                     item.CanCollide = false
@@ -305,7 +299,6 @@ task.spawn(function()
                                         end
                                     end
                                 end
-                            -- เก็บ TreasureChest
                             elseif item.Name == "TreasureChest" then
                                 if item:IsA("BasePart") then
                                     item.CanCollide = false
