@@ -187,7 +187,7 @@ local function executeSmartDodgeV5(hazard)
         for _, v in pairs(hazard:GetDescendants()) do
             if v:IsA("BasePart") then 
                 table.insert(parts, v) 
-                v.CanCollide = true
+                v.CanCollide = false
                 v.CollisionGroup = "Default"
             end
         end
