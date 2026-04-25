@@ -288,6 +288,26 @@ local function executeSmartDodgeV5(hazard)
                 -- ใช้ฟังก์ชันตรวจสอบตำแหน่งปลายทางเพื่อป้องกันการติด Model
                 local validatedTarget = validateTargetPosition(myChar, safeTarget)
                 
+                -- [แก้ไข] ตรวจสอบว่าหลังจากย้ายแล้วยังอยู่ในวง AoE หรือไม่
+                local testPosXZ = Vector3.new(validatedTarget.X, 0, validatedTarget.Z)
+                local testDistXZ = (testPosXZ - hazPosXZ).Magnitude
+                
+                -- ถ้ายังอยู่ในวง AoE หลังจากพยายามหนี ให้วาร์ปขึ้นด้านบนทันที
+                if testDistXZ < hazardRadius + 1.5 then
+                    local warpUpPos = myPos + Vector3.new(0, hazardRadius + 5, 0)
+                    
+                    -- ตรวจสอบว่ามีพื้นรองรับจุดที่จะวาร์ปขึ้นไปหรือไม่
+                    local groundCheckPos = warpUpPos + Vector3.new(0, 10, 0)
+                    local groundHit = workspace:Raycast(groundCheckPos, Vector3.new(0, -20, 0), rayParams)
+                    
+                    if groundHit then
+                        validatedTarget = groundHit.Position + Vector3.new(0, 2.5, 0)
+                    else
+                        -- ถ้าไม่มีพื้นรองรับ ให้วาร์ปขึ้นแล้วค่อยตกมา
+                        validatedTarget = warpUpPos
+                    end
+                end
+                
                 -- ใช้ Humanoid:MoveTo แทนการตั้ง CFrame โดยตรง เพื่อป้องกันการติด model
                 local hum = myChar:FindFirstChildOfClass("Humanoid")
                 if hum then
