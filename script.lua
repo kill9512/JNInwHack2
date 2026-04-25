@@ -1,4 +1,4 @@
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua "))()
 local Window = Library.CreateLib("KONG GUISUS - EXPLORER", "DarkTheme")
 local Tab = Window:NewTab("Main")
 
@@ -143,7 +143,7 @@ local function isSafePosition(startPos, targetPos)
     return true
 end
 
--- [ใหม่] ถ้าทางหลักติดกำแพง ให้หมุนหาทางออกรอบตัว 360 องศา
+-- [ใหม่] ถัาทางหลักติดกำแพง ให้หมุนหาทางออกรอบตัว 360 องศา
 local function findSafeDodge(startPos, baseDir, distance)
     -- ลองทางหลักก่อน
     local target = startPos + (baseDir * distance)
@@ -239,63 +239,33 @@ local function executeSmartDodgeV5(hazard)
             end
         end
 
-        -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) - อัปเกรด V6 (Trajectory & TTI)
+
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic)
     elseif isProjectile then
-        -- 1. หาความเร็วและทิศทางที่กระสุนกำลังพุ่งไป
-        local projVelocity = hazard.Velocity
-        local projDir = projVelocity.Unit
-        local speed = projVelocity.Magnitude
-
-        -- หากกระสุนไม่ได้ใช้ระบบ Physics (Velocity = 0) ให้ดึงทิศทางจากหน้ากระสุน (LookVector) แทน
-        if speed < 1 then
-            projDir = hazard.CFrame.LookVector
-            speed = 60 -- กำหนดความเร็วสมมติสำหรับกระสุนที่ขยับด้วย CFrame
-        end
-
-        -- ทำให้วิถีกระสุนอยู่ในระนาบแบน (ไม่สนความสูง)
-        local flatProjDir = Vector3.new(projDir.X, 0, projDir.Z)
-        if flatProjDir.Magnitude > 0 then
-            flatProjDir = flatProjDir.Unit
-        else
-            flatProjDir = Vector3.new(1, 0, 0)
-        end
-
-        -- 2. เช็คว่ากระสุนพุ่งมาหาเราจริงไหม (ใช้ Dot Product)
-        local toPlayerDir = (myPosXZ - hazPosXZ).Unit
-        local approachDot = flatProjDir:Dot(toPlayerDir)
-
-        -- ถ้า approachDot > 0 แปลว่าหน้ากระสุนหันมาทางเรา (ยิ่งเข้าใกล้ 1 คือยิ่งพุ่งตรงเป๊ะ)
-        if approachDot > 0.4 then
+        if distXZ < 12 then 
+            local dirFromHazard = (myPosXZ - hazPosXZ)
+            if dirFromHazard.Magnitude == 0 then dirFromHazard = Vector3.new(1, 0, 0) end
+            dirFromHazard = dirFromHazard.Unit
             
-            -- 3. คำนวณเวลาที่กระสุนจะพุ่งชน (Time-to-Impact)
-            local timeToImpact = distXZ / speed
-
-            -- เงื่อนไขการหลบ: จะหลบก็ต่อเมื่อกระสุนจะถึงตัวในอีก 0.6 วินาที หรือระยะใกล้กว่า 15 บล็อค
-            if timeToImpact < 0.6 or distXZ < 15 then
-                
-                -- 4. หาเวกเตอร์ "ตั้งฉากกับวิถีกระสุน" (ไม่ใช่ตั้งฉากกับตำแหน่งกระสุนเหมือนโค้ดเก่า)
-                local dodgeRight = flatProjDir:Cross(Vector3.new(0, 1, 0)).Unit
-                local dodgeLeft = -dodgeRight
-
-                local dodgeDist = 8 -- เพิ่มระยะการสไลด์เล็กน้อยให้พ้นชัวร์ขึ้น
-
-                local safeTarget = nil
-
-                -- ลองสไลด์ขวา
-                if isSafePosition(myPos, myPos + (dodgeRight * dodgeDist)) then
-                    safeTarget = myPos + (dodgeRight * dodgeDist)
-                -- ถ้าติดกำแพง ลองสไลด์ซ้าย
-                elseif isSafePosition(myPos, myPos + (dodgeLeft * dodgeDist)) then
-                    safeTarget = myPos + (dodgeLeft * dodgeDist)
-                else
-                    -- ถ้าซ้ายก็ติด ขวาก็ติด (อยู่ในที่แคบ) ให้ใช้ฟังก์ชันดิ้นรน 360 องศาหาทางออก
-                    safeTarget = findSafeDodge(myPos, dodgeRight, dodgeDist)
-                end
-
-                -- ทำการวาร์ปหลบ (CFrame)
-                if safeTarget then
-                    myRoot.CFrame = CFrame.new(safeTarget)
-                end
+            -- หามุม 90 องศา (Sidestep ซ้าย/ขวา)
+            local rightDir = dirFromHazard:Cross(Vector3.new(0, 1, 0)).Unit
+            local leftDir = -rightDir
+            
+            local dodgeDist = 6 -- สไลด์ข้าง 6 บล็อคก็พ้นแล้ว
+            
+            -- ลองหลบขวาก่อน ถ้าติดกำแพงให้ลองซ้าย
+            local safeTarget = nil
+            if isSafePosition(myPos, myPos + (rightDir * dodgeDist)) then
+                safeTarget = myPos + (rightDir * dodgeDist)
+            elseif isSafePosition(myPos, myPos + (leftDir * dodgeDist)) then
+                safeTarget = myPos + (leftDir * dodgeDist)
+            else
+                -- ถ้าติดทั้งซ้ายขวา (อยู่ในตรอก) ใช้ระบบหาทางออก 360 องศา
+                safeTarget = findSafeDodge(myPos, rightDir, dodgeDist)
+            end
+            
+            if safeTarget then
+                myRoot.CFrame = CFrame.new(safeTarget)
             end
         end
     end
@@ -522,3 +492,4 @@ task.spawn(function()
         end)
     end
 end)
+googleGTX is broken
