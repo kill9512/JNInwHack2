@@ -280,9 +280,15 @@ local function executeSmartDodgeV5(hazard)
                 end
             end
             
+            -- ทำให้เวกเตอร์ตั้งฉากอยู่ในระนาบแนวนอนเท่านั้น (ไม่มีการเปลี่ยนความสูง)
+            perpendicularDir = Vector3.new(perpendicularDir.X, 0, perpendicularDir.Z).Unit
+            
             -- วาร์ปออกไปให้พ้นระยะปลอดภัย (บวกเพิ่มอีกหน่อยให้ชัวร์)
             local warpDistance = safeDistance + 5
             local warpTarget = myPos + (perpendicularDir * warpDistance)
+            
+            -- รักษาระดับความสูงเดิม หรือปรับสูงขึ้นเล็กน้อยเพื่อป้องกันการจม
+            warpTarget = Vector3.new(warpTarget.X, myPos.Y + 0.5, warpTarget.Z)
             
             -- เช็คจุดปลายทางว่าปลอดภัยไหม (ไม่ติดกำแพง ไม่ตกเหว)
             if isSafePosition(myPos, warpTarget) then
@@ -290,12 +296,15 @@ local function executeSmartDodgeV5(hazard)
             else
                 -- ถ้าจุดแรกไม่ปลอดภัย ลองทิศตรงข้าม
                 local alternateTarget = myPos - (perpendicularDir * warpDistance)
+                alternateTarget = Vector3.new(alternateTarget.X, myPos.Y + 0.5, alternateTarget.Z)
                 if isSafePosition(myPos, alternateTarget) then
                     myRoot.CFrame = CFrame.new(alternateTarget)
                 else
                     -- ถ้าไม่ปลอดภัยทั้งสองด้าน ใช้ระบบ findSafeDodge
                     local safeTarget = findSafeDodge(myPos, perpendicularDir, warpDistance)
                     if safeTarget then
+                        -- รักษาระดับความสูงเดิม
+                        safeTarget = Vector3.new(safeTarget.X, math.max(safeTarget.Y, myPos.Y), safeTarget.Z)
                         myRoot.CFrame = CFrame.new(safeTarget)
                     end
                 end
