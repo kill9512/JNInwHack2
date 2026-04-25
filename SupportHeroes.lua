@@ -240,114 +240,176 @@ local function executeSmartDodgeV5(hazard)
         end
 
 
-    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) - Smart Dodge V5.1
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic, Skill Shot) - Ultimate Fix
     elseif isProjectile then
-        -- พยายามหาทิศทางจริงของกระสุน (Velocity-based Direction)
+        local myPos = myRoot.Position
+        local myPosXZ = Vector3.new(myPos.X, 0, myPos.Z)
+        local hazPos = hazard.Position
+        local hazPosXZ = Vector3.new(hazPos.X, 0, hazPos.Z)
+        
+        -- 1. หาทิศทางจริงของกระสุน (Direction-Based)
         local projectileDir = nil
-        
-        -- ลองอ่านจาก Velocity ถ้ามี
-        if hazard:IsA("BasePart") and hazard.Velocity and hazard.Velocity.Magnitude > 0.1 then
-            local velXZ = Vector3.new(hazard.Velocity.X, 0, hazard.Velocity.Z)
-            if velXZ.Magnitude > 0.1 then
-                projectileDir = velXZ.Unit
+        local hasValidDirection = false
+        local projSpeed = hazard.Velocity.Magnitude
+
+        -- พยายามหาทิศทางจาก Velocity ก่อน (แม่นยำสุด)
+        if projSpeed > 0.1 then
+            local velDir = hazard.Velocity.Unit
+            -- กันกรณีเวกเตอร์ชี้ขึ้นฟ้าหรือลงดินเกินไป (ทำให้ด้านข้างมั่ว)
+            if math.abs(velDir.Y) < 0.9 then 
+                projectileDir = Vector3.new(velDir.X, 0, velDir.Z).Unit
+                hasValidDirection = true
             end
         end
-        
-        -- ถ้าไม่มี Velocity หรือเป็น 0 ให้ใช้ทิศจากตำแหน่ง (fallback)
-        if not projectileDir then
-            projectileDir = (myPosXZ - hazPosXZ)
-            if projectileDir.Magnitude == 0 then 
-                projectileDir = Vector3.new(1, 0, 0) 
-            else
-                projectileDir = projectileDir.Unit
+
+        -- ถ้าไม่มี Velocity หรือ Y สูงเกินไป ให้ลองเช็คจาก History (ถ้ามีระบบเก็บค่า)
+        if not hasValidDirection then
+            local lastPos = ProjectileHistory[hazard] -- สมมติว่ามีตารางนี้เก็บค่าเก่า
+            if lastPos then
+                local moveVec = Vector3.new((hazPos - lastPos).X, 0, (hazPos - lastPos).Z)
+                if moveVec.Magnitude > 0.5 then -- ต้องเคลื่อนที่พอสมควรถึงจะเชื่อได้
+                    projectileDir = moveVec.Unit
+                    hasValidDirection = true
+                    -- อัปเดตความเร็วประมาณการถ้าไม่มีค่าจริง
+                    if projSpeed <= 0.1 then projSpeed = moveVec.Magnitude * 60 end -- สมมติ 60 FPS
+                end
             end
         end
-        
-        -- คำนวณความเร็วคร่าวๆ เพื่อปรับระยะหลบ (Overshoot Factor)
-        local speedFactor = 1
-        if hazard:IsA("BasePart") and hazard.Velocity then
-            local speed = hazard.Velocity.Magnitude
-            if speed > 80 then speedFactor = 1.8      -- กระสุนเร็วมาก ต้องหนีไกล
-            elseif speed > 40 then speedFactor = 1.4  -- กระสุนปานกลาง
-            elseif speed > 20 then speedFactor = 1.2  -- กระสุนช้า
+
+        -- ⚠️ FIX #1: ถ้ายังไม่มีทิศทางที่เชื่อถือได้ -> อย่าเดา! -> ใช้ระบบ 360 Dodge ทันที
+        if not hasValidDirection or not projectileDir then
+            local safeTarget = findSafeDodge(myPos, Vector3.new(1,0,0), 8) -- ทิศสมมติไม่สำคัญ
+            if safeTarget then
+                myRoot.CFrame = CFrame.new(safeTarget)
             end
+            return -- จบการทำงานกรณีนี้ไปก่อน
+        end
+
+        -- 3. FIX #3: NaN Protection & Vector Setup
+        local upVector = Vector3.new(0, 1, 0)
+        -- ตรวจสอบว่า projectileDir ชนกับ UpVector หรือไม่ (กรณีกระสุนยิงตรงขึ้นฟ้า)
+        local crossCheck = projectileDir:Cross(upVector)
+        if crossCheck.Magnitude < 0.01 then
+            -- กรณีหายากมาก: ถ้ากระสุนวิ่งแนวแกน Z ล้วนๆ ให้ใช้แกน X เป็นฐานแทน
+            upVector = Vector3.new(1, 0, 0) 
         end
         
-        -- ระยะหลบพื้นฐาน + ปรับตามความเร็ว
-        local baseDodgeDist = 6 * speedFactor
+        local rightDir = projectileDir:Cross(upVector).Unit
+        local leftDir = -rightDir
+
+        -- 4. Dynamic Safety Margin
+        local speedFactor = math.clamp(projSpeed / 50, 1, 4) -- ปรับช่วงให้กว้างขึ้น
+        local baseDodgeDist = 6
+        local dodgeDist = baseDodgeDist * speedFactor
         
-        -- สร้าง Candidate Directions หลายแบบ:
-        -- 1. พุ่งเฉียงหน้า-ข้าง (Forward-Diagonal) ← ดีที่สุด เพราะไม่ตัดเส้น trajectory
-        -- 2. พุ่งเฉียงหลัง-ข้าง (Backward-Diagonal) ← กรณีกระสุนเร็วมาก
-        -- 3. หลบข้างล้วน (Pure Sidestep) ← แบบเดิม
-        
-        local forwardDiagRight = (projectileDir + projectileDir:Cross(Vector3.new(0, 1, 0)).Unit).Unit
-        local forwardDiagLeft = (projectileDir - projectileDir:Cross(Vector3.new(0, 1, 0)).Unit).Unit
-        local backwardDiagRight = (-projectileDir + projectileDir:Cross(Vector3.new(0, 1, 0)).Unit).Unit
-        local backwardDiagLeft = (-projectileDir - projectileDir:Cross(Vector3.new(0, 1, 0)).Unit).Unit
-        local pureRight = projectileDir:Cross(Vector3.new(0, 1, 0)).Unit
-        local pureLeft = -pureRight
-        
-        -- รายการทิศที่จะลอง (เรียงตามลำดับความชอบ)
-        local dodgeCandidates = {
-            { dir = forwardDiagRight, dist = baseDodgeDist * 1.1, priority = 1 },  -- เฉียงหน้าขวา (ดีที่สุด)
-            { dir = forwardDiagLeft, dist = baseDodgeDist * 1.1, priority = 2 },   -- เฉียงหน้าซ้าย
-            { dir = backwardDiagRight, dist = baseDodgeDist * 1.3, priority = 3 }, -- เฉียงหลังขวา (เผื่อกระสุนเร็ว)
-            { dir = backwardDiagLeft, dist = baseDodgeDist * 1.3, priority = 4 },  -- เฉียงหลังซ้าย
-            { dir = pureRight, dist = baseDodgeDist, priority = 5 },               -- ขวา纯属
-            { dir = pureLeft, dist = baseDodgeDist, priority = 6 },                -- ซ้าย纯属
+        -- ฟังก์ชันเช็คความปลอดภัยแบบใหม่ (รวมเวลาและหลายกระสุน)
+        local function getSafetyScore(targetPos, allProjectiles)
+            local totalRisk = 0
+            local minDistanceToLine = math.huge
+
+            for _, proj in ipairs(allProjectiles) do
+                local pPos = proj.Position
+                local pVel = proj.Velocity
+                if pVel.Magnitude > 0.1 then
+                    local pDir = Vector3.new(pVel.X, 0, pVel.Z).Unit
+                    if pDir.Magnitude > 0.01 then
+                        local pSpeed = pVel.Magnitude
+                        
+                        -- คำนวณเวกเตอร์จากจุดเริ่มกระสุน มาหาจุดเป้าหมายเรา
+                        local vecToTarget = targetPos - Vector3.new(pPos.X, 0, pPos.Z)
+                        
+                        -- 1. หาจุดที่ใกล้ที่สุดบนเส้นวิถี (Closest Point on Line)
+                        local projectionLen = vecToTarget:Dot(pDir)
+                        -- สนใจเฉพาะจุดที่อยู่ "ข้างหน้า" กระสุน
+                        if projectionLen > -5 then 
+                            local closestPoint = Vector3.new(pPos.X, 0, pPos.Z) + (pDir * projectionLen)
+                            local distToLine = (targetPos - closestPoint).Magnitude
+                            
+                            -- 2. FIX #2: Time-Based Check (4D Collision)
+                            -- เวลาที่ผู้เล่นจะเดินไปถึงจุดนั้น (สมมติความเร็วผู้เล่น ~16 stud/s)
+                            local distToWalk = (targetPos - myPos).Magnitude
+                            local timeForPlayer = distToWalk / 16 
+                            
+                            -- เวลาที่กระสุนจะวิ่งไปถึงจุดตัดนั้น
+                            local timeForProj = projectionLen / pSpeed
+                            
+                            -- ช่องว่างของเวลา (Time Gap)
+                            local timeDiff = math.abs(timeForPlayer - timeForProj)
+                            
+                            -- ระยะปลอดภัยที่ปรับตามเวลา (ยิ่งเวลาใกล้กัน ต้องห่างเยอะ)
+                            local requiredMargin = 3 + (speedFactor * 2)
+                            
+                            -- ถ้าเวลาใกล้เคียงกัน (เช่น ต่างกันน้อยกว่า 0.3 วิ) และระยะใกล้เส้น -> อันตราย!
+                            if timeDiff < 0.4 and distToLine < requiredMargin then
+                                return -math.huge -- VETO: จุดนี้อันตรายตายแน่ (โดนอย่างน้อย 1 ลูก)
+                            end
+                            
+                            -- เก็บค่าระยะห่างขั้นต่ำไว้ใช้คำนวณคะแนน
+                            if distToLine < minDistanceToLine then
+                                minDistanceToLine = distToLine
+                            end
+                        end
+                    end
+                end
+            end
+            
+            -- 5. FIX #4: Scoring Logic ใหม่
+            -- คะแนนมาจาก "ระยะห่างจากเส้นวิถีที่ใกล้ที่สุด" (ยิ่งไกลยิ่งดี)
+            -- ไม่สนใจลำดับความชอบซ้าย/ขวา อีกต่อไป ถ้ามันปลอดภัยพอๆ กัน
+            return minDistanceToLine
+        end
+
+        -- รวบรวมกระสุนทั้งหมดในระยะอันตราย (FIX #5: Multi-Projectile)
+        local activeProjectiles = {}
+        -- ใส่ตัวปัจจุบันก่อน
+        table.insert(activeProjectiles, hazard)
+        -- (Optional) ถ้ามีระบบสแกนหากระสุนอื่นๆ ในรัศมี 15 บล็อค ให้เพิ่มลงในตารางนี้
+        -- ตัวอย่าง:
+        -- for _, other in ipairs(workspace.Projectiles:GetChildren()) do
+        --     if (other.Position - myPos).Magnitude < 15 and other ~= hazard then
+        --         table.insert(activeProjectiles, other)
+        --     end
+        -- end
+
+        -- สร้างรายชื่อจุดหลบ
+        local directions = {
+            { name = "Right", vec = rightDir },
+            { name = "Left", vec = leftDir },
+            { name = "Back", vec = -projectileDir },
+            { name = "FwdRight", vec = (projectileDir + rightDir).Unit },
+            { name = "FwdLeft", vec = (projectileDir + leftDir).Unit },
         }
-        
-        -- ฟังก์ชันเช็คจุดว่า "ตัดเส้น trajectory ของกระสุนไหม"
-        local function isCuttingTrajectory(startPos, targetPos, projDir, projPos)
-            -- เวกเตอร์จากกระสุนไปยังจุดปลายทางของเรา
-            local vecToTarget = targetPos - projPos
-            local vecToTargetXZ = Vector3.new(vecToTarget.X, 0, vecToTarget.Z)
-            
-            -- ถ้าจุดปลายทางอยู่ "ข้างหน้า" กระสุน และใกล้เส้นทางการวิ่ง
-            local dotProduct = vecToTargetXZ:Dot(projDir)
-            if dotProduct < 0 then return false end -- จุดอยู่ด้านหลังกระสุน ไม่ตัดแน่นอน
-            
-            -- วัดระยะห่างจากเส้น trajectory (cross product magnitude)
-            local crossMag = vecToTargetXZ:Cross(projDir).Magnitude
-            local safetyMargin = 4 -- ระยะปลอดภัยจากเส้นยิง
-            
-            return crossMag < safetyMargin
-        end
-        
-        -- เลือกจุดที่ดีที่สุด: ปลอดภัย + ไม่ตัดเส้นทาง + ไกลพอ
+
         local bestTarget = nil
-        local bestScore = math.huge
-        
-        for _, candidate in ipairs(dodgeCandidates) do
-            local testTarget = myPos + (candidate.dir * candidate.dist)
-            
-            -- เช็ค 1: เป็นจุดที่เดินไปถึงได้ไหม (ไม่มีกำแพง/เหว)
-            if isSafePosition(myPos, testTarget) then
-                -- เช็ค 2: จุดนี้ไม่ตัดเส้น trajectory ของกระสุน
-                if not isCuttingTrajectory(myPos, testTarget, projectileDir, hazPosXZ) then
-                    -- คะแนน: ยิ่ง priority ต่ำ + ระยะเหมาะสม =越好
-                    local score = candidate.priority + (math.abs(candidate.dist - baseDodgeDist) * 0.1)
+        local bestScore = -math.huge
+
+        for _, data in ipairs(directions) do
+            -- ป้องกัน NaN อีกครั้งที่จุดคำนวณ
+            if data.vec.Magnitude > 0.1 then
+                local candidatePos = myPos + (data.vec * dodgeDist)
+                
+                -- เช็คพื้นพื้นฐานก่อน (ประหยัดทรัพยากร)
+                if isSafePosition(myPos, candidatePos) then
+                    -- เช็คความปลอดภัยจากกระสุนทุกตัวพร้อมกัน
+                    local score = getSafetyScore(candidatePos, activeProjectiles)
                     
-                    if score < bestScore then
+                    if score > bestScore then
                         bestScore = score
-                        bestTarget = testTarget
+                        bestTarget = candidatePos
                     end
                 end
             end
         end
-        
-        -- Fallback: ถ้าทุกจุดตัดเส้น trajectory หรือติดหมด ให้ใช้ findSafeDodge แบบ 360 องศา
+
+        -- Fallback สุดท้าย
         if not bestTarget then
-            bestTarget = findSafeDodge(myPos, pureRight, baseDodgeDist)
+            bestTarget = findSafeDodge(myPos, projectileDir, dodgeDist)
         end
-        
-        -- บังคับหลบถ้ามีจุดปลอดภัย
+
         if bestTarget then
             myRoot.CFrame = CFrame.new(bestTarget)
         end
     end
-end
 
 -- --- SUPPORT LOOPS ---
 task.spawn(function()
