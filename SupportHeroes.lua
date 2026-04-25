@@ -187,7 +187,7 @@ local function executeSmartDodgeV5(hazard)
         for _, v in pairs(hazard:GetDescendants()) do
             if v:IsA("BasePart") then 
                 table.insert(parts, v) 
-                v.CanCollide = false
+                v.CanCollide = true
                 v.CollisionGroup = "Default"
             end
         end
@@ -220,7 +220,7 @@ local function executeSmartDodgeV5(hazard)
     if distXZ > shieldRange then return end
 
     if isAoE then
-        if distXZ < hazardRadius + 3 then 
+        if distXZ < hazardRadius + 1.5 then 
             local escapeDir = (myPosXZ - hazPosXZ)
             if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
             escapeDir = escapeDir.Unit
