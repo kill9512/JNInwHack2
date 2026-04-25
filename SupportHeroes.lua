@@ -282,7 +282,7 @@ local function executeSmartDodgeV5(hazard)
                 else
                     -- [แก้ไขตามสั่ง] ถ้าติดกำแพงทั้งซ้ายและขวา ให้วาร์ปสวนวิถีกระสุน (180 องศา) ไปด้านหลังกระสุนเลย
                     local forwardDir = -flatProjDir 
-                    local warpBehindTarget = myPos + (forwardDir * 12) -- วาร์ปสวนทะลุไป 12 บล็อค
+                    local warpBehindTarget = myPos + (forwardDir * 15) -- วาร์ปสวนทะลุไป 12 บล็อค
                     
                     if isSafePosition(myPos, warpBehindTarget) then
                         safeTarget = warpBehindTarget
