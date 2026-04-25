@@ -1,4 +1,4 @@
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua "))()
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
 local Window = Library.CreateLib("KONG GUISUS - EXPLORER", "DarkTheme")
 local Tab = Window:NewTab("Main")
 
@@ -24,13 +24,18 @@ local currentWaypointIndex = 1
 local lastComputeTime = 0
 local lastTargetPos = Vector3.new()
 local isProbing = false
+local randomTarget = nil 
+
+-- --- DODGE SYSTEM VARIABLES (NEW) ---
+local ProjectileHistory = {} -- เก็บตำแหน่งเก่าของกระสุน
+local lastDodgeTime = 0
+local DODGE_COOLDOWN = 0.25 -- หน่วงเวลาหลบกันสั่น
+local MAX_HISTORY_SIZE = 10 -- จำกัดจำนวนประวัติกันเมมเต็ม
 
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
-
 local lastPosition = Vector3.new()
 local lastMoveTick = os.clock()
-local randomTarget = nil 
 
 -- --- UI Sections ---
 local SupportSection = Tab:NewSection("Support Functions") 
@@ -42,7 +47,7 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V5", "หลบขอบวงเวทย์ & สไลด์กระสุน (พร้อมแก้ CanCollide)", function(state)
+SupportSection:NewToggle("Smart Dodge V5", "หลบขอบวงเวทย์ & สไลด์กระสุน (Geometry Fix)", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -126,30 +131,21 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- --- ระบบสแกนหาจุดปลอดภัย (แก้บัคติดมุม) ---
 local function isSafePosition(startPos, targetPos)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
-    
-    -- เช็คกำแพงขวางทาง
     local dir = targetPos - startPos
     local wallHit = workspace:Raycast(startPos, dir, rayParams)
     if wallHit then return false end 
-
-    -- เช็คเหว (ยิงเลเซอร์ลงพื้น)
     local groundOrigin = targetPos + Vector3.new(0, 3, 0)
     local groundHit = workspace:Raycast(groundOrigin, Vector3.new(0, -10, 0), rayParams)
     if not groundHit then return false end 
-
     return true
 end
 
--- [ใหม่] ถัาทางหลักติดกำแพง ให้หมุนหาทางออกรอบตัว 360 องศา
 local function findSafeDodge(startPos, baseDir, distance)
-    -- ลองทางหลักก่อน
     local target = startPos + (baseDir * distance)
     if isSafePosition(startPos, target) then return target end
     
-    -- ถ้าติดกำแพง ลองกวาดมุม 45, 90, 135, 180 องศา ทั้งซ้ายขวา
     local angles = {45, -45, 90, -90, 135, -135, 180}
     for _, angle in ipairs(angles) do
         local rotatedDir = CFrame.Angles(0, math.rad(angle), 0) * baseDir
@@ -158,51 +154,46 @@ local function findSafeDodge(startPos, baseDir, distance)
             return testTarget
         end
     end
-    
-    -- ถ้าติดทุกทางจริงๆ (โดนขังขอบแมพ) ยอมขยับไปทางหลักนิดนึงก็ยังดี
     return startPos + (baseDir * (distance * 0.4))
 end
 
--- --- [ระบบอัปเดต V5] โคตรแม่นยำ ---
+-- --- [SMART DODGE V5 - FIXED CORE] ---
 local function executeSmartDodgeV5(hazard)
     if not hazard or not hazard.Parent then return end
     
     local isAoE = hazard:IsA("Model")
-    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$"))
+    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$") or hazard.Name:match("Projectile"))
     
     if not (isAoE or isProjectile) then return end
 
     local myChar = LocalPlayer.Character
+    local myHuman = myChar and myChar:FindFirstChildOfClass("Humanoid")
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-    if not myRoot then return end
+    if not myRoot or not myHuman then return end
+
+    -- Cooldown Check: กันสั่น
+    if tick() - lastDodgeTime < DODGE_COOLDOWN then return end
 
     local hazardPos = nil
     local hazardRadius = 2 
     
-    -- [แก้ 1: วัดขนาดจาก Part ข้างใน Model แทน BoundingBox]
     if isAoE then
         local parts = {}
         for _, v in pairs(hazard:GetDescendants()) do
             if v:IsA("BasePart") then 
                 table.insert(parts, v) 
-                -- *** แก้ไขตรงนี้: บังคับเปิด CanCollide ให้ทุก Part ที่เจอใน Model ของ Effects ***
                 v.CanCollide = true
-                v.CollisionGroup = "Default"
             end
         end
         
         if #parts > 0 then
-            -- ใช้จุดศูนย์กลางของชิ้นแรกหรือชิ้นหลัก
             local centerPart = hazard.PrimaryPart or parts[1]
             hazardPos = centerPart.Position
-            
-            -- หาชิ้นที่ใหญ่ที่สุดใน Model เพื่อกำหนดรัศมีวงเวทย์
             for _, p in pairs(parts) do
                 local r = math.max(p.Size.X, p.Size.Z) / 2
                 if r > hazardRadius then hazardRadius = r end
             end
         else
-            -- ถ้ามันว่างเปล่าจริงๆ ค่อยใช้ BoundingBox กางเกงใน
             local cframe, size = hazard:GetBoundingBox()
             hazardPos = cframe.Position
             hazardRadius = math.max(size.X, size.Z) / 2
@@ -219,30 +210,27 @@ local function executeSmartDodgeV5(hazard)
     local hazPosXZ = Vector3.new(hazardPos.X, 0, hazardPos.Z)
     local distXZ = (myPosXZ - hazPosXZ).Magnitude
 
-    if distXZ > shieldRange then return end
-
-    -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด)
+    -- [กรณีที่ 1] หลบวงเวทย์ (AoE)
     if isAoE then
-        -- ถ้าเราอยู่ในวง (บวกระยะเผื่อ 1.5 บล็อค เพื่อให้หลุดขอบชัวร์ๆ)
-        if distXZ < hazardRadius + 2 then 
+        if distXZ < hazardRadius + 2 and distXZ < shieldRange then 
             local escapeDir = (myPosXZ - hazPosXZ)
             if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
             escapeDir = escapeDir.Unit
             
-            -- คำนวณระยะที่ต้องก้าวออกไปให้พ้นขอบพอดีเป๊ะ
             local distanceToMove = (hazardRadius + 1.5) - distXZ
+            local safeTarget = findSafeDodge(myPos, escapeDir, math.max(distanceToMove, 4))
             
-            -- ใช้ฟังก์ชันดิ้นรน 360 องศา เผื่อติดมุม
-            local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove)
             if safeTarget then
-                myRoot.CFrame = CFrame.new(safeTarget)
+                myHuman:MoveTo(safeTarget) -- ใช้ MoveTo แทน CFrame
+                lastDodgeTime = tick()
             end
         end
 
-
-    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic, Skill Shot) - FIXED GEOMETRY
+    -- [กรณีที่ 2] หลบกระสุน (Projectile) - GEOMETRY & TIMING FIX
     elseif isProjectile then
-        -- 1. หาทิศทางและความเร็วที่แม่นยำที่สุด
+        if distXZ > shieldRange then return end
+
+        -- 1. หา Direction & Speed ที่แม่นยำ
         local pVel = hazard.Velocity
         local pSpeed = pVel.Magnitude
         local pDir = nil
@@ -250,96 +238,67 @@ local function executeSmartDodgeV5(hazard)
         if pSpeed > 0.1 then
             pDir = pVel.Unit
         else
-            -- Fallback: ใช้ประวัติตำแหน่งถ้ามี (ป้องกันกรณี Velocity เป็น 0 ชั่วคราว)
+            -- Fallback: ใช้ประวัติตำแหน่ง
             local lastPos = ProjectileHistory[hazard]
             if lastPos then
                 local moveVec = hazard.Position - lastPos
                 if moveVec.Magnitude > 0.1 then
                     pDir = moveVec.Unit
-                    pSpeed = moveVec.Magnitude / 0.033 -- ประมาณค่า speed จาก frame time (30fps)
+                    pSpeed = moveVec.Magnitude / 0.033 
                 end
             end
         end
 
-        -- ถ้ายังไม่มีทิศทางที่ชัดเจน -> ข้ามไปก่อน (กันมั่ว) หรือใช้โหมดฉุกเฉิน
-        if not pDir then 
-            return 
-        end
+        if not pDir then return end -- ไม่มีทิศทาง ไม่หลบมั่ว
 
-        -- ✅ FIX 1: เช็คว่ากระสุนกำลังพุ่งเข้าหาเราจริงไหม? (Dot Product Check)
-        -- ถ้ากระสุนวิ่งผ่านเราไปแล้ว หรือวิ่งออกห่าง -> ไม่ต้องหลบ
+        -- ✅ FIX 1: เช็คว่ากระสุนพุ่งเข้าหาเราจริงไหม?
         local toMe = (myPos - hazard.Position)
-        if toMe:Dot(pDir) < -5 then 
-            -- อนุญาตให้ติดลบนิดหน่อยเผื่อ Hitbox กว้าง แต่ถ้าลบมากแสดงว่าวิ่งหนีเราไปแล้ว
-            return 
-        end
+        if toMe:Dot(pDir) < -5 then return end -- วิ่งผ่านไปแล้ว
 
-        -- ✅ FIX 2: กำหนด "จุดกำเนิดของเส้นวิถี" (Ray Origin) ให้ถูกต้อง
-        -- ไม่ใช้หัวกระสุนปัจจุบันเป็นฐาน แต่ถอยหลังไปเล็กน้อยเพื่อสร้างเป็น "เส้นยาว"
-        local rayOrigin = hazard.Position - (pDir * 10) -- สมมติความยาวย้อนหลัง 10 studs
+        -- ✅ FIX 2: กำหนด Ray Origin ให้ถูกต้อง (ถอยหลังไปสร้างเส้นยาว)
+        local rayOrigin = hazard.Position - (pDir * 10) 
         
-        -- คำนวณเวกเตอร์ตั้งฉากเพียงครั้งเดียว
+        -- คำนวณเวกเตอร์ตั้งฉาก
         local upVector = Vector3.new(0, 1, 0)
         local rightDir = pDir:Cross(upVector)
         if rightDir.Magnitude < 0.01 then rightDir = Vector3.new(1, 0, 0) else rightDir = rightDir.Unit end
         local leftDir = -rightDir
 
-        -- ค่าคงที่สำหรับการคำนวณ
         local playerRadius = 3
         local projRadius = 2
-        local safetyMargin = playerRadius + projRadius + 2 -- เผื่อเพิ่ม 2 studs
-        local triggerDist = 20 -- ระยะเริ่มสนใจ
+        local safetyMargin = playerRadius + projRadius + 2 
+        local triggerDist = 25 
 
-        -- ✅ FIX 3: เช็คระยะจาก "ตัวเราปัจจุบัน" ไปยังเส้นวิถี ก่อนตัดสินใจหลบ
-        -- โปรเจคชันของเวกเตอร์ (เรา - จุดกำเนิด) ลงบนเส้นตรงกระสุน
+        -- ✅ FIX 3: เช็คระยะจากตัวเราปัจจุบันไปยังเส้นวิถี
         local vecToPlayer = myPos - rayOrigin
         local projectionLen = vecToPlayer:Dot(pDir)
-        
-        -- หาจุดที่ใกล้ที่สุดบนเส้นวิถี (Closest Point on Ray)
         local closestPointOnRay = rayOrigin + (pDir * math.max(0, projectionLen))
         local distToLineNow = (myPos - closestPointOnRay).Magnitude
 
-        -- ถ้าตอนนี้เราอยู่ไกลจากเส้นวิถีมาก ๆ แล้ว -> ไม่ต้องหลบ (กัน Spam)
-        if distToLineNow > triggerDist then
-            return
-        end
+        if distToLineNow > triggerDist then return end -- ไกลเกินไป ไม่ต้องหลบ
 
-        -- ฟังก์ชันเช็คความปลอดภัยของจุดใดจุดหนึ่ง (รวม Hitbox)
+        -- ฟังก์ชันเช็คความปลอดภัย (รวม Hitbox)
         local function getSafetyScore(pos)
             local vecToPos = pos - rayOrigin
             local projLen = vecToPos:Dot(pDir)
-            
-            -- จุดที่อยู่ด้านหลังจุดกำเนิดมาก ๆ อาจปลอดภัย (แต่ต้องระวังกรณีกระสุนยาว)
             if projLen < -5 then return 1000 end 
-
             local closest = rayOrigin + (pDir * math.max(0, projLen))
             local dist = (pos - closest).Magnitude
-            
-            -- คะแนน: ยิ่งไกลจากเส้นยิ่งดี, ถ้าชนได้คะแนนติดลบหนัก
-            if dist < safetyMargin then
-                return -1000 -- อันตรายถึงชีวิต
-            else
-                return dist -- ระยะห่างคือคะแนน
-            end
+            if dist < safetyMargin then return -1000 else return dist end
         end
 
-        -- ✅ FIX 4: เพิ่ม Path Check แบบง่าย (เช็คระหว่างทาง 3 จุด)
+        -- ✅ FIX 4: Path Check แบบง่าย
         local function isPathSafe(startPos, endPos)
             for i = 1, 3 do
                 local t = i / 4
                 local checkPos = startPos:Lerp(endPos, t)
-                if getSafetyScore(checkPos) < 0 then
-                    return false
-                end
+                if getSafetyScore(checkPos) < 0 then return false end
             end
             return true
         end
 
-        -- สร้างตัวเลือกการหลบ
         local candidates = {}
         local dodgeDist = 8
-        
-        -- ทิศทางพื้นฐาน: ซ้าย, ขวา, หลัง (เน้นข้างก่อนเพราะเร็วกว่า)
         local directions = {
             { vec = rightDir, name = "Right" },
             { vec = leftDir, name = "Left" },
@@ -353,14 +312,9 @@ local function executeSmartDodgeV5(hazard)
 
         for _, data in ipairs(directions) do
             local targetPos = myPos + (data.vec * dodgeDist)
-            
-            -- 1. เช็คสิ่งกีดขวางพื้นฐาน
             if isSafePosition(myPos, targetPos) then
-                -- 2. เช็คเส้นทางระหว่างเดิน (Path Check)
                 if isPathSafe(myPos, targetPos) then
-                    -- 3. เช็คจุดปลายทาง
                     local score = getSafetyScore(targetPos)
-                    
                     if score > bestScore then
                         bestScore = score
                         bestTarget = targetPos
@@ -369,24 +323,87 @@ local function executeSmartDodgeV5(hazard)
             end
         end
 
-        -- Fallback: ถ้าทุกทิศทางที่คำนวณไว้ไม่ปลอดภัย ให้ลองสุ่มมุมรอบตัว (360 Search)
         if not bestTarget then
-            -- เรียกใช้ฟังก์ชันค้นหาขั้นสูงที่มีอยู่แล้ว (สมมติว่ามี)
             bestTarget = findSafeDodge(myPos, pDir, dodgeDist)
         end
 
-        -- สั่งเคลื่อนที่ถ้าหาจุดปลอดภัยเจอ
         if bestTarget then
-            myRoot.CFrame = CFrame.new(bestTarget)
+            myHuman:MoveTo(bestTarget)
+            lastDodgeTime = tick()
         end
     end
--- --- MAIN FOLLOW LOOP ---
+end
+
+-- --- AUTO COIN FUNCTION ---
+local function collectNearestCoin()
+    local myChar = LocalPlayer.Character
+    if not myChar then return end
+    local myRoot = myChar:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end
+
+    local nearestCoin = nil
+    local minDist = math.huge
+
+    -- สแกนหา Coin ใน Workspace (ปรับชื่อตามเกมถ้าจำเป็น เช่น "Coin", "Money")
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj.Name:lower():find("coin") and obj:IsA("BasePart") then
+            local d = (myRoot.Position - obj.Position).Magnitude
+            if d < 50 and d < minDist then -- ระยะเก็บ 50
+                minDist = d
+                nearestCoin = obj
+            end
+        end
+    end
+
+    if nearestCoin then
+        local myHuman = myChar:FindFirstChildOfClass("Humanoid")
+        if myHuman then
+            myHuman:MoveTo(nearestCoin.Position)
+        end
+    end
+end
+
+-- --- MAIN LOOP (UPDATED WITH DODGE SCAN & COIN) ---
 task.spawn(function()
     while true do
         task.wait(0.05)
-        if not followEnabled then continue end
         
         pcall(function()
+            local myChar = LocalPlayer.Character
+            if not myChar then return end
+            local myRoot = myChar:FindFirstChild("HumanoidRootPart")
+            if not myRoot then return end
+
+            -- 1. Update Projectile History (สำหรับคำนวณทิศทาง)
+            if autoDodgeEnabled then
+                for _, obj in ipairs(workspace:GetDescendants()) do
+                    if obj:IsA("BasePart") and (obj.Name == "Arrow" or obj.Name:match("Magic$") or obj.Name:match("Projectile")) then
+                        -- อัปเดตประวัติตำแหน่ง
+                        ProjectileHistory[obj] = obj.Position
+                        -- ล้างประวัติเก่าถ้าวัตถุหาย (ป้องกันเมมเต็ม ทำในอีกลูปแยกหรือทิ้งไว้ก่อนก็ได้เพราะ Roblox GC จัดการ)
+                        
+                        -- เรียกฟังก์ชันหลบ
+                        executeSmartDodgeV5(obj)
+                    end
+                end
+                
+                -- ล้างประวัติกระสุนที่หายไปแล้ว (Optimization)
+                for obj, _ in pairs(ProjectileHistory) do
+                    if not obj.Parent then
+                        ProjectileHistory[obj] = nil
+                    end
+                end
+            end
+
+            -- 2. Auto Coin
+            if autoCoinEnabled then
+                collectNearestCoin()
+            end
+
+            -- 3. Follow Logic (เดิม)
+            if not followEnabled then continue end
+            
+            -- ... (โค้ดส่วน Follow เดิมที่อยู่ด้านล่างต่อจากนี้) ...
             local target = nil
             if SelectedMode == "Manual" then
                 target = Players:FindFirstChild(SelectedPlayerName or "")
@@ -415,9 +432,7 @@ task.spawn(function()
 
             if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then return end
 
-            local myChar = LocalPlayer.Character
             local myHuman = myChar:FindFirstChildOfClass("Humanoid")
-            local myRoot = myChar:FindFirstChild("HumanoidRootPart")
             local tRoot = target.Character.HumanoidRootPart
             
             if myHuman and myRoot then
