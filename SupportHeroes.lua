@@ -307,7 +307,7 @@ task.spawn(function()
                                     item:PivotTo(myRoot.CFrame)
                                     for _, part in pairs(item:GetDescendants()) do
                                         if part:IsA("BasePart") then
-                                            part.CanCollide = false
+                                            part.CanCollide = true
                                         end
                                     end
                                 end
