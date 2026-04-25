@@ -42,7 +42,7 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V8", "วาร์ปทะลวงศัตรู & ลอยตัวฉุกเฉิน", function(state)
+SupportSection:NewToggle("Smart Dodge V7", "หลบกระสุนขั้นสูง (BodyVelocity)", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -160,7 +160,7 @@ local function findSafeDodge(startPos, baseDir, distance)
     return startPos + (baseDir * (distance * 0.4))
 end
 
--- --- [ระบบอัปเดต V8] โคตรแม่นยำ (V-Shape Warp & Float Emergency) ---
+-- --- [ระบบอัปเดต V7] โคตรแม่นยำ (ดึงค่า BodyVelocity) ---
 local function executeSmartDodgeV5(hazard)
     if not hazard or not hazard.Parent then return end
     
@@ -227,7 +227,7 @@ local function executeSmartDodgeV5(hazard)
             end
         end
 
-    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) - อัปเกรด V8 วาร์ปทะลวง
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) - อัปเกรด V7 (เสริมลอจิกวาร์ปสวน 180 องศาเมื่อติดกำแพง)
     elseif isProjectile then
         local projVelocity = Vector3.new(0, 0, 0)
         
@@ -267,44 +267,30 @@ local function executeSmartDodgeV5(hazard)
             local timeToImpact = distXZ / speed
 
             if timeToImpact < 0.6 or distXZ < 15 then
-                
-                -- ลอจิกใหม่: วาร์ปทะลวงเข้าประชิดตัว (V-Shape Warp)
-                local forwardDir = -flatProjDir -- ทิศทางพุ่งสวนกระสุน
-                local rightDir = flatProjDir:Cross(Vector3.new(0, 1, 0)).Unit -- ทิศออกขวา
-                local leftDir = -rightDir -- ทิศออกซ้าย
-
-                -- ผสมเวกเตอร์ (ข้างหน้า 2 ส่วน, ออกข้าง 1 ส่วน)
-                local warpRight = (rightDir + (forwardDir * 2)).Unit
-                local warpLeft = (leftDir + (forwardDir * 2)).Unit
-                local warpDist = 12
+                local dodgeRight = flatProjDir:Cross(Vector3.new(0, 1, 0)).Unit
+                local dodgeLeft = -dodgeRight
+                local dodgeDist = 8 
 
                 local safeTarget = nil
 
-                if isSafePosition(myPos, myPos + (warpRight * warpDist)) then
-                    safeTarget = myPos + (warpRight * warpDist)
-                elseif isSafePosition(myPos, myPos + (warpLeft * warpDist)) then
-                    safeTarget = myPos + (warpLeft * warpDist)
+                -- ลองสไลด์ขวา 90 องศา
+                if isSafePosition(myPos, myPos + (dodgeRight * dodgeDist)) then
+                    safeTarget = myPos + (dodgeRight * dodgeDist)
+                -- ลองสไลด์ซ้าย 90 องศา
+                elseif isSafePosition(myPos, myPos + (dodgeLeft * dodgeDist)) then
+                    safeTarget = myPos + (dodgeLeft * dodgeDist)
                 else
-                    safeTarget = findSafeDodge(myPos, rightDir, 6)
-                end
-
-                -- ====== ระบบลอยตัวฉุกเฉิน (ไม่ลบกระสุน) ======
-                if safeTarget and (safeTarget - myPos).Magnitude < 3 then
-                    local roofHit = workspace:Raycast(myPos, Vector3.new(0, 15, 0), rayParams)
-                    if not roofHit then
-                        -- ไม่มีเพดาน: ลอยขึ้นฟ้า
-                        safeTarget = myPos + Vector3.new(0, 12, 0)
-                        local floatForce = Instance.new("BodyVelocity")
-                        floatForce.MaxForce = Vector3.new(100000, 100000, 100000)
-                        floatForce.Velocity = Vector3.new(0, 0, 0)
-                        floatForce.Parent = myRoot
-                        game.Debris:AddItem(floatForce, 0.6) 
+                    -- [แก้ไขตามสั่ง] ถ้าติดกำแพงทั้งซ้ายและขวา ให้วาร์ปสวนวิถีกระสุน (180 องศา) ไปด้านหลังกระสุนเลย
+                    local forwardDir = -flatProjDir 
+                    local warpBehindTarget = myPos + (forwardDir * 12) -- วาร์ปสวนทะลุไป 12 บล็อค
+                    
+                    if isSafePosition(myPos, warpBehindTarget) then
+                        safeTarget = warpBehindTarget
                     else
-                        -- มีเพดานและจนมุม: ไม่ทำอะไรกับกระสุน ยอมใช้จุดปลอดภัยที่ใกล้ที่สุด (หรือรับดาเมจ)
-                        safeTarget = nil
+                        -- ถ้าหลังกระสุนก็ยังติดกำแพงอีก ค่อยดิ้นรน 360 องศา
+                        safeTarget = findSafeDodge(myPos, forwardDir, 8)
                     end
                 end
-                -- =============================================
 
                 if safeTarget then
                     myRoot.CFrame = CFrame.new(safeTarget)
