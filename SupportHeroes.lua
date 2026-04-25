@@ -240,174 +240,146 @@ local function executeSmartDodgeV5(hazard)
         end
 
 
-    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic, Skill Shot) - V6 Stable
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic, Skill Shot) - FIXED GEOMETRY
     elseif isProjectile then
-        -- 1. ดึงข้อมูล Velocity จริง (แก้เรื่อง Scale และ Delay)
-        local projVel = hazard.Velocity
-        local projSpeed = projVel.Magnitude
-        
-        -- ถ้ากระสุนหยุดนิ่งหรือความเร็วต่ำมาก ให้ข้ามไปก่อน (กัน Error)
-        if projSpeed < 1 then return end 
+        -- 1. หาทิศทางและความเร็วที่แม่นยำที่สุด
+        local pVel = hazard.Velocity
+        local pSpeed = pVel.Magnitude
+        local pDir = nil
 
-        local pDir = projVel.Unit
-        
-        -- ป้องกัน Vector พัง (NaN) กรณีพุ่งขึ้นฟ้าหรือลงดินตรงๆ
-        if pDir.Y > 0.99 or pDir.Y < -0.99 then
-            pDir = Vector3.new(1, 0, 0) -- Fallback direction
+        if pSpeed > 0.1 then
+            pDir = pVel.Unit
+        else
+            -- Fallback: ใช้ประวัติตำแหน่งถ้ามี (ป้องกันกรณี Velocity เป็น 0 ชั่วคราว)
+            local lastPos = ProjectileHistory[hazard]
+            if lastPos then
+                local moveVec = hazard.Position - lastPos
+                if moveVec.Magnitude > 0.1 then
+                    pDir = moveVec.Unit
+                    pSpeed = moveVec.Magnitude / 0.033 -- ประมาณค่า speed จาก frame time (30fps)
+                end
+            end
         end
 
-        -- 2. ระยะกระตุ้น (Trigger Distance) - แก้ Jitter
-        -- ถ้ากระสุนยังไกลเกินไป ไม่ต้องหลบ
-        local triggerDist = 20 
-        if distXZ > triggerDist then return end
+        -- ถ้ายังไม่มีทิศทางที่ชัดเจน -> ข้ามไปก่อน (กันมั่ว) หรือใช้โหมดฉุกเฉิน
+        if not pDir then 
+            return 
+        end
 
-        -- 3. ค่าคงที่ Hitbox (แก้เรื่องชนทั้งที่ดูเหมือนรอด)
-        local playerRadius = 3  -- รัศมีตัวเรา (เผื่อ Safety)
-        local projRadius = 2    -- รัศมีกระสุนโดยประมาณ
-        local requiredMargin = playerRadius + projRadius + 2 -- +2 เผื่อ误差
+        -- ✅ FIX 1: เช็คว่ากระสุนกำลังพุ่งเข้าหาเราจริงไหม? (Dot Product Check)
+        -- ถ้ากระสุนวิ่งผ่านเราไปแล้ว หรือวิ่งออกห่าง -> ไม่ต้องหลบ
+        local toMe = (myPos - hazard.Position)
+        if toMe:Dot(pDir) < -5 then 
+            -- อนุญาตให้ติดลบนิดหน่อยเผื่อ Hitbox กว้าง แต่ถ้าลบมากแสดงว่าวิ่งหนีเราไปแล้ว
+            return 
+        end
+
+        -- ✅ FIX 2: กำหนด "จุดกำเนิดของเส้นวิถี" (Ray Origin) ให้ถูกต้อง
+        -- ไม่ใช้หัวกระสุนปัจจุบันเป็นฐาน แต่ถอยหลังไปเล็กน้อยเพื่อสร้างเป็น "เส้นยาว"
+        local rayOrigin = hazard.Position - (pDir * 10) -- สมมติความยาวย้อนหลัง 10 studs
         
-        -- 4. คำนวณเวกเตอร์ตั้งฉาก (Side Vector) ครั้งเดียว
+        -- คำนวณเวกเตอร์ตั้งฉากเพียงครั้งเดียว
         local upVector = Vector3.new(0, 1, 0)
-        local rightDir = pDir:Cross(upVector).Unit
+        local rightDir = pDir:Cross(upVector)
+        if rightDir.Magnitude < 0.01 then rightDir = Vector3.new(1, 0, 0) else rightDir = rightDir.Unit end
         local leftDir = -rightDir
-        local backDir = -pDir
+
+        -- ค่าคงที่สำหรับการคำนวณ
+        local playerRadius = 3
+        local projRadius = 2
+        local safetyMargin = playerRadius + projRadius + 2 -- เผื่อเพิ่ม 2 studs
+        local triggerDist = 20 -- ระยะเริ่มสนใจ
+
+        -- ✅ FIX 3: เช็คระยะจาก "ตัวเราปัจจุบัน" ไปยังเส้นวิถี ก่อนตัดสินใจหลบ
+        -- โปรเจคชันของเวกเตอร์ (เรา - จุดกำเนิด) ลงบนเส้นตรงกระสุน
+        local vecToPlayer = myPos - rayOrigin
+        local projectionLen = vecToPlayer:Dot(pDir)
         
-        -- 5. ฟังก์ชันคำนวณคะแนนความปลอดภัย (Scoring Function)
-        -- คืนค่า: คะแนน (ยิ่งสูงยิ่งดี), จุดปลายทาง
-        local function getSafetyScore(targetPos)
-            local vecToTarget = targetPos - hazard.Position
-            
-            -- Projection: หาจุดที่ใกล้ที่สุดบน "รังสี" (Ray) ของกระสุน
-            local projectionLen = vecToTarget:Dot(pDir)
-            
-            -- intereset เฉพาะด้านหน้ากระสุน (Ray) ถ้าติดลบแปลว่าอยู่ด้านหลังแหล่งกำเนิด (ปลอดภัยจากหัวกระสุน)
-            if projectionLen < 0 then 
-                return 1000 -- ปลอดภัยมาก (อยู่หลังคนยิง)
-            end
-            
-            -- หาจุดบนเส้น射线 ที่ใกล้จุดเป้าหมายที่สุด
-            local closestPointOnRay = hazard.Position + (pDir * projectionLen)
-            local distToLine = (targetPos - closestPointOnRay).Magnitude
-            
-            -- คะแนนมาจากระยะห่างจากเส้นวิถี
-            -- ถ้า distToLine > requiredMargin = รอด
-            -- ยิ่งห่างมาก คะแนนยิ่งสูง
-            if distToLine < requiredMargin then
-                return -1 -- อันตราย ตัดทิ้ง
-            end
-            
-            return distToLine -- คืนค่าระยะห่างเป็นคะแนน
+        -- หาจุดที่ใกล้ที่สุดบนเส้นวิถี (Closest Point on Ray)
+        local closestPointOnRay = rayOrigin + (pDir * math.max(0, projectionLen))
+        local distToLineNow = (myPos - closestPointOnRay).Magnitude
+
+        -- ถ้าตอนนี้เราอยู่ไกลจากเส้นวิถีมาก ๆ แล้ว -> ไม่ต้องหลบ (กัน Spam)
+        if distToLineNow > triggerDist then
+            return
         end
 
-        -- 6. สร้าง Candidate Points (Relative to Projectile Direction)
-        local dodgeDist = 8 -- ระยะหลบมาตรฐาน
-        local candidates = {
-            { name = "Right", pos = myPos + (rightDir * dodgeDist) },
-            { name = "Left",  pos = myPos + (leftDir * dodgeDist) },
-            { name = "Back",  pos = myPos + (backDir * dodgeDist) },
-            { name = "FwdRight", pos = myPos + ((pDir + rightDir).Unit * dodgeDist) },
-            { name = "FwdLeft",  pos = myPos + ((pDir + leftDir).Unit * dodgeDist) },
+        -- ฟังก์ชันเช็คความปลอดภัยของจุดใดจุดหนึ่ง (รวม Hitbox)
+        local function getSafetyScore(pos)
+            local vecToPos = pos - rayOrigin
+            local projLen = vecToPos:Dot(pDir)
+            
+            -- จุดที่อยู่ด้านหลังจุดกำเนิดมาก ๆ อาจปลอดภัย (แต่ต้องระวังกรณีกระสุนยาว)
+            if projLen < -5 then return 1000 end 
+
+            local closest = rayOrigin + (pDir * math.max(0, projLen))
+            local dist = (pos - closest).Magnitude
+            
+            -- คะแนน: ยิ่งไกลจากเส้นยิ่งดี, ถ้าชนได้คะแนนติดลบหนัก
+            if dist < safetyMargin then
+                return -1000 -- อันตรายถึงชีวิต
+            else
+                return dist -- ระยะห่างคือคะแนน
+            end
+        end
+
+        -- ✅ FIX 4: เพิ่ม Path Check แบบง่าย (เช็คระหว่างทาง 3 จุด)
+        local function isPathSafe(startPos, endPos)
+            for i = 1, 3 do
+                local t = i / 4
+                local checkPos = startPos:Lerp(endPos, t)
+                if getSafetyScore(checkPos) < 0 then
+                    return false
+                end
+            end
+            return true
+        end
+
+        -- สร้างตัวเลือกการหลบ
+        local candidates = {}
+        local dodgeDist = 8
+        
+        -- ทิศทางพื้นฐาน: ซ้าย, ขวา, หลัง (เน้นข้างก่อนเพราะเร็วกว่า)
+        local directions = {
+            { vec = rightDir, name = "Right" },
+            { vec = leftDir, name = "Left" },
+            { vec = -pDir, name = "Back" },
+            { vec = (rightDir - pDir).Unit, name = "BackRight" },
+            { vec = (leftDir - pDir).Unit, name = "BackLeft" }
         }
 
-        local bestCandidate = nil
+        local bestTarget = nil
         local bestScore = -math.huge
 
-        -- 7. วนลูปหาจุดที่ดีที่สุด (Multi-Projectile Ready Structure)
-        -- หมายเหตุ: ในลูปนี้เราเช็คทีละจุด แต่ฟังก์ชัน getSafetyScore สามารถขยายให้วนลูปเช็คทุก projectile ได้ในอนาคต
-        for _, cand in ipairs(candidates) do
-            -- เช็คพื้นฐาน: จุดนั้นเดินไปถึงได้ไหม (ไม่ติดกำแพง)
-            if isSafePosition(myPos, cand.pos) then
-                local score = getSafetyScore(cand.pos)
-                
-                if score > bestScore then
-                    bestScore = score
-                    bestCandidate = cand.pos
+        for _, data in ipairs(directions) do
+            local targetPos = myPos + (data.vec * dodgeDist)
+            
+            -- 1. เช็คสิ่งกีดขวางพื้นฐาน
+            if isSafePosition(myPos, targetPos) then
+                -- 2. เช็คเส้นทางระหว่างเดิน (Path Check)
+                if isPathSafe(myPos, targetPos) then
+                    -- 3. เช็คจุดปลายทาง
+                    local score = getSafetyScore(targetPos)
+                    
+                    if score > bestScore then
+                        bestScore = score
+                        bestTarget = targetPos
+                    end
                 end
             end
         end
 
-        -- 8. Fallback: ถ้าทุกจุดที่วางแผนไว้ไม่ดีพอ (เช่น อยู่ในมุมอับ)
-        if not bestCandidate or bestScore < 0 then
-            -- ใช้ระบบสุ่มมุมละเอียด (Continuous Search) หรือ 360 Dodge
-            -- ส่ง pDir ไปเพื่อให้ findSafeDodge รู้ว่าต้องหนีแนวไหน
-            bestCandidate = findSafeDodge(myPos, pDir, dodgeDist)
+        -- Fallback: ถ้าทุกทิศทางที่คำนวณไว้ไม่ปลอดภัย ให้ลองสุ่มมุมรอบตัว (360 Search)
+        if not bestTarget then
+            -- เรียกใช้ฟังก์ชันค้นหาขั้นสูงที่มีอยู่แล้ว (สมมติว่ามี)
+            bestTarget = findSafeDodge(myPos, pDir, dodgeDist)
         end
 
-        -- 9. สั่งเคลื่อนที่
-        if bestCandidate then
-            myRoot.CFrame = CFrame.new(bestCandidate)
+        -- สั่งเคลื่อนที่ถ้าหาจุดปลอดภัยเจอ
+        if bestTarget then
+            myRoot.CFrame = CFrame.new(bestTarget)
         end
     end
-    
--- --- SUPPORT LOOPS ---
-task.spawn(function()
-    while true do
-        task.wait(0.1)
-        if autoCoinEnabled then
-            pcall(function()
-                local myChar = LocalPlayer.Character
-                local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-                if myRoot then
-                    local dungeon = workspace:FindFirstChild("Dungeon")
-                    local treasure = dungeon and dungeon:FindFirstChild("Treasure")
-                    if treasure then
-                        for _, item in pairs(treasure:GetChildren()) do
-                            if item.Name == "CoinStack" or item.Name == "TreasureChest" then
-                                if item:IsA("BasePart") then
-                                    item.CanCollide = false
-                                    item.CFrame = myRoot.CFrame
-                                elseif item:IsA("Model") then
-                                    item:PivotTo(myRoot.CFrame)
-                                    for _, part in pairs(item:GetDescendants()) do
-                                        if part:IsA("BasePart") then
-                                            part.CanCollide = false
-                                            if part:FindFirstChild("TouchInterest") then
-                                                part.CFrame = myRoot.CFrame
-                                            end
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end)
-        end
-    end
-end)
-
--- Loop สแกนแบบ Stepped (รันก่อนฟิสิกส์ชนกัน)
--- ส่วนนี้จะเรียก executeSmartDodgeV5 ซึ่งข้างในมีการแก้ CanCollide แล้ว
-RunService.Stepped:Connect(function()
-    if autoDodgeEnabled then
-        pcall(function()
-            local dungeon = workspace:FindFirstChild("Dungeon")
-            local effects = dungeon and dungeon:FindFirstChild("Effects")
-            if effects then
-                for _, v in pairs(effects:GetChildren()) do
-                    executeSmartDodgeV5(v)
-                end
-            end
-        end)
-    end
-end)
-
--- แยก GetNil Instances ออกมารันช้าๆ ลดแลค
-task.spawn(function()
-    while true do
-        task.wait(0.5) 
-        if autoDodgeEnabled then
-            pcall(function()
-                if getnilinstances then
-                    for _, v in pairs(getnilinstances()) do
-                        executeSmartDodgeV5(v)
-                    end
-                end
-            end)
-        end
-    end
-end)
-
 -- --- MAIN FOLLOW LOOP ---
 task.spawn(function()
     while true do
