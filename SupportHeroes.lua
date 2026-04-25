@@ -163,7 +163,7 @@ local function findSafeDodge(startPos, baseDir, distance)
     return startPos + (baseDir * (distance * 0.4))
 end
 
--- --- [ระบบอัปเดต V5] โคตรแม่นยำ ---
+-- --- [ระบบอัปเดต V6] โคตรแม่นยำ (Trajectory & TTI) ---
 local function executeSmartDodgeV5(hazard)
     if not hazard or not hazard.Parent then return end
     
@@ -185,24 +185,21 @@ local function executeSmartDodgeV5(hazard)
         for _, v in pairs(hazard:GetDescendants()) do
             if v:IsA("BasePart") then 
                 table.insert(parts, v) 
-                -- *** แก้ไขตรงนี้: บังคับเปิด CanCollide ให้ทุก Part ที่เจอใน Model ของ Effects ***
+                -- บังคับเปิด CanCollide ให้ทุก Part ที่เจอใน Model
                 v.CanCollide = true
                 v.CollisionGroup = "Default"
             end
         end
         
         if #parts > 0 then
-            -- ใช้จุดศูนย์กลางของชิ้นแรกหรือชิ้นหลัก
             local centerPart = hazard.PrimaryPart or parts[1]
             hazardPos = centerPart.Position
             
-            -- หาชิ้นที่ใหญ่ที่สุดใน Model เพื่อกำหนดรัศมีวงเวทย์
             for _, p in pairs(parts) do
                 local r = math.max(p.Size.X, p.Size.Z) / 2
                 if r > hazardRadius then hazardRadius = r end
             end
         else
-            -- ถ้ามันว่างเปล่าจริงๆ ค่อยใช้ BoundingBox กางเกงใน
             local cframe, size = hazard:GetBoundingBox()
             hazardPos = cframe.Position
             hazardRadius = math.max(size.X, size.Z) / 2
@@ -223,82 +220,68 @@ local function executeSmartDodgeV5(hazard)
 
     -- [กรณีที่ 1] หลบวงเวทย์ (Model ทุกชนิด)
     if isAoE then
-        -- ถ้าเราอยู่ในวง (บวกระยะเผื่อ 1.5 บล็อค เพื่อให้หลุดขอบชัวร์ๆ)
         if distXZ < hazardRadius + 3 then 
             local escapeDir = (myPosXZ - hazPosXZ)
             if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
             escapeDir = escapeDir.Unit
             
-            -- คำนวณระยะที่ต้องก้าวออกไปให้พ้นขอบพอดีเป๊ะ
             local distanceToMove = (hazardRadius + 1.5) - distXZ
-            
-            -- ใช้ฟังก์ชันดิ้นรน 360 องศา เผื่อติดมุม
             local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove)
+            
             if safeTarget then
                 myRoot.CFrame = CFrame.new(safeTarget)
             end
         end
 
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) - อัปเกรด V6
+    elseif isProjectile then
+        local projVelocity = hazard.Velocity
+        local projDir = projVelocity.Unit
+        local speed = projVelocity.Magnitude
 
--- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) - อัปเกรด V6 (Trajectory & TTI)
-		elseif isProjectile then
-			-- 1. หาความเร็วและทิศทางที่กระสุนกำลังพุ่งไป
-			local projVelocity = hazard.Velocity
-			local projDir = projVelocity.Unit
-			local speed = projVelocity.Magnitude
+        -- หากกระสุนไม่ได้ใช้ระบบ Physics (Velocity = 0) ให้ดึงทิศทางจากหน้ากระสุน (LookVector) แทน
+        if speed < 1 then
+            projDir = hazard.CFrame.LookVector
+            speed = 60 -- กำหนดความเร็วสมมติ
+        end
 
-			-- หากกระสุนไม่ได้ใช้ระบบ Physics (Velocity = 0) ให้ดึงทิศทางจากหน้ากระสุน (LookVector) แทน
-			if speed < 1 then
-				projDir = hazard.CFrame.LookVector
-				speed = 60 -- กำหนดความเร็วสมมติสำหรับกระสุนที่ขยับด้วย CFrame
-			end
+        local flatProjDir = Vector3.new(projDir.X, 0, projDir.Z)
+        if flatProjDir.Magnitude > 0 then
+            flatProjDir = flatProjDir.Unit
+        else
+            flatProjDir = Vector3.new(1, 0, 0)
+        end
 
-			-- ทำให้วิถีกระสุนอยู่ในระนาบแบน (ไม่สนความสูง)
-			local flatProjDir = Vector3.new(projDir.X, 0, projDir.Z)
-			if flatProjDir.Magnitude > 0 then
-				flatProjDir = flatProjDir.Unit
-			else
-				flatProjDir = Vector3.new(1, 0, 0)
-			end
+        local toPlayerDir = (myPosXZ - hazPosXZ).Unit
+        local approachDot = flatProjDir:Dot(toPlayerDir)
 
-			-- 2. เช็คว่ากระสุนพุ่งมาหาเราจริงไหม (ใช้ Dot Product)
-			local toPlayerDir = (myPosXZ - hazPosXZ).Unit
-			local approachDot = flatProjDir:Dot(toPlayerDir)
+        -- เช็คว่าหน้ากระสุนหันมาทางเรา
+        if approachDot > 0.4 then
+            local timeToImpact = distXZ / speed
 
-			-- ถ้า approachDot > 0 แปลว่าหน้ากระสุนหันมาทางเรา (ยิ่งเข้าใกล้ 1 คือยิ่งพุ่งตรงเป๊ะ)
-			if approachDot > 0.4 then
-				
-				-- 3. คำนวณเวลาที่กระสุนจะพุ่งชน (Time-to-Impact)
-				local timeToImpact = distXZ / speed
+            -- เงื่อนไข: กระสุนจะถึงตัวในอีก 0.6 วินาที หรือระยะใกล้กว่า 15 บล็อค
+            if timeToImpact < 0.6 or distXZ < 15 then
+                local dodgeRight = flatProjDir:Cross(Vector3.new(0, 1, 0)).Unit
+                local dodgeLeft = -dodgeRight
+                local dodgeDist = 8 
 
-				-- เงื่อนไขการหลบ: จะหลบก็ต่อเมื่อกระสุนจะถึงตัวในอีก 0.6 วินาที หรือระยะใกล้กว่า 15 บล็อค
-				if timeToImpact < 0.6 or distXZ < 15 then
-					
-					-- 4. หาเวกเตอร์ "ตั้งฉากกับวิถีกระสุน" (ไม่ใช่ตั้งฉากกับตำแหน่งกระสุนเหมือนโค้ดเก่า)
-					local dodgeRight = flatProjDir:Cross(Vector3.new(0, 1, 0)).Unit
-					local dodgeLeft = -dodgeRight
+                local safeTarget = nil
 
-					local dodgeDist = 8 -- เพิ่มระยะการสไลด์เล็กน้อยให้พ้นชัวร์ขึ้น
+                if isSafePosition(myPos, myPos + (dodgeRight * dodgeDist)) then
+                    safeTarget = myPos + (dodgeRight * dodgeDist)
+                elseif isSafePosition(myPos, myPos + (dodgeLeft * dodgeDist)) then
+                    safeTarget = myPos + (dodgeLeft * dodgeDist)
+                else
+                    safeTarget = findSafeDodge(myPos, dodgeRight, dodgeDist)
+                end
 
-					local safeTarget = nil
-
-					-- ลองสไลด์ขวา
-					if isSafePosition(myPos, myPos + (dodgeRight * dodgeDist)) then
-						safeTarget = myPos + (dodgeRight * dodgeDist)
-					-- ถ้าติดกำแพง ลองสไลด์ซ้าย
-					elseif isSafePosition(myPos, myPos + (dodgeLeft * dodgeDist)) then
-						safeTarget = myPos + (dodgeLeft * dodgeDist)
-					else
-						-- ถ้าซ้ายก็ติด ขวาก็ติด (อยู่ในที่แคบ) ให้ใช้ฟังก์ชันดิ้นรน 360 องศาหาทางออก
-						safeTarget = findSafeDodge(myPos, dodgeRight, dodgeDist)
-					end
-
-					-- ทำการวาร์ปหลบ (CFrame)
-					if safeTarget then
-						myRoot.CFrame = CFrame.new(safeTarget)
-					end
-				end
-			end
+                if safeTarget then
+                    myRoot.CFrame = CFrame.new(safeTarget)
+                end
+            end
+        end
+    end
+end
 
 -- --- SUPPORT LOOPS ---
 task.spawn(function()
