@@ -42,7 +42,7 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V6", "หลบชิดมอน & วาร์ปสวนทะลุหน้า + เสาเข็มแก้ว", function(state)
+SupportSection:NewToggle("Smart Dodge V6", "หลบชิดมอน & วาร์ปสวน + เสาเข็มแก้วหัวแหลม", function(state)
     autoDodgeEnabled = state
 end)
 
@@ -92,25 +92,7 @@ local function clearVisuals()
         if v.Name == "WP_Debug" or v.Name == "DirectTrace" or v.Name == "ProbeTrace" then v:Destroy() end
     end
 end
--- ✅ ฟังก์ชันล้างเสาเข็มเก่าที่หมดอายุ
-local function cleanupOldBumpers()
-    for _, v in pairs(workspace:GetChildren()) do
-        if v.Name == "UltimateBumper" then
-            local linked = v:GetAttribute("LinkedHazard")
-            if not linked or not linked.Parent then
-                v:Destroy()
-            end
-        end
-    end
-end
 
--- ✅ รันล้างทุก 10 วินาที
-task.spawn(function()
-    while true do
-        task.wait(10)
-        cleanupOldBumpers()
-    end
-end)
 local function updateDebug(name, startPos, endPos, color)
     if not debugEnabled then 
         if workspace.Terrain:FindFirstChild(name) then workspace.Terrain[name]:Destroy() end
@@ -201,23 +183,55 @@ local function getNearestEnemy(myPosXZ)
 end
 
 -- ==========================================
--- ✅ [ระบบหลัก: Smart Dodge V6 + เสาเข็มแก้วหัวแหลม] - แก้ไขแล้ว
+-- 🔍 ฟังก์ชันเช็กประเภทอันตราย (แก้ไขแล้ว - ตรวจจับแม่นยำ)
+-- ==========================================
+local function classifyHazard(h)
+    if not h or not h.Name then return nil end
+    local n = h.Name:lower()
+    
+    -- ✅ กระสุน: ใช้ match() แบบมี % เพื่อค้นหาในชื่อ (ไม่ใช่แค่ท้ายคำ)
+    if n:match("arrow") or n:match("magic") or n:match("projectile") or n:match("bullet") or n:match("spell") or n:match("missile") or n:match("fireball") or n:match("beam") then
+        return "projectile"
+    end
+    
+    -- ✅ AoE: ระเบิด, เวทพื้นที่
+    if n:match("eruption") or n:match("explosion") or n:match("aoe") or n:match("blast") or n:match("circle") or n:match("zone") then
+        return "aoe"
+    end
+    
+    -- ✅ ถ้าเป็น Model ให้เช็กลูกหลานว่ามีชื่อกระสุนไหม
+    if h:IsA("Model") then
+        for _, child in ipairs(h:GetDescendants()) do
+            if child:IsA("BasePart") then
+                local cn = child.Name:lower()
+                if cn:match("arrow") or cn:match("magic") or cn:match("proj") or cn:match("bullet") then
+                    return "projectile"
+                end
+            end
+        end
+    end
+    
+    return nil
+end
+
+-- ==========================================
+-- ✅ [ระบบหลัก: Smart Dodge V6 + เสาเข็มแก้วหัวแหลม] - แก้ไขสมบูรณ์
 -- ==========================================
 local function executeSmartDodgeV6(hazard)
     if not hazard or not hazard.Parent then return end
     
-    -- ✅ แก้: ตรวจชื่อกระสุนก่อน ตรวจประเภททีหลัง
-    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$") or hazard.Name:match("Projectile") or hazard.Name:match("Bullet"))
-    local isAoE = (hazard:IsA("Model") and not isProjectile) or hazard.Name:match("Eruption") or hazard.Name:match("AoE") or hazard.Name:match("Explosion")
+    -- ✅ ใช้ฟังก์ชันจัดประเภทใหม่
+    local hazardType = classifyHazard(hazard)
+    if not hazardType then return end
     
-    if not (isAoE or isProjectile) then return end
+    local isProjectile = (hazardType == "projectile")
+    local isAoE = (hazardType == "aoe")
 
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not myRoot then return end
 
-    local hazardPos = nil
-    local hazardRadius = 2 
+    local hazardPos, hazardRadius, mainPart = nil, 2, nil
     
     if isAoE then
         local parts = {}
@@ -225,30 +239,27 @@ local function executeSmartDodgeV6(hazard)
             if v:IsA("BasePart") then table.insert(parts, v) end
         end
         if #parts > 0 then
-            local centerPart = hazard.PrimaryPart or parts[1]
-            hazardPos = centerPart.Position
+            mainPart = hazard.PrimaryPart or parts[1]
+            hazardPos = mainPart.Position
             for _, p in pairs(parts) do
                 local r = math.max(p.Size.X, p.Size.Z) / 2
                 if r > hazardRadius then hazardRadius = r end
             end
         else
-            local cframe, size = hazard:GetBoundingBox()
-            hazardPos = cframe.Position
-            hazardRadius = math.max(size.X, size.Z) / 2
+            local cf, sz = hazard:GetBoundingBox()
+            hazardPos, hazardRadius = cf.Position, math.max(sz.X, sz.Z) / 2
         end
     elseif isProjectile then
-        -- ✅ สำหรับกระสุน: หา MainPart เพื่อใช้สร้างเสาเข็ม
         if hazard:IsA("BasePart") then
+            mainPart = hazard
             hazardPos = hazard.Position
             hazardRadius = math.max(hazard.Size.X, hazard.Size.Z) / 2
-        elseif hazard:IsA("Model") then
-            local mainPart = hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true)
+        else
+            mainPart = hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true)
             if mainPart then
                 hazardPos = mainPart.Position
                 hazardRadius = math.max(mainPart.Size.X, mainPart.Size.Z) / 2
-            else
-                return
-            end
+            else return end
         end
     end
 
@@ -305,14 +316,9 @@ local function executeSmartDodgeV6(hazard)
     -- ===============================
     -- [กรณีที่ 2] กระสุนพุ่งชน + เสาเข็มแก้วหัวแหลม ✅
     -- ===============================
-    elseif isProjectile then
-        -- ✅ หา MainPart ของกระสุน (รองรับทั้ง BasePart และ Model)
-        local mainPart = hazard:IsA("BasePart") and hazard or 
-                        (hazard.PrimaryPart or hazard:FindFirstChildWhichIsA("BasePart", true))
-        if not mainPart then return end
-        
-        -- ✅ ป้องกันสร้างเสาเข็มซ้ำ
-        if mainPart:FindFirstChild("UltimateBumper") or hazard:FindFirstChild("UltimateBumper") then 
+    elseif isProjectile and mainPart then
+        -- ✅ ป้องกันสร้างซ้ำ (เช็กทั้ง mainPart และ hazard)
+        if mainPart:FindFirstChild("UltimateBumper") or hazard:FindFirstChild("UltimateBumper") or mainPart:FindFirstChild("GlassSpear") then 
             return 
         end
 
@@ -320,47 +326,51 @@ local function executeSmartDodgeV6(hazard)
                            Vector3.new(mainPart.Position.X, 0, mainPart.Position.Z)).Magnitude
         if distXZProj > shieldRange then return end
 
+        -- ✅ DEBUG: พิมพ์ชื่อสิ่งที่ตรวจจับได้ (ดูที่ Output)
+        -- print("🎯 Projectile Detected: "..hazard.Name.." | Dist: "..math.floor(distXZProj))
+
         local dirToPlayer = (myRoot.Position - mainPart.Position)
         dirToPlayer = dirToPlayer.Magnitude > 0 and dirToPlayer.Unit or Vector3.new(0, 0, 1)
 
-        -- 🔷 สร้างเกราะเสาเข็มแก้ว
-        local bumper = Instance.new("Part")
-        bumper.Name = "UltimateBumper"
-        bumper.Transparency = 0.3 
-        bumper.Material = Enum.Material.ForceField  -- ✅ ใช้ ForceField ให้ดูเป็นเกราะพลังงาน
-        bumper.Color = Color3.fromRGB(100, 200, 255) -- ✅ สีฟ้าใส ดูเป็นเกราะ
-        bumper.Size = Vector3.new(10, 10, 40) 
-        bumper.CanCollide = true
-        bumper.CanTouch = false 
-        bumper.Massless = true 
-        bumper.Anchored = true  -- ✅ Anchored เสมอ เพื่อให้เกราะนิ่ง
+        -- 🔷 สร้างเสาเข็มแก้วหัวแหลม
+        local spear = Instance.new("Part")
+        spear.Name = "GlassSpear"  -- ✅ เปลี่ยนชื่อให้ชัดเจน
+        spear.Transparency = 0.2 
+        spear.Material = Enum.Material.ForceField 
+        spear.Color = Color3.fromRGB(100, 220, 255) 
+        spear.Size = Vector3.new(10, 10, 40) 
+        spear.CanCollide = true
+        spear.CanTouch = false 
+        spear.Massless = true 
+        spear.Anchored = true 
         
         -- ✅ วางตำแหน่ง: ยื่นมาข้างหน้ากระสุน 20 บล็อค ชี้มาหาเรา
-        local centerOfBumper = mainPart.Position + (dirToPlayer * 20)
-        bumper.CFrame = CFrame.lookAt(centerOfBumper, myRoot.Position)
+        local spearCenter = mainPart.Position + (dirToPlayer * 20)
+        spear.CFrame = CFrame.lookAt(spearCenter, myRoot.Position)
         
         -- 🔥 เพิ่มหัวแหลมด้วย Cone Mesh
         local coneMesh = Instance.new("SpecialMesh")
         coneMesh.MeshType = Enum.MeshType.Cone
-        coneMesh.Scale = Vector3.new(0.9, 0.9, 3)  -- ✅ ทำให้แหลมยิ่งขึ้น
-        coneMesh.Offset = Vector3.new(0, 0, 20)     -- ✅ เลื่อนไปไว้ที่หัวเสา
-        coneMesh.Parent = bumper
+        coneMesh.Scale = Vector3.new(0.85, 0.85, 3.5)  -- ✅ แหลมยิ่งขึ้น
+        coneMesh.Offset = Vector3.new(0, 0, 20)         -- ✅ เลื่อนไปไว้ที่หัว
+        coneMesh.Parent = spear
         
         -- ✅ ยึดเสาเข็มกับกระสุนด้วย Weld
         local weld = Instance.new("WeldConstraint")
-        weld.Part0 = bumper
+        weld.Part0 = spear
         weld.Part1 = mainPart
-        weld.Parent = bumper
-        bumper.Parent = workspace  -- ✅ ใส่ใน workspace โดยตรง เพื่อความเสถียร
+        weld.Parent = spear
         
-        -- ✅ เก็บ reference ไว้ลบทีหลังถ้าต้องการ (ป้องกันการสะสม)
-        bumper:SetAttribute("LinkedHazard", hazard)
+        -- ✅ สำคัญ: ใส่ใน workspace เพื่อให้แสดงผลแน่นอน
+        spear.Parent = workspace
+        
+        -- 🗑️ ลบอัตโนมัติหลัง 15 วิ ป้องกันเกมค้าง
         task.defer(function()
-            task.wait(30)  -- ✅ ลบเกราะหลัง 30 วิ ป้องกันแลค
-            if bumper and bumper.Parent then bumper:Destroy() end
+            task.wait(15)
+            if spear and spear.Parent then spear:Destroy() end
         end)
-        
-        -- 🔕 ปิดการทำงานของกระสุนเดิม
+
+        -- 🔕 ปิดดาเมจกระสุนเดิม
         pcall(function()
             if hazard:IsA("BasePart") then
                 hazard.CanCollide = false
@@ -376,21 +386,17 @@ local function executeSmartDodgeV6(hazard)
                 end
             end
         end)
-        
-        -- 🚀 วาร์ปสวนหน้า (ระบบเดิม)
+
+        -- 🚀 วาร์ปสวนหน้า (ถ้าใกล้เกิน)
         if distXZProj < 12 then 
             local warpDir = (hazPosXZ - myPosXZ)
             warpDir = warpDir.Magnitude > 0 and warpDir.Unit or Vector3.new(1, 0, 0)
-            local warpDist = 15
-            local targetPos = myPos + (warpDir * warpDist)
-            
+            local targetPos = myPos + (warpDir * 15)
             if isSafePosition(myPos, targetPos, hazard) then
                 myRoot.CFrame = CFrame.new(targetPos)
             else
-                local safeTarget = findSafeDodge(myPos, warpDir, warpDist, hazard)
-                if safeTarget then
-                    myRoot.CFrame = CFrame.new(safeTarget)
-                end
+                local safe = findSafeDodge(myPos, warpDir, 15, hazard)
+                if safe then myRoot.CFrame = CFrame.new(safe) end
             end
         end
     end
@@ -435,28 +441,41 @@ task.spawn(function()
     end
 end)
 
+-- ✅ ลูปตรวจจับแบบใหม่: สแกนหลายแหล่ง + ใช้ฟังก์ชันจัดประเภท
 RunService.Stepped:Connect(function()
-    if autoDodgeEnabled then
-        pcall(function()
-            local dungeon = workspace:FindFirstChild("Dungeon")
-            local effects = dungeon and dungeon:FindFirstChild("Effects")
-            if effects then
-                for _, v in pairs(effects:GetChildren()) do
+    if not autoDodgeEnabled then return end
+    pcall(function()
+        -- 1. สแกนโฟลเดอร์ Effects (เดิม)
+        local dungeon = workspace:FindFirstChild("Dungeon")
+        local effects = dungeon and dungeon:FindFirstChild("Effects")
+        if effects then
+            for _, v in pairs(effects:GetChildren()) do
+                executeSmartDodgeV6(v)
+            end
+        end
+        
+        -- 2. ✅ สแกน workspace โดยตรง (รองรับเกมที่ไม่ใช้โฟลเดอร์มาตรฐาน)
+        for _, v in pairs(workspace:GetChildren()) do
+            if v:IsA("Model") or v:IsA("BasePart") then
+                if classifyHazard(v) then
                     executeSmartDodgeV6(v)
                 end
             end
-        end)
-    end
+        end
+    end)
 end)
 
+-- 3. ✅ ทางเลือกเสริม: getnilinstances (ถ้าเกมยังรองรับ)
 task.spawn(function()
     while true do
-        task.wait(0.5) 
-        if autoDodgeEnabled then
+        task.wait(0.7)
+        if autoDodgeEnabled and getnilinstances then
             pcall(function()
-                if getnilinstances then
-                    for _, v in pairs(getnilinstances()) do
-                        executeSmartDodgeV6(v)
+                for _, v in pairs(getnilinstances()) do
+                    if v:IsA("Model") or v:IsA("BasePart") then
+                        if classifyHazard(v) then
+                            executeSmartDodgeV6(v)
+                        end
                     end
                 end
             end)
