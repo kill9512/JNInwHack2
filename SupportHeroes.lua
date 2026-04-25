@@ -7,7 +7,6 @@ local Players = game.Players
 local LocalPlayer = Players.LocalPlayer
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
-local Debris = game:GetService("Debris")
 
 -- --- Settings Variables ---
 local SelectedMode = "Manual"
@@ -33,9 +32,9 @@ local lastPosition = Vector3.new()
 local lastMoveTick = os.clock()
 local randomTarget = nil 
 
--- Cooldown การหลบเพื่อไม่ให้สั่งเดินรัวๆ
+-- Dodge Cooldown
 local lastDodgeTime = 0
-local dodgeCooldown = 0.3 -- รอ 0.3 วิ ก่อนตัดสินใจหลบครั้งใหม่
+local dodgeCooldown = 0.3 
 
 -- --- UI Sections ---
 local SupportSection = Tab:NewSection("Support Functions") 
@@ -131,16 +130,14 @@ local function getProbingDirection(myRoot, targetPos)
     return bestDir
 end
 
--- --- ระบบสแกนหาจุดปลอดภัย (แก้บัคติดมุม) ---
+-- --- ระบบสแกนหาจุดปลอดภัย ---
 local function isSafePosition(startPos, targetPos)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
     
-    -- เช็คกำแพงขวางทาง
     local dir = targetPos - startPos
     local wallHit = workspace:Raycast(startPos, dir, rayParams)
     if wallHit then return false end 
 
-    -- เช็คเหว (ยิงเลเซอร์ลงพื้น)
     local groundOrigin = targetPos + Vector3.new(0, 3, 0)
     local groundHit = workspace:Raycast(groundOrigin, Vector3.new(0, -10, 0), rayParams)
     if not groundHit then return false end 
@@ -148,13 +145,10 @@ local function isSafePosition(startPos, targetPos)
     return true
 end
 
--- [ใหม่] ถ้าทางหลักติดกำแพง ให้หมุนหาทางออกรอบตัว 360 องศา
 local function findSafeDodge(startPos, baseDir, distance)
-    -- ลองทางหลักก่อน
     local target = startPos + (baseDir * distance)
     if isSafePosition(startPos, target) then return target end
     
-    -- ถ้าติดกำแพง ลองกวาดมุม 45, 90, 135, 180 องศา ทั้งซ้ายขวา
     local angles = {45, -45, 90, -90, 135, -135, 180}
     for _, angle in ipairs(angles) do
         local rotatedDir = CFrame.Angles(0, math.rad(angle), 0) * baseDir
@@ -164,16 +158,14 @@ local function findSafeDodge(startPos, baseDir, distance)
         end
     end
     
-    -- ถ้าติดทุกทางจริงๆ (โดนขังขอบแมพ) ยอมขยับไปทางหลักนิดนึงก็ยังดี
     return startPos + (baseDir * (distance * 0.4))
 end
 
--- --- [ระบบอัปเดต V7] Natural Sidestep with Raycast Prediction ---
+-- --- [ระบบอัปเดต V7] Hybrid: วาร์ปวงเวทย์ / เดินหลบกระสุน ---
 local function executeSmartDodgeV7(hazard)
     if not hazard or not hazard.Parent then return end
 
     local currentTime = tick()
-    -- เช็ค Cooldown เพื่อไม่ให้สั่งเดินรัวเกินไป
     if currentTime - lastDodgeTime < dodgeCooldown then return end
 
     local isAoE = hazard:IsA("Model")
@@ -188,10 +180,17 @@ local function executeSmartDodgeV7(hazard)
     
     if not myRoot or not myHuman or myHuman.Health <= 0 then return end
 
+    -- ตรวจสอบประเภทอันตราย
+    local isAoE = hazard:IsA("Model")
+    -- แก้ไข: ลบ Bullet และ Fireball ออก เหลือแค่สิ่งที่น่าจะมีในเกมจริง
+    local isProjectile = (hazard.Name == "Arrow" or hazard.Name:match("Magic$"))
+    
+    if not (isAoE or isProjectile) then return end
+
     local hazardPos = nil
     local hazardRadius = 2 
     
-    -- หาตำแหน่งและขนาดของอันตราย
+    -- หาตำแหน่งและขนาด
     if isAoE then
         local parts = {}
         for _, v in pairs(hazard:GetDescendants()) do
@@ -249,7 +248,7 @@ local function executeSmartDodgeV7(hazard)
         local hazardVel = hazard.Velocity
         local projectileSpeed = hazardVel.Magnitude
         
-        -- ถ้ากระสุนช้ามากหรือนิ่ง ไม่ต้องหลบ (อาจเป็นกับดักวางนิ่ง)
+        -- ถ้ากระสุนช้าเกินไปหรือหยุดนิ่ง ไม่ต้องหลบ
         if projectileSpeed < 5 then return end
         
         local projectileDir = hazardVel.Unit
@@ -285,10 +284,8 @@ local function executeSmartDodgeV7(hazard)
             
             local hit = workspace:Raycast(rayStart, rayEnd - rayStart, rayParams)
             
-            -- ถ้าเจอะอะไรในแนวกระสุน (ซึ่งควรจะเป็นตัวเรา หรือพื้นที่รอบๆ เราที่กำลังจะถูกชน)
-            -- แต่เพื่อให้ชัวร์ว่าเราจะไม่หลบกระสุนที่เพิ่งผ่านไป:
-            -- เราเช็คเวลาโดยประมาณ: กระสุนจะใช้เวลาเท่าไหร่กว่าจะถึงจุดที่ใกล้เราที่สุด
-            local timeToImpact = projection / projectileSpeed
+            -- ระยะปลอดภัย
+            local safeDistance = hazardRadius + 4 
             
             -- ถ้าเวลาที่จะชนเป็นลบ (< 0) แปลว่ากระสุนวิ่งผ่านจุดที่ใกล้เราที่สุดไปแล้ว -> ไม่ต้องหลบ!
             if timeToImpact < 0 then return end
@@ -319,11 +316,24 @@ local function executeSmartDodgeV7(hazard)
                 -- ปรับระดับความสูงให้พอดีกับพื้น
                 local finalTarget = Vector3.new(walkTargetPos.X, rayHit.Position.Y + 2.5, walkTargetPos.Z)
                 
-                -- สั่งเดินไปยังจุดนั้น (MoveTo จะทำให้ Humanoid เดินเองอัตโนมัติ)
-                myHuman:MoveTo(finalTarget)
+                -- คำนวณทิศทางการหลบ (ตั้งฉากกับทิศทางกระสุน)
+                local rightDir = Vector3.new(-projectileDir.Z, 0, projectileDir.X)
+                if math.random() > 0.5 then rightDir = -rightDir end
                 
-                -- อัปเดตเวลาเพื่อไม่ให้สั่งซ้ำในเฟรมถัดไปทันที
-                lastDodgeTime = currentTime
+                local stepDistance = 6 
+                local dodgeTarget = myPos + (rightDir * stepDistance)
+                
+                -- ตรวจสอบพื้นก่อนเดิน
+                local rayStart = dodgeTarget + Vector3.new(0, 5, 0)
+                local rayHit = workspace:Raycast(rayStart, Vector3.new(0, -10, 0), rayParams)
+                
+                if rayHit then
+                    local finalPos = Vector3.new(dodgeTarget.X, rayHit.Position.Y + 2.5, dodgeTarget.Z)
+                    
+                    -- สั่งเดินไปจุดปลอดภัย
+                    myHuman:MoveTo(finalPos)
+                    lastDodgeTime = currentTime
+                end
             end
         end
     end
@@ -363,7 +373,6 @@ task.spawn(function()
     end
 end)
 
--- ใช้ Heartbeat สำหรับการหลบกระสุนเพื่อให้ทันกับฟิสิกส์และการเคลื่อนที่
 RunService.Heartbeat:Connect(function()
     if autoDodgeEnabled then
         pcall(function()
@@ -378,7 +387,6 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
--- แยก GetNil Instances ออกมารันช้าๆ ลดแลค
 task.spawn(function()
     while true do
         task.wait(0.5) 
