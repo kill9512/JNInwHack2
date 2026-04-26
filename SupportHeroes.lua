@@ -249,39 +249,31 @@ local function findClosestEnemy()
     local dungeon = workspace:FindFirstChild("Dungeon")
     if not dungeon then return nil end
     
-    -- หาโฟลเดอร์ Enemies เท่านั้น (ตามที่ผู้ใช้ยืนยัน)
     local enemies = dungeon:FindFirstChild("Enemies")
     if not enemies then return nil end
     
     local myChar = LocalPlayer.Character
-    if not myChar then return nil end
-    
-    local myRoot = myChar:FindFirstChild("HumanoidRootPart")
+    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not myRoot then return nil end
     
     local closestEnemy = nil
     local closestDist = math.huge
     
-    -- วนลูปหามอนสเตอร์ทุกตัวในโฟลเดอร์ Enemies
     for _, enemy in pairs(enemies:GetChildren()) do
-        if enemy:IsA("Model") then
-            -- หา HumanoidRootPart - มอนสเตอร์ทุกตัวต้องมี
-            local enemyRoot = enemy:FindFirstChild("HumanoidRootPart")
-            if not enemyRoot or not enemyRoot:IsA("BasePart") then
-                continue
-            end
-            
-            -- ตรวจสอบว่ามอนสเตอร์ยังมีชีวิตอยู่
-            local enemyHumanoid = enemy:FindFirstChildOfClass("Humanoid")
-            if not enemyHumanoid or enemyHumanoid.Health <= 0 then
-                continue
-            end
-            
-            -- คำนวณระยะห่าง
-            local dist = (myRoot.Position - enemyRoot.Position).Magnitude
-            if dist < closestDist then
-                closestDist = dist
-                closestEnemy = enemyRoot
+        if enemy:IsA("Model") or enemy:IsA("BasePart") then
+            local enemyRoot = enemy:IsA("Model") and enemy:FindFirstChild("HumanoidRootPart") or enemy
+            if enemyRoot and enemyRoot:IsA("BasePart") then
+                -- ตรวจสอบเลือดของมอนสเตอร์ด้วย (ถ้าเป็น Model ให้หา Humanoid)
+                local enemyHumanoid = enemy:IsA("Model") and enemy:FindFirstChildOfClass("Humanoid") or nil
+                if enemyHumanoid and enemyHumanoid.Health <= 0 then
+                    continue -- ข้ามมอนสเตอร์ที่ตายแล้ว
+                end
+                
+                local dist = (myRoot.Position - enemyRoot.Position).Magnitude
+                if dist < closestDist then
+                    closestDist = dist
+                    closestEnemy = enemyRoot
+                end
             end
         end
     end
@@ -830,14 +822,6 @@ task.spawn(function()
                     local enemyPos = closestEnemy.Position
                     local dist = (myRoot.Position - enemyPos).Magnitude
                     
-                    print("[AutoHunt] เจอมอนสเตอร์! ระยะ:", math.floor(dist), "| ตำแหน่ง:", enemyPos)
-                    
-                    -- ตรวจสอบว่าตัวละครยังมีชีวิตและ Humanoid พร้อมใช้งาน
-                    if not myHuman or myHuman.Health <= 0 then
-                        print("[AutoHunt] ✗ ตัวละครตายหรือ Humanoid ไม่พร้อม!")
-                        return
-                    end
-                    
                     -- [Anti-AFK] ใช้ VirtualUser เพื่อจำลองการกดปุ่ม (วิธีที่ได้ผลที่สุด)
                     local timeSinceLastMove = os.clock() - lastAntiAFKTime
                     if timeSinceLastMove > 1.5 then
@@ -848,76 +832,26 @@ task.spawn(function()
                     
                     -- ถ้ายังไกลอยู่ ให้ใช้ Pathfinding เดินไปหา
                     if dist > 5 then
-                        -- ตรวจสอบว่า Humanoid พร้อมหรือไม่
-                        if not myHuman or myHuman.Health <= 0 or not myRoot then
-                            print("[AutoHunt] ✗ Humanoid ไม่พร้อม! ข้ามรอบนี้\")
-                            return
-                        end
-                        
-                        -- ตั้งค่า WalkSpeed ให้สูงสุดเพื่อเดินเร็วขึ้น
-                        myHuman.WalkSpeed = math.max(myHuman.WalkSpeed, 50)
-                        
                         -- คำนวณเส้นทางด้วย PathfindingService
                         local currentTime = os.clock()
                         if not currentWaypoints or #currentWaypoints == 0 or (enemyPos - lastTargetPos).Magnitude > 3 or currentTime - lastComputeTime > 0.5 then
-                            -- สร้าง Path ด้วย AgentRadius ที่เล็กลงเพื่อเพิ่มความยืดหยุ่น
-                            local path = PathfindingService:CreatePath({
-                                AgentRadius = 2,
-                                AgentHeight = 5,
-                                AgentCanJump = true,
-                                WaypointSpacing = 3
-                            })
-                            
+                            local path = PathfindingService:CreatePath({AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 3})
                             local success, errorMessage = pcall(function()
                                 path:ComputeAsync(myRoot.Position, enemyPos)
                             end)
                             
-                            -- ตรวจสอบผลลัพธ์ของการคำนวณเส้นทาง
                             if success and path.Status == Enum.PathStatus.Success then
                                 currentWaypoints = path:GetWaypoints()
                                 currentWaypointIndex = 2
                                 lastTargetPos = enemyPos
                                 lastComputeTime = currentTime
-                                print("[AutoHunt] ✓ พบเส้นทาง! จำนวน waypoints:", #currentWaypoints)
                             else
-                                -- Pathfinding ล้มเหลว - ใช้วิธีเดินตรงแทน (Fallback)
-                                print("[AutoHunt] ✗ Pathfinding ล้มเหลว! จะเดินตรงไปหามอนสเตอร์แทน")
+                                -- ถ้าคำนวณเส้นทางไม่ได้ ให้ลองเดินตรงไปก่อน
                                 currentWaypoints = {}
-                                
-                                -- ตั้งค่าให้เดินตรงไปยังมอนสเตอร์เลย
-                                myHuman:MoveTo(enemyPos)
-                                -- รอเล็กน้อยเพื่อให้ Humanoid เริ่มเคลื่อนไหว
-                                task.wait(0.2)
-                                -- บังคับทิศทางอีกครั้งหากยังไม่เคลื่อนที่
-                                if myHuman.MoveDirection.Magnitude == 0 then
-                                    print("[AutoHunt] ⚠️ MoveDirection เป็น 0! กำลังใช้ BodyVelocity บังคับทิศทาง")
-                                    -- ใช้ BodyVelocity บังคับการเคลื่อนที่โดยตรง
-                                    local rootPart = myChar:FindFirstChild("HumanoidRootPart")
-                                    if rootPart then
-                                        -- ลบ BodyVelocity เก่าถ้ามี
-                                        local oldBV = rootPart:FindFirstChild("AutoHuntBV")
-                                        if oldBV then oldBV:Destroy() end
-                                        
-                                        -- สร้าง BodyVelocity ใหม่
-                                        local bv = Instance.new("BodyVelocity")
-                                        bv.Name = "AutoHuntBV"
-                                        bv.MaxForce = Vector3.new(50000, 0, 50000)
-                                        bv.Velocity = (enemyPos - rootPart.Position).Unit * 50
-                                        bv.Parent = rootPart
-                                        
-                                        -- ลบ BodyVelocity หลังจาก 2 วินาที
-                                        task.delay(2, function()
-                                            if bv and bv.Parent then bv:Destroy() end
-                                        end)
-                                    else
-                                        -- ลอง MoveTo อีกครั้ง
-                                        myHuman:MoveTo(enemyPos)
-                                    end
-                                end
                             end
                         end
                         
-                        -- เดินตาม waypoints (ถ้ามี)
+                        -- เดินตาม waypoints
                         if #currentWaypoints > 0 and currentWaypointIndex <= #currentWaypoints then
                             local wp = currentWaypoints[currentWaypointIndex]
                             local wpPos = wp.Position
@@ -927,53 +861,13 @@ task.spawn(function()
                                 currentWaypointIndex = currentWaypointIndex + 1
                             else
                                 myHuman:MoveTo(wpPos)
-                                -- ตรวจสอบว่าเริ่มเคลื่อนไหวหรือยัง
-                                task.wait(0.2)
-                                if myHuman.MoveDirection.Magnitude == 0 then
-                                    print("[AutoHunt] ⚠️ Waypoint MoveDirection เป็น 0! ใช้ BodyVelocity")
-                                    -- พยายามบังคับทิศทางด้วย BodyVelocity
-                                    local rootPart = myChar:FindFirstChild("HumanoidRootPart")
-                                    if rootPart then
-                                        local oldBV = rootPart:FindFirstChild("AutoHuntBV")
-                                        if oldBV then oldBV:Destroy() end
-                                        
-                                        local bv = Instance.new("BodyVelocity")
-                                        bv.Name = "AutoHuntBV"
-                                        bv.MaxForce = Vector3.new(50000, 0, 50000)
-                                        bv.Velocity = (wpPos - rootPart.Position).Unit * 50
-                                        bv.Parent = rootPart
-                                        
-                                        task.delay(2, function()
-                                            if bv and bv.Parent then bv:Destroy() end
-                                        end)
-                                    end
-                                end
                                 if wp.Action == Enum.PathWaypointAction.Jump then
                                     forceJump(myHuman)
                                 end
                             end
                         else
-                            -- ไม่มี waypoints หรือเดินครบแล้ว ให้เดินตรงไปหามอนสเตอร์ (fallback)
+                            -- ไม่มี waypoints ให้เดินตรงไป
                             myHuman:MoveTo(enemyPos)
-                            task.wait(0.2)
-                            if myHuman.MoveDirection.Magnitude == 0 then
-                                print("[AutoHunt] ⚠️ Fallback MoveDirection เป็น 0! ใช้ BodyVelocity")
-                                local rootPart = myChar:FindFirstChild("HumanoidRootPart")
-                                if rootPart then
-                                    local oldBV = rootPart:FindFirstChild("AutoHuntBV")
-                                    if oldBV then oldBV:Destroy() end
-                                    
-                                    local bv = Instance.new("BodyVelocity")
-                                    bv.Name = "AutoHuntBV"
-                                    bv.MaxForce = Vector3.new(50000, 0, 50000)
-                                    bv.Velocity = (enemyPos - rootPart.Position).Unit * 50
-                                    bv.Parent = rootPart
-                                    
-                                    task.delay(2, function()
-                                        if bv and bv.Parent then bv:Destroy() end
-                                    end)
-                                end
-                            end
                         end
                     else
                         -- อยู่ในระยะประชิดแล้ว แต่ต้องขยับเล็กน้อยเพื่อไม่ให้โดน AFK
@@ -982,29 +876,9 @@ task.spawn(function()
                         local circleRadius = 4
                         local circlePos = enemyPos + Vector3.new(math.cos(angle) * circleRadius, 0, math.sin(angle) * circleRadius)
                         myHuman:MoveTo(circlePos)
-                        task.wait(0.2)
-                        if myHuman.MoveDirection.Magnitude == 0 then
-                            print("[AutoHunt] ⚠️ Circle MoveDirection เป็น 0! ใช้ BodyVelocity")
-                            local rootPart = myChar:FindFirstChild("HumanoidRootPart")
-                            if rootPart then
-                                local oldBV = rootPart:FindFirstChild("AutoHuntBV")
-                                if oldBV then oldBV:Destroy() end
-                                
-                                local bv = Instance.new("BodyVelocity")
-                                bv.Name = "AutoHuntBV"
-                                bv.MaxForce = Vector3.new(50000, 0, 50000)
-                                bv.Velocity = (circlePos - rootPart.Position).Unit * 30
-                                bv.Parent = rootPart
-                                
-                                task.delay(2, function()
-                                    if bv and bv.Parent then bv:Destroy() end
-                                end)
-                            end
-                        end
                     end
                 else
                     -- ไม่มีมอนสเตอร์แล้ว (หรือทั้งหมดตายแล้ว) ให้รีเซ็ตเป้าหมายและบังคับเริ่มกระบวนการค้นหาประตูใหม่ทันที
-                    print("[AutoHunt] ✗ ไม่พบมอนสเตอร์ที่มีชีวิต! จะค้นหาประตูใหม่")
                     autoHuntEnemies = false
                     currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ทันที
                     lastDoorSearchTime = 0 -- บังคับให้ค้นหาใหม่ในรอบถัดไป
