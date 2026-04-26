@@ -32,6 +32,7 @@ rayParams.FilterType = Enum.RaycastFilterType.Exclude
 local lastPosition = Vector3.new()
 local lastMoveTick = os.clock()
 local randomTarget = nil
+local temporaryPlatform = nil -- เก็บ reference แผ่นเหยียบชั่วคราว
 
 -- --- UI Sections ---
 local SupportSection = Tab:NewSection("Support Functions")
@@ -97,6 +98,11 @@ local function clearVisuals()
     for _, v in pairs(workspace.Terrain:GetChildren()) do
         if v.Name == "WP_Debug" or v.Name == "DirectTrace" or v.Name == "ProbeTrace" then v:Destroy() end
     end
+    -- ทำลายแผ่นเหยียบชั่วคราวถ้ามี
+    if temporaryPlatform and temporaryPlatform.Parent then
+        temporaryPlatform:Destroy()
+    end
+    temporaryPlatform = nil
 end
 
 local function updateDebug(name, startPos, endPos, color)
@@ -222,6 +228,56 @@ local function validateTargetPosition(char, targetPos)
     return finalPos
 end
 
+-- [ใหม่] ฟังก์ชันสร้างแผ่นเหยียบชั่วคราวและวาร์ปขึ้นด้านบนเพื่อหนี AoE ที่เต็มพื้น
+local function emergencyPlatformEscape(char, hazardPos, hazardRadius)
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum then return false end
+    
+    local myPos = root.Position
+    
+    -- ทำลายแผ่นเก่าถ้ามี
+    if temporaryPlatform and temporaryPlatform.Parent then
+        temporaryPlatform:Destroy()
+    end
+    
+    -- คำนวณตำแหน่งที่ปลอดภัย: ห่างออกไปจากศูนย์กลาง AoE ในแนวราบ + ยกสูงขึ้น
+    local escapeDir = (Vector3.new(myPos.X, 0, myPos.Z) - Vector3.new(hazardPos.X, 0, hazardPos.Z)).Unit
+    if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
+    
+    -- ระยะที่ปลอดภัยจากขอบ AoE + ส่วนเพิ่ม
+    local safeDistance = hazardRadius + 3
+    local platformPos = myPos + (escapeDir * safeDistance) + Vector3.new(0, 8, 0) -- ยกสูง 8 บล็อค
+    
+    -- สร้างแผ่นเหยียบชั่วคราว
+    temporaryPlatform = Instance.new("Part")
+    temporaryPlatform.Size = Vector3.new(6, 1, 6)
+    temporaryPlatform.Position = platformPos
+    temporaryPlatform.Anchored = true
+    temporaryPlatform.CanCollide = true
+    temporaryPlatform.Material = Enum.Material.Neon
+    temporaryPlatform.BrickColor = BrickColor.new("Bright cyan")
+    temporaryPlatform.Transparency = 0.3
+    temporaryPlatform.Name = "TempEscapePlatform"
+    temporaryPlatform.Parent = workspace.Terrain
+    
+    -- วาร์ปผู้เล่นขึ้นไปบนแผ่น
+    local targetOnPlatform = platformPos + Vector3.new(0, 3, 0)
+    
+    -- ใช้ MoveTo เพื่อเดินขึ้นไปอย่างนุ่มนวล
+    hum:MoveTo(targetOnPlatform)
+    
+    -- ตั้งเวลาทำลายแผ่นหลังจาก 3 วินาที
+    task.delay(3, function()
+        if temporaryPlatform and temporaryPlatform.Parent then
+            temporaryPlatform:Destroy()
+        end
+        temporaryPlatform = nil
+    end)
+    
+    return true
+end
+
 -- --- [ระบบอัปเดต V7] โคตรแม่นยำ (ดึงค่า BodyVelocity) ---
 local function executeSmartDodgeV5(hazard)
     if not hazard or not hazard.Parent then return end
@@ -288,33 +344,24 @@ local function executeSmartDodgeV5(hazard)
                 -- ใช้ฟังก์ชันตรวจสอบตำแหน่งปลายทางเพื่อป้องกันการติด Model
                 local validatedTarget = validateTargetPosition(myChar, safeTarget)
                 
-                -- [แก้ไข] ตรวจสอบว่าหลังจากย้ายแล้วยังอยู่ในวง AoE หรือไม่
-                local testPosXZ = Vector3.new(validatedTarget.X, 0, validatedTarget.Z)
-                local testDistXZ = (testPosXZ - hazPosXZ).Magnitude
-                
-                -- ถ้ายังอยู่ในวง AoE หลังจากพยายามหนี ให้วาร์ปขึ้นด้านบนทันที
-                if testDistXZ < hazardRadius + 1.5 then
-                    local warpUpPos = myPos + Vector3.new(0, hazardRadius + 5, 0)
-                    
-                    -- ตรวจสอบว่ามีพื้นรองรับจุดที่จะวาร์ปขึ้นไปหรือไม่
-                    local groundCheckPos = warpUpPos + Vector3.new(0, 10, 0)
-                    local groundHit = workspace:Raycast(groundCheckPos, Vector3.new(0, -20, 0), rayParams)
-                    
-                    if groundHit then
-                        validatedTarget = groundHit.Position + Vector3.new(0, 2.5, 0)
+                -- [แก้ไข] ตรวจสอบว่าหลังจาก validate แล้ว ยังติดอยู่ใน AoE หรือไม่
+                -- ถ้ายังติดอยู่ แสดงว่าพื้นรอบๆ เต็มหมด ให้ใช้แผ่นเหยียบชั่วคราว
+                local newDistXZ = (Vector3.new(validatedTarget.X, 0, validatedTarget.Z) - hazPosXZ).Magnitude
+                if newDistXZ < hazardRadius + 1 then
+                    -- ยังติดอยู่ใน AoE! ใช้แผ่นเหยียบฉุกเฉิน
+                    emergencyPlatformEscape(myChar, hazardPos, hazardRadius)
+                else
+                    -- ใช้ Humanoid:MoveTo แทนการตั้ง CFrame โดยตรง เพื่อป้องกันการติด model
+                    local hum = myChar:FindFirstChildOfClass("Humanoid")
+                    if hum then
+                        hum:MoveTo(validatedTarget)
                     else
-                        -- ถ้าไม่มีพื้นรองรับ ให้วาร์ปขึ้นแล้วค่อยตกมา
-                        validatedTarget = warpUpPos
+                        myRoot.CFrame = CFrame.new(validatedTarget)
                     end
                 end
-                
-                -- ใช้ Humanoid:MoveTo แทนการตั้ง CFrame โดยตรง เพื่อป้องกันการติด model
-                local hum = myChar:FindFirstChildOfClass("Humanoid")
-                if hum then
-                    hum:MoveTo(validatedTarget)
-                else
-                    myRoot.CFrame = CFrame.new(validatedTarget)
-                end
+            else
+                -- หาทางหนีแบบปกติไม่ได้ ใช้แผ่นเหยียบฉุกเฉินทันที
+                emergencyPlatformEscape(myChar, hazardPos, hazardRadius)
             end
         end
 
