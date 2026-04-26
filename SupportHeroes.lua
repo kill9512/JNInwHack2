@@ -19,6 +19,8 @@ local followByPercentHP = false
 local autoCoinEnabled = false
 local autoDodgeEnabled = false
 local shieldRange = 100
+local dodgeSpeedBoost = 75 -- ความเร็วตอนหลบ (ค่าเริ่มต้น 75)
+local normalWalkSpeed = 16 -- ความเร็วปกติของตัวละคร
 
 local currentWaypoints = {}
 local currentWaypointIndex = 1
@@ -44,8 +46,12 @@ SupportSection:NewToggle("Auto Collect Coins", "ดึงเงินจาก C
     autoCoinEnabled = state
 end)
 
-SupportSection:NewToggle("Smart Dodge V7", "หลบกระสุนขั้นสูง (BodyVelocity)", function(state)
+SupportSection:NewToggle("Smart Dodge V7", "หลบกระสุนขั้นสูง (เพิ่มความเร็ว)", function(state)
     autoDodgeEnabled = state
+end)
+
+SupportSection:NewSlider("Dodge Speed", "ความเร็วตอนหลบ", 100, 16, function(s)
+    dodgeSpeedBoost = s
 end)
 
 SupportSection:NewSlider("Dodge Detect Range", "ระยะตรวจจับ (บล็อค)", 300, 20, function(s)
@@ -264,8 +270,16 @@ local function emergencyPlatformEscape(char, hazardPos, hazardRadius)
     -- วาร์ปผู้เล่นขึ้นไปบนแผ่น
     local targetOnPlatform = platformPos + Vector3.new(0, 3, 0)
     
-    -- ใช้ MoveTo เพื่อเดินขึ้นไปอย่างนุ่มนวล
+    -- ใช้ MoveTo เพื่อเดินขึ้นไปอย่างนุ่มนวล (พร้อมเพิ่มความเร็ว)
+    local originalSpeed = hum.WalkSpeed
+    hum.WalkSpeed = dodgeSpeedBoost
     hum:MoveTo(targetOnPlatform)
+    -- คืนความเร็วปกติหลังจากหนีเสร็จ
+    task.delay(0.5, function()
+        if hum and hum.Parent then
+            hum.WalkSpeed = originalSpeed
+        end
+    end)
     
     -- ตั้งเวลาทำลายแผ่นหลังจาก 3 วินาที
     task.delay(3, function()
@@ -354,7 +368,16 @@ local function executeSmartDodgeV5(hazard)
                     -- ใช้ Humanoid:MoveTo แทนการตั้ง CFrame โดยตรง เพื่อป้องกันการติด model
                     local hum = myChar:FindFirstChildOfClass("Humanoid")
                     if hum then
+                        -- เพิ่มความเร็วชั่วคราวก่อน MoveTo
+                        local originalSpeed = hum.WalkSpeed
+                        hum.WalkSpeed = dodgeSpeedBoost
                         hum:MoveTo(validatedTarget)
+                        -- คืนความเร็วปกติหลังจาก MoveTo เริ่มทำงาน
+                        task.delay(0.1, function()
+                            if hum and hum.Parent then
+                                hum.WalkSpeed = originalSpeed
+                            end
+                        end)
                     else
                         myRoot.CFrame = CFrame.new(validatedTarget)
                     end
@@ -437,7 +460,16 @@ local function executeSmartDodgeV5(hazard)
                     -- ใช้ Humanoid:MoveTo แทนการตั้ง CFrame โดยตรง เพื่อป้องกันการติด model
                     local hum = myChar:FindFirstChildOfClass("Humanoid")
                     if hum then
+                        -- เพิ่มความเร็วชั่วคราวก่อน MoveTo
+                        local originalSpeed = hum.WalkSpeed
+                        hum.WalkSpeed = dodgeSpeedBoost
                         hum:MoveTo(validatedTarget)
+                        -- คืนความเร็วปกติหลังจาก MoveTo เริ่มทำงาน
+                        task.delay(0.1, function()
+                            if hum and hum.Parent then
+                                hum.WalkSpeed = originalSpeed
+                            end
+                        end)
                     else
                         myRoot.CFrame = CFrame.new(validatedTarget)
                     end
