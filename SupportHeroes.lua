@@ -249,8 +249,25 @@ local function findClosestEnemy()
     local dungeon = workspace:FindFirstChild("Dungeon")
     if not dungeon then return nil end
     
-    local enemies = dungeon:FindFirstChild("Enemies")
-    if not enemies then return nil end
+    -- พยายามหาโฟลเดอร์มอนสเตอร์ด้วยชื่อที่หลากหลาย
+    local enemies = dungeon:FindFirstChild("Enemies") 
+        or dungeon:FindFirstChild("Enemy") 
+        or dungeon:FindFirstChild("Monsters") 
+        or dungeon:FindFirstChild("Monster")
+    
+    if not enemies then 
+        -- ถ้าไม่เจอโฟลเดอร์ ให้ลองค้นหา Model ทั้งหมดที่อาจเป็นมอนสเตอร์
+        for _, child in pairs(dungeon:GetChildren()) do
+            if child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") then
+                local hum = child:FindFirstChildOfClass("Humanoid")
+                if hum.Health > 0 then
+                    enemies = dungeon -- ใช้ dungeon เป็นฐานในการค้นหาต่อ
+                    break
+                end
+            end
+        end
+        if not enemies then return nil end
+    end
     
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -259,21 +276,51 @@ local function findClosestEnemy()
     local closestEnemy = nil
     local closestDist = math.huge
     
-    for _, enemy in pairs(enemies:GetChildren()) do
-        if enemy:IsA("Model") or enemy:IsA("BasePart") then
-            local enemyRoot = enemy:IsA("Model") and enemy:FindFirstChild("HumanoidRootPart") or enemy
+    -- ค้นหาทั้งในโฟลเดอร์และ Model โดยตรง
+    local function checkEnemy(enemy)
+        if enemy:IsA("Model") then
+            local enemyRoot = enemy:FindFirstChild("HumanoidRootPart") 
+                or enemy:FindFirstChild("RootPart") 
+                or enemy:FindFirstChildWhichIsA("BasePart")
+            
             if enemyRoot and enemyRoot:IsA("BasePart") then
-                -- ตรวจสอบเลือดของมอนสเตอร์ด้วย (ถ้าเป็น Model ให้หา Humanoid)
-                local enemyHumanoid = enemy:IsA("Model") and enemy:FindFirstChildOfClass("Humanoid") or nil
+                -- ตรวจสอบเลือดของมอนสเตอร์
+                local enemyHumanoid = enemy:FindFirstChildOfClass("Humanoid")
+                    or enemy:FindFirstChildWhichIsA("Humanoid")
+                
                 if enemyHumanoid and enemyHumanoid.Health <= 0 then
-                    continue -- ข้ามมอนสเตอร์ที่ตายแล้ว
+                    return nil -- ข้ามมอนสเตอร์ที่ตายแล้ว
                 end
                 
                 local dist = (myRoot.Position - enemyRoot.Position).Magnitude
                 if dist < closestDist then
                     closestDist = dist
                     closestEnemy = enemyRoot
+                    return enemyRoot
                 end
+            end
+        elseif enemy:IsA("BasePart") then
+            -- กรณีที่เป็น Part โดยตรง (อาจเป็นมอนสเตอร์บางประเภท)
+            local dist = (myRoot.Position - enemy.Position).Magnitude
+            if dist < closestDist then
+                closestDist = dist
+                closestEnemy = enemy
+                return enemy
+            end
+        end
+        return nil
+    end
+    
+    -- วนลูปตรวจสอบทุกตัวในโฟลเดอร์ Enemies
+    for _, enemy in pairs(enemies:GetChildren()) do
+        checkEnemy(enemy)
+    end
+    
+    -- ถ้าไม่เจอในโฟลเดอร์ ให้ลองค้นหา Model ทั้งหมดใน Dungeon ที่อาจเป็นมอนสเตอร์
+    if not closestEnemy then
+        for _, child in pairs(dungeon:GetChildren()) do
+            if child ~= enemies and (child:IsA("Model") or child:IsA("BasePart")) then
+                checkEnemy(child)
             end
         end
     end
