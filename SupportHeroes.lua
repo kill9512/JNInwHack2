@@ -143,16 +143,10 @@ end
 -- --- Door Warp & Auto Hunt Functions ---
 local function findRandomDoor()
     local dungeon = workspace:FindFirstChild("Dungeon")
-    if not dungeon then 
-        print("[DoorWarp] Dungeon not found in workspace")
-        return nil 
-    end
+    if not dungeon then return nil end
     
     local layout = dungeon:FindFirstChild("Layout")
-    if not layout then 
-        print("[DoorWarp] Layout folder not found in Dungeon")
-        return nil 
-    end
+    if not layout then return nil end
     
     -- ค้นหา Layout ใดๆ ที่มีอยู่ (ไม่ระบุชื่อเฉพาะ เพื่อรองรับทุกด่าน)
     local targetLayout = nil
@@ -162,11 +156,9 @@ local function findRandomDoor()
     for _, child in ipairs(layoutChildren) do
         if child:IsA("Model") or child.ClassName == "Folder" then
             targetLayout = child
-            print("[DoorWarp] Checking Layout:", child.Name)
             
             local doors = targetLayout:FindFirstChild("Doors")
             if not doors then 
-                print("[DoorWarp] No Doors folder in Layout:", targetLayout.Name)
                 continue -- ข้ามไป Layout ถัดไปทันที
             end
             
@@ -187,28 +179,23 @@ local function findRandomDoor()
             end
             
             if hasValidDoor then
-                print("[DoorWarp] Found Layout with valid door:", targetLayout.Name)
                 break -- เจอแล้ว หยุดค้นหา
             else
-                print("[DoorWarp] Layout", targetLayout.Name, "has no valid doors, skipping...")
                 targetLayout = nil -- รีเซ็ตเพื่อไป Layout ถัดไป
             end
         end
     end
     
     if not targetLayout then 
-        print("[DoorWarp] No valid Layout with usable doors found")
         return nil 
     end
     
     local doors = targetLayout:FindFirstChild("Doors")
     if not doors then 
-        print("[DoorWarp] Doors folder not found in Layout:", targetLayout.Name)
         -- ลองหา Doors ในรูปแบบอื่น (บางด่านอาจไม่มีโฟลเดอร์ Doors)
         for _, child in pairs(targetLayout:GetChildren()) do
             if child.Name:lower():find("door") then
                 doors = child
-                print("[DoorWarp] Found alternative doors folder:", child.Name)
                 break
             end
         end
@@ -226,37 +213,28 @@ local function findRandomDoor()
             doorPart = doorObj
             -- ตรวจสอบเฉพาะลูกโดยตรงเท่านั้น (ตามโครงสร้าง: Part -> TouchInterest)
             touchInterest = doorObj:FindFirstChild("TouchInterest")
-            print("[DoorWarp] Checking BasePart:", doorObj.Name, "- TouchInterest found:", touchInterest ~= nil)
         -- กรณีที่ 2: doorObj เป็น Model ที่มี PrimaryPart หรือ Part ข้างใน
         elseif doorObj:IsA("Model") then
             doorPart = doorObj.PrimaryPart or doorObj:FindFirstChildWhichIsA("BasePart")
             -- ถ้าเจอ Part ใน Model ก็เช็ค ลูกโดยตรง ของ Part นั้นเช่นกัน
             if doorPart then
                 touchInterest = doorPart:FindFirstChild("TouchInterest")
-                print("[DoorWarp] Checking Model:", doorObj.Name, "- Part:", doorPart.Name, "- TouchInterest found:", touchInterest ~= nil)
             end
         end
         
         -- ตรวจสอบว่าเจอ TouchInterest หรือไม่
         if touchInterest and doorPart then
             table.insert(doorList, doorPart)
-            print("[DoorWarp] *** FOUND VALID DOOR ***:", doorPart.Name, "in Layout:", targetLayout.Name)
-        else
-            if doorPart then
-                print("[DoorWarp] Skipping door (no TouchInterest):", doorPart.Name, "in Layout:", targetLayout.Name)
-            end
         end
     end
     
     if #doorList == 0 then 
-        print("[DoorWarp] No valid door parts with TouchInterest found in Doors folder")
         return nil 
     end
     
     -- สุ่มเลือก 1 ประตูจากประตูที่เปิดได้จริงเท่านั้น
     local randomIndex = math.random(1, #doorList)
     local selectedDoor = doorList[randomIndex]
-    print("[DoorWarp] Selected door:", selectedDoor.Name, "Position:", selectedDoor.Position)
     return selectedDoor
 end
 
@@ -639,9 +617,7 @@ local function executeSmartDodgeV5(hazard)
                 else
                     myRoot.CFrame = CFrame.new(safeTarget)
                 end
-                print("[SmartDodge] Warped to safe position:", safeTarget)
             else
-                print("[SmartDodge] No safe position found, staying put to avoid falling")
             end
         end
 
@@ -824,12 +800,10 @@ task.spawn(function()
                         -- หลังวาร์ปเสร็จ ให้สลับโหมดไปล่ามอนสเตอร์
                         autoHuntEnemies = true
                         currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ครั้งหน้า
-                        print("[DoorWarp] Warped to door, now hunting enemies...")
                     end
                 else
                     -- ถ้าหาประตูไม่เจอเลย ให้รีเซ็ตสถานะและค้นหาใหม่ทันที (แก้ปัญหาหยุดนิ่ง)
                     if currentTime - lastDoorSearchTime >= 1 then
-                        print("[DoorWarp] No door found, resetting state and retrying...")
                         autoHuntEnemies = false
                         currentTargetDoor = nil
                         lastDoorSearchTime = currentTime
@@ -878,7 +852,6 @@ task.spawn(function()
                     autoHuntEnemies = false
                     currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ทันที
                     lastDoorSearchTime = 0 -- บังคับให้ค้นหาใหม่ในรอบถัดไป
-                    print("[DoorWarp] No enemies left (or all dead), reset target and searching for next door...")
                 end
             end
         end)
