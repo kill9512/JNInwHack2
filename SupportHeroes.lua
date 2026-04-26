@@ -20,6 +20,13 @@ local autoCoinEnabled = false
 local autoDodgeEnabled = false
 local shieldRange = 100
 
+-- Variables for Door Warp & Auto Enemy Hunt
+local doorWarpEnabled = false
+local currentTargetDoor = nil
+local autoHuntEnemies = false
+local lastDoorSearchTime = 0
+local doorSearchInterval = 2 -- วินาที
+
 local currentWaypoints = {}
 local currentWaypointIndex = 1
 local lastComputeTime = 0
@@ -51,6 +58,14 @@ end)
 
 SupportSection:NewSlider("Dodge Detect Range", "ระยะตรวจจับ (บล็อค)", 300, 20, function(s)
     shieldRange = s
+end)
+
+SupportSection:NewToggle("Door Warp & Auto Hunt", "วาร์ปไปประตูสุ่ม + ล่ามอนสเตอร์อัตโนมัติ", function(state)
+    doorWarpEnabled = state
+    if not state then
+        currentTargetDoor = nil
+        autoHuntEnemies = false
+    end
 end)
 
 -- --- UI: Navigation Control ---
@@ -123,6 +138,73 @@ local function forceJump(hum)
         hum.Jump = true
         hum:ChangeState(Enum.HumanoidStateType.Jumping)
     end
+end
+
+-- --- Door Warp & Auto Hunt Functions ---
+local function findRandomDoor()
+    local dungeon = workspace:FindFirstChild("Dungeon")
+    if not dungeon then return nil end
+    
+    local layout = dungeon:FindFirstChild("Layout")
+    if not layout then return nil end
+    
+    -- หา Layout ที่ชื่อ "8480940a08ad"
+    local targetLayout = layout:FindFirstChild("8480940a08ad")
+    if not targetLayout then return nil end
+    
+    local doors = targetLayout:FindFirstChild("Doors")
+    if not doors then return nil end
+    
+    -- รวบรวมประตูทั้งหมดที่มี LockBillboard
+    local doorList = {}
+    for _, doorPart in pairs(doors:GetChildren()) do
+        local lockBillboard = doorPart:FindFirstChild("LockBillboard")
+        if lockBillboard and lockBillboard:IsA("BillboardGui") then
+            table.insert(doorList, doorPart)
+        end
+    end
+    
+    if #doorList == 0 then return nil end
+    
+    -- สุ่มเลือก 1 ประตู
+    local randomIndex = math.random(1, #doorList)
+    return doorList[randomIndex]
+end
+
+local function getDoorCenterPosition(doorPart)
+    if not doorPart then return nil end
+    -- วาร์ปไปกลาง Part (ใช้ Position ของ Part นั้นเลย)
+    return doorPart.Position + Vector3.new(0, 2.5, 0) -- บวกความสูงเล็กน้อยเพื่อไม่ให้ติดพื้น
+end
+
+local function findClosestEnemy()
+    local dungeon = workspace:FindFirstChild("Dungeon")
+    if not dungeon then return nil end
+    
+    local enemies = dungeon:FindFirstChild("Enemies")
+    if not enemies then return nil end
+    
+    local myChar = LocalPlayer.Character
+    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return nil end
+    
+    local closestEnemy = nil
+    local closestDist = math.huge
+    
+    for _, enemy in pairs(enemies:GetChildren()) do
+        if enemy:IsA("Model") or enemy:IsA("BasePart") then
+            local enemyRoot = enemy:IsA("Model") and enemy:FindFirstChild("HumanoidRootPart") or enemy
+            if enemyRoot and enemyRoot:IsA("BasePart") then
+                local dist = (myRoot.Position - enemyRoot.Position).Magnitude
+                if dist < closestDist then
+                    closestDist = dist
+                    closestEnemy = enemyRoot
+                end
+            end
+        end
+    end
+    
+    return closestEnemy
 end
 
 local function getProbingDirection(myRoot, targetPos)
@@ -505,6 +587,70 @@ task.spawn(function()
                 end
             end)
         end
+    end
+end)
+
+-- --- DOOR WARP & AUTO HUNT LOOP ---
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if not doorWarpEnabled then
+            currentTargetDoor = nil
+            autoHuntEnemies = false
+            continue
+        end
+        
+        pcall(function()
+            local myChar = LocalPlayer.Character
+            local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            local myHuman = myChar and myChar:FindFirstChildOfClass("Humanoid")
+            if not myRoot or not myHuman then return end
+            
+            local currentTime = os.clock()
+            
+            -- ถ้าไม่ได้กำลังล่ามอนสเตอร์ ให้ค้นหาประตู
+            if not autoHuntEnemies then
+                if currentTime - lastDoorSearchTime >= doorSearchInterval then
+                    lastDoorSearchTime = currentTime
+                    
+                    -- ค้นหาประตูใหม่ถ้ายังไม่มี หรือประตูเดิมหายไป
+                    if not currentTargetDoor or not currentTargetDoor.Parent then
+                        currentTargetDoor = findRandomDoor()
+                    end
+                    
+                    -- ถ้าเจอประตู ให้วาร์ปไป
+                    if currentTargetDoor and currentTargetDoor.Parent then
+                        local targetPos = getDoorCenterPosition(currentTargetDoor)
+                        if targetPos then
+                            -- วาร์ปทันที
+                            myRoot.CFrame = CFrame.new(targetPos)
+                            
+                            -- หลังวาร์ปเสร็จ ให้สลับโหมดไปล่ามอนสเตอร์
+                            autoHuntEnemies = true
+                            currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ครั้งหน้า
+                        end
+                    end
+                end
+            else
+                -- โหมดล่ามอนสเตอร์: หาตัวที่ใกล้ที่สุดแล้วเดินไปหา
+                local closestEnemy = findClosestEnemy()
+                
+                if closestEnemy and closestEnemy.Parent then
+                    local enemyPos = closestEnemy.Position
+                    local dist = (myRoot.Position - enemyPos).Magnitude
+                    
+                    -- ถ้ายังไกลอยู่ ให้เดินไปหา
+                    if dist > 5 then
+                        myHuman:MoveTo(enemyPos)
+                    else
+                        -- อยู่ในระยะประชิดแล้ว ไม่ต้องทำอะไร (รอโจมตีเอง)
+                    end
+                else
+                    -- ไม่มีมอนสเตอร์แล้ว ให้สลับกลับไปโหมดค้นหาประตู
+                    autoHuntEnemies = false
+                end
+            end
+        end)
     end
 end)
 
