@@ -18,7 +18,7 @@ local followByPercentHP = false
 
 local autoCoinEnabled = false
 local autoDodgeEnabled = false
-local shieldRange = 100
+local shieldRange = 40
 
 -- Variables for Door Warp & Auto Enemy Hunt
 local doorWarpEnabled = false
@@ -291,7 +291,7 @@ local function checkWallAndFindDirection(myRoot, targetPos)
     
     local currentPos = myRoot.Position
     local baseDir = (targetPos - currentPos).Unit
-    local scanDistance = 8 -- เพิ่มระยะสแกนกำแพง
+    local scanDistance = 12 -- เพิ่มระยะสแกนกำแพง
     
     -- ยิง Raycast ไปข้างหน้าเพื่อดูว่ามีกำแพงขวางหรือไม่ (ยิงหลายจุดเพื่อครอบคลุมความกว้างของตัวละคร)
     local wallHit = workspace:Raycast(currentPos + Vector3.new(0, 2, 0), baseDir * scanDistance, rayParams)
