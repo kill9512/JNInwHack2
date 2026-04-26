@@ -340,7 +340,7 @@ local function executeSmartDodgeV5(hazard)
             escapeDir = escapeDir.Unit
             
             -- คำนวณจุดปลอดภัยที่ห่างจากขอบ AoE
-            local safeDistance = hazardRadius + 5
+            local safeDistance = hazardRadius + 3
             local safeTarget = myPos + (escapeDir * safeDistance)
             
             -- ตรวจสอบและปรับตำแหน่งปลายทางไม่ให้ติด Model
