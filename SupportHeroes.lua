@@ -162,11 +162,12 @@ local function findRandomDoor()
     local doors = targetLayout:FindFirstChild("Doors")
     if not doors then return nil end
     
-    -- รวบรวมประตูทั้งหมดที่มี LockBillboard
+    -- รวบรวมประตูทั้งหมดที่มี TouchInterest (ชิ้นส่วนตรวจสอบการชน)
     local doorList = {}
     for _, doorPart in pairs(doors:GetChildren()) do
-        local lockBillboard = doorPart:FindFirstChild("LockBillboard")
-        if lockBillboard and lockBillboard:IsA("BillboardGui") then
+        -- ค้นหา TouchInterest ซึ่งเป็นส่วนตรวจสอบการชนของประตู
+        local touchInterest = doorPart:FindFirstChild("TouchInterest")
+        if touchInterest and touchInterest:IsA("TouchInterest") then
             table.insert(doorList, doorPart)
         end
     end
@@ -668,9 +669,11 @@ task.spawn(function()
                         print("[DoorWarp] Warped to door, now hunting enemies...")
                     end
                 else
-                    -- ถ้าหาประตูไม่เจอเลย ให้ลองค้นหาใหม่ทุก 1 วินาที
+                    -- ถ้าหาประตูไม่เจอเลย ให้รีเซ็ตสถานะและค้นหาใหม่ทันที (แก้ปัญหาหยุดนิ่ง)
                     if currentTime - lastDoorSearchTime >= 1 then
-                        print("[DoorWarp] No door found, retrying...")
+                        print("[DoorWarp] No door found, resetting state and retrying...")
+                        autoHuntEnemies = false
+                        currentTargetDoor = nil
                         lastDoorSearchTime = currentTime
                     end
                 end
@@ -699,10 +702,11 @@ task.spawn(function()
                         -- อยู่ในระยะประชิดแล้ว ไม่ต้องทำอะไร (รอโจมตีเอง)
                     end
                 else
-                    -- ไม่มีมอนสเตอร์แล้ว ให้สลับกลับไปโหมดค้นหาประตูทันที
+                    -- ไม่มีมอนสเตอร์แล้ว ให้รีเซ็ตเป้าหมายและบังคับเริ่มกระบวนการค้นหาประตูใหม่ทันที
                     autoHuntEnemies = false
                     currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ทันที
-                    print("[DoorWarp] No enemies left, searching for next door...")
+                    lastDoorSearchTime = 0 -- บังคับให้ค้นหาใหม่ในรอบถัดไป
+                    print("[DoorWarp] No enemies left, reset target and searching for next door...")
                 end
             end
         end)
