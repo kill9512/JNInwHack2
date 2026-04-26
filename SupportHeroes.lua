@@ -286,23 +286,70 @@ local function checkWallAndFindDirection(myRoot, targetPos)
     
     local currentPos = myRoot.Position
     local baseDir = (targetPos - currentPos).Unit
-    local scanDistance = 8 -- ระยะสแกนกำแพง
+    local scanDistance = 12 -- เพิ่มระยะสแกนกำแพง
     
-    -- ยิง Raycast ไปข้างหน้าเพื่อดูว่ามีกำแพงขวางหรือไม่
-    local wallHit = workspace:Raycast(currentPos, baseDir * scanDistance, rayParams)
+    -- ยกจุดเริ่มต้น Raycast สูงขึ้นเพื่อหลีกเลี่ยงการตรวจจับพื้น
+    local rayStartHeight = 2.5
+    local rayStartPos = currentPos + Vector3.new(0, rayStartHeight, 0)
+    
+    -- ยิง Raycast หลายระดับความสูงเพื่อตรวจสอบกำแพงอย่างละเอียด
+    local wallHit = nil
+    for _, heightOffset in ipairs({0, 1.5, -1.5}) do
+        local testStart = rayStartPos + Vector3.new(0, heightOffset, 0)
+        local testHit = workspace:Raycast(testStart, baseDir * scanDistance, rayParams)
+        if testHit then
+            -- ตรวจสอบว่าเป็นกำแพงจริงๆ (ไม่ใช่พื้นหรือเพดาน)
+            local normal = testHit.Normal
+            if math.abs(normal.Y) < 0.7 then -- ถ้า Normal ไม่ชี้ขึ้น/ลง แสดงว่าเป็นกำแพงด้านข้าง
+                if not wallHit or testHit.Distance < wallHit.Distance then
+                    wallHit = testHit
+                end
+            end
+        end
+    end
     
     if wallHit then
         -- ถ้าเจอกำแพง ให้ลองหาทิศทางอื่น
-        local escapeAngles = {45, -45, 90, -90, 135, -135}
+        local escapeAngles = {60, -60, 45, -45, 90, -90, 120, -120, 135, -135}
+        local bestDir = nil
+        local bestDist = 0
+        
         for _, angle in ipairs(escapeAngles) do
-            local rotatedDir = (CFrame.Angles(0, math.rad(angle), 0) * baseDir).Unit
-            local testHit = workspace:Raycast(currentPos, rotatedDir * scanDistance, rayParams)
+            local rotatedDir = (CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(baseDir.X, 0, baseDir.Z)).Unit
+            rotatedDir = rotatedDir.Unit
             
-            -- ถ้าทิศทางนี้ไม่มีกำแพง หรือมีแต่ไกลกว่า ให้ใช้ทิศทางนี้
-            if not testHit or testHit.Distance > (wallHit.Distance * 0.8) then
-                return rotatedDir, true -- ส่งกลับทิศทางและ flag ว่าต้องหลบ
+            -- ตรวจสอบทิศทางนี้ในหลายระดับความสูง
+            local isClear = true
+            local maxTestDist = 0
+            
+            for _, heightOffset in ipairs({0, 1.5, -1.5}) do
+                local testStart = rayStartPos + Vector3.new(0, heightOffset, 0)
+                local testHit = workspace:Raycast(testStart, rotatedDir * scanDistance, rayParams)
+                
+                if testHit then
+                    local normal = testHit.Normal
+                    if math.abs(normal.Y) < 0.7 then -- เป็นกำแพงด้านข้าง
+                        isClear = false
+                        break
+                    else
+                        maxTestDist = math.max(maxTestDist, testHit.Distance)
+                    end
+                else
+                    maxTestDist = scanDistance
+                end
+            end
+            
+            -- ถ้าทิศทางนี้โล่ง หรือมีกำแพงแต่ไกลกว่าจุดที่ติดอยู่ ให้ใช้ทิศทางนี้
+            if isClear and maxTestDist > bestDist then
+                bestDist = maxTestDist
+                bestDir = rotatedDir
             end
         end
+        
+        if bestDir then
+            return bestDir, true -- ส่งกลับทิศทางและ flag ว่าต้องหลบ
+        end
+        
         -- ถ้าทุกทิศทางมีกำแพงหมด ให้สุ่มทิศทาง
         local randomAngle = math.random(0, 359)
         local randomDir = (CFrame.Angles(0, math.rad(randomAngle), 0) * Vector3.new(1, 0, 0)).Unit
@@ -828,15 +875,24 @@ task.spawn(function()
                         if needToDodge then
                             -- ถ้ามีกำแพงขวาง ให้เดินในทิศทางที่หลบแทน
                             local dodgeTarget = myRoot.Position + (moveDir * 10)
+                            -- บังคับหันหน้าไปในทิศทางที่จะเดินก่อน เพื่อไม่ให้หลังชนกำแพง
+                            myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, dodgeTarget)
+                            wait(0.1) -- รอให้ตัวละครหันเสร็จ
                             myHuman:MoveTo(dodgeTarget)
                         else
                             -- ไม่มีกำแพง เดินตรงไปหามอนสเตอร์
+                            -- บังคับหันหน้าไปทางมอนสเตอร์ก่อนเดิน
+                            myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, enemyPos)
+                            wait(0.1) -- รอให้ตัวละครหันเสร็จ
                             myHuman:MoveTo(enemyPos)
                         end
                     else
                         local angle = os.clock() % 6.28 -- 2π
                         local circleRadius = 4
                         local circlePos = enemyPos + Vector3.new(math.cos(angle) * circleRadius, 0, math.sin(angle) * circleRadius)
+                        -- บังคับหันหน้าไปทางจุดที่จะวนรอบก่อนเดิน
+                        myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, circlePos)
+                        wait(0.1) -- รอให้ตัวละครหันเสร็จ
                         myHuman:MoveTo(circlePos)
                     end
                 else
@@ -1022,6 +1078,9 @@ task.spawn(function()
                             lastAntiAFKTime = os.clock()
                         end
                         
+                        -- บังคับหันหน้าไปทางเป้าหมายก่อนเดิน เพื่อไม่ให้หลังชนกำแพง
+                        myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, targetPos)
+                        wait(0.1)
                         myHuman:MoveTo(targetPos)
                         if isParkour then
                             if directRay then
@@ -1055,6 +1114,9 @@ task.spawn(function()
                                     lastAntiAFKTime = os.clock()
                                 end
                                 
+                                -- บังคับหันหน้าไปทางทิศทางที่จะเดินก่อน เพื่อไม่ให้หลังชนกำแพง
+                                myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, currentPos + (probeDir * 8))
+                                wait(0.1)
                                 myHuman:MoveTo(currentPos + (probeDir * 8))
                                 local wallCheck = workspace:Raycast(currentPos, probeDir * 4, rayParams)
                                 if wallCheck then forceJump(myHuman) end
@@ -1100,9 +1162,15 @@ task.spawn(function()
                                 
                                 if isGoingUp and not isClimbing then
                                     local flatDir = (Vector3.new(wp.Position.X, 0, wp.Position.Z) - Vector3.new(currentPos.X, 0, currentPos.Z))
+                                    -- บังคับหันหน้าไปทาง waypoint ก่อนเดิน เพื่อไม่ให้หลังชนกำแพง
+                                    myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, wp.Position)
+                                    wait(0.1)
                                     if flatDir.Magnitude > 0.1 then myHuman:MoveTo(wp.Position + (flatDir.Unit * 1.5)) 
                                     else myHuman:MoveTo(wp.Position) end
                                 else
+                                    -- บังคับหันหน้าไปทาง waypoint ก่อนเดิน เพื่อไม่ให้หลังชนกำแพง
+                                    myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, wp.Position)
+                                    wait(0.1)
                                     myHuman:MoveTo(wp.Position)
                                 end
                                 local dist2D = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude
@@ -1125,6 +1193,10 @@ task.spawn(function()
                         lastAntiAFKTime = os.clock()
                     end
                     currentWaypoints = {}; myHuman:MoveTo(currentPos)
+                    -- บังคับหันหน้าไปทางเดิมเพื่อไม่ให้หมุนฟรี
+                    if lastTargetPos ~= Vector3.new() then
+                        myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, lastTargetPos)
+                    end
                 end
             end
         end)
