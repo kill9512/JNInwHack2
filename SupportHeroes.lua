@@ -280,6 +280,86 @@ local function findClosestEnemy()
     return closestEnemy
 end
 
+-- ฟังก์ชันหาจุดที่ยืนได้จริงรอบๆ มอนสเตอร์ (ไม่ติดกำแพง)
+local function findReachableSpotAroundEnemy(myRoot, enemyPos, searchRadius)
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    local myPos = myRoot.Position
+    
+    -- สุ่มมุมต่างๆ รอบมอนสเตอร์
+    local angles = {}
+    for i = 0, 359, 15 do -- ทุก 15 องศา
+        table.insert(angles, i)
+    end
+    
+    -- สลับลำดับมุมเพื่อไม่ให้ลองมุมเดิมก่อนทุกครั้ง
+    for i = #angles, 2, -1 do
+        local j = math.random(i)
+        angles[i], angles[j] = angles[j], angles[i]
+    end
+    
+    local bestSpot = nil
+    local bestDist = math.huge
+    
+    for _, angle in ipairs(angles) do
+        local rad = math.rad(angle)
+        local offset = Vector3.new(math.cos(rad), 0, math.sin(rad)) * searchRadius
+        local candidatePos = enemyPos + offset
+        
+        -- ตรวจสอบว่าไม่มีกำแพงขวางระหว่างเรากับจุดนี้
+        local dirToCandidate = (candidatePos - myPos).Unit
+        local distToCandidate = (candidatePos - myPos).Magnitude
+        local wallCheck = workspace:Raycast(myPos + Vector3.new(0, 2, 0), dirToCandidate * distToCandidate, rayParams)
+        
+        if not wallCheck then
+            -- ตรวจสอบว่ามีพื้นรองรับ
+            local groundCheck = workspace:Raycast(candidatePos + Vector3.new(0, 5, 0), Vector3.new(0, -10, 0), rayParams)
+            if groundCheck then
+                -- ตรวจสอบว่าไม่ติดกำแพงรอบๆ จุดนี้
+                local isCorner = false
+                for _, checkAngle in ipairs({0, 90, 180, 270}) do
+                    local sideDir = CFrame.Angles(0, math.rad(checkAngle), 0) * Vector3.new(1, 0, 0)
+                    local sideHit = workspace:Raycast(candidatePos + Vector3.new(0, 2, 0), sideDir * 1.5, rayParams)
+                    if sideHit and sideHit.Distance < 1.2 then
+                        isCorner = true
+                        break
+                    end
+                end
+                
+                if not isCorner then
+                    local distFromEnemy = (candidatePos - enemyPos).Magnitude
+                    if distFromEnemy < bestDist then
+                        bestDist = distFromEnemy
+                        bestSpot = candidatePos
+                    end
+                end
+            end
+        end
+    end
+    
+    -- ถ้าไม่เจอจุดที่ดีเลย ให้ลองใช้ระยะที่ไกลขึ้น
+    if not bestSpot then
+        for _, angle in ipairs(angles) do
+            local rad = math.rad(angle)
+            local offset = Vector3.new(math.cos(rad), 0, math.sin(rad)) * (searchRadius + 3)
+            local candidatePos = enemyPos + offset
+            
+            local dirToCandidate = (candidatePos - myPos).Unit
+            local distToCandidate = (candidatePos - myPos).Magnitude
+            local wallCheck = workspace:Raycast(myPos + Vector3.new(0, 2, 0), dirToCandidate * distToCandidate, rayParams)
+            
+            if not wallCheck then
+                local groundCheck = workspace:Raycast(candidatePos + Vector3.new(0, 5, 0), Vector3.new(0, -10, 0), rayParams)
+                if groundCheck then
+                    bestSpot = candidatePos
+                    break
+                end
+            end
+        end
+    end
+    
+    return bestSpot
+end
+
 -- ฟังก์ชันตรวจสอบว่ามีกำแพงขวางทางหรือไม่ และหาทิศทางหลบ (สำหรับเดิน)
 local function checkWallAndFindDirection(myRoot, targetPos)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
@@ -869,24 +949,32 @@ task.spawn(function()
                     
                     -- ถ้ายังไกลอยู่ ให้เดินไปหา
                     if dist > 5 then
-                        -- ใช้ Raycast ตรวจสอบกำแพงและหาทิศทางหลบ
-                        local moveDir, needToDodge = checkWallAndFindDirection(myRoot, enemyPos)
+                        -- ใช้ฟังก์ชันใหม่หาจุดที่ยืนได้จริงรอบๆ มอนสเตอร์ (ไม่ติดกำแพง)
+                        local reachableSpot = findReachableSpotAroundEnemy(myRoot, enemyPos, 6)
                         
-                        if needToDodge then
-                            -- ถ้ามีกำแพงขวาง ให้เดินในทิศทางที่หลบแทน
-                            local dodgeTarget = myRoot.Position + (moveDir * 10)
-                            -- บังคับหันหน้าไปในทิศทางที่จะเดินก่อน เพื่อไม่ให้หลังชนกำแพง
-                            myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, dodgeTarget)
+                        if reachableSpot then
+                            -- เจอจุดที่ยืนได้แล้ว เดินไปจุดนั้นแทนการเดินไปหามอนสเตอร์โดยตรง
+                            -- บังคับหันหน้าไปทางจุดที่จะเดินก่อน เพื่อไม่ให้หลังชนกำแพง
+                            myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, reachableSpot)
                             wait(0.1) -- รอให้ตัวละครหันเสร็จ
-                            myHuman:MoveTo(dodgeTarget)
+                            myHuman:MoveTo(reachableSpot)
                         else
-                            -- ไม่มีกำแพง เดินตรงไปหามอนสเตอร์
-                            -- บังคับหันหน้าไปทางมอนสเตอร์ก่อนเดิน
-                            myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, enemyPos)
-                            wait(0.1) -- รอให้ตัวละครหันเสร็จ
-                            myHuman:MoveTo(enemyPos)
+                            -- ถ้าหาจุดยืนไม่ได้จริงๆ ให้ใช้วิธีเดิม (ตรวจสอบกำแพงและหลบ)
+                            local moveDir, needToDodge = checkWallAndFindDirection(myRoot, enemyPos)
+                            
+                            if needToDodge then
+                                local dodgeTarget = myRoot.Position + (moveDir * 10)
+                                myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, dodgeTarget)
+                                wait(0.1)
+                                myHuman:MoveTo(dodgeTarget)
+                            else
+                                myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, enemyPos)
+                                wait(0.1)
+                                myHuman:MoveTo(enemyPos)
+                            end
                         end
                     else
+                        -- อยู่ในระยะโจมตีแล้ว วนรอบมอนสเตอร์
                         local angle = os.clock() % 6.28 -- 2π
                         local circleRadius = 4
                         local circlePos = enemyPos + Vector3.new(math.cos(angle) * circleRadius, 0, math.sin(angle) * circleRadius)
