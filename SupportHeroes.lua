@@ -41,6 +41,7 @@ local lastMoveTick = os.clock()
 local randomTarget = nil
 local temporaryPlatform = nil -- เก็บ reference แผ่นเหยียบชั่วคราว
 local lastAntiAFKTime = os.clock() -- ตัวจับเวลา Anti-AFK
+local VirtualUser = game:GetService("VirtualUser") -- ใช้สำหรับจำลองการกดปุ่ม
 
 -- --- UI Sections ---
 local SupportSection = Tab:NewSection("Support Functions")
@@ -790,16 +791,32 @@ task.spawn(function()
                     lastDoorSearchTime = currentTime
                 end
                 
-                -- ถ้าเจอประตู ให้วาร์ปไป
+                -- ถ้าเจอประตู ให้เดินไปหา (ไม่วาร์ป)
                 if currentTargetDoor and currentTargetDoor.Parent then
                     local targetPos = getDoorCenterPosition(currentTargetDoor)
                     if targetPos then
-                        -- วาร์ปทันที
-                        myRoot.CFrame = CFrame.new(targetPos)
+                        local dist = (myRoot.Position - targetPos).Magnitude
                         
-                        -- หลังวาร์ปเสร็จ ให้สลับโหมดไปล่ามอนสเตอร์
-                        autoHuntEnemies = true
-                        currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ครั้งหน้า
+                        -- ถ้ายังไม่ถึงประตู ให้เดินไปหา
+                        if dist > 3 then
+                            myHuman:MoveTo(targetPos)
+                            -- อัปเดตเวลาเคลื่อนไหวเพื่อป้องกัน AFK
+                            lastAntiAFKTime = os.clock()
+                        else
+                            -- ถึงประตูแล้ว ให้แตะประตูเพื่อเปิด
+                            local doorPart = currentTargetDoor
+                            if doorPart and doorPart.Parent then
+                                -- ยืนใกล้ประตูเล็กน้อยเพื่อให้ TouchInterest ทำงาน
+                                local touchPos = targetPos + Vector3.new(0, 0, 2)
+                                myHuman:MoveTo(touchPos)
+                                task.wait(0.5)
+                                
+                                -- หลังเปิดประตูเสร็จ ให้สลับโหมดไปล่ามอนสเตอร์
+                                autoHuntEnemies = true
+                                currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ครั้งหน้า
+                                lastAntiAFKTime = os.clock()
+                            end
+                        end
                     end
                 else
                     -- ถ้าหาประตูไม่เจอเลย ให้รีเซ็ตสถานะและค้นหาใหม่ทันที (แก้ปัญหาหยุดนิ่ง)
@@ -829,13 +846,9 @@ task.spawn(function()
                             -- ถ้ามีกำแพงขวาง ให้เดินในทิศทางที่หลบแทน
                             local dodgeTarget = myRoot.Position + (moveDir * 10)
                             myHuman:MoveTo(dodgeTarget)
-                            -- บังคับขยับ CFrame เพื่อป้องกัน AFK ทันที
-                            myRoot.CFrame = CFrame.new(dodgeTarget)
                         else
                             -- ไม่มีกำแพง เดินตรงไปหามอนสเตอร์
                             myHuman:MoveTo(enemyPos)
-                            -- บังคับขยับ CFrame เพื่อป้องกัน AFK ทันที
-                            myRoot.CFrame = CFrame.new(enemyPos)
                         end
                     else
                         -- อยู่ในระยะประชิดแล้ว แต่ต้องขยับเล็กน้อยเพื่อไม่ให้โดน AFK
@@ -844,8 +857,6 @@ task.spawn(function()
                         local circleRadius = 4
                         local circlePos = enemyPos + Vector3.new(math.cos(angle) * circleRadius, 0, math.sin(angle) * circleRadius)
                         myHuman:MoveTo(circlePos)
-                        -- บังคับวาร์ปตามเพื่อป้องกัน AFK
-                        myRoot.CFrame = CFrame.new(circlePos)
                     end
                 else
                     -- ไม่มีมอนสเตอร์แล้ว (หรือทั้งหมดตายแล้ว) ให้รีเซ็ตเป้าหมายและบังคับเริ่มกระบวนการค้นหาประตูใหม่ทันที
@@ -1023,10 +1034,11 @@ task.spawn(function()
                         isProbing = false; currentWaypoints = {}
                         updateDebug("DirectTrace", currentPos, targetPos, isParkour and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 255, 0))
                         
-                        -- [Anti-AFK] วาร์ปตัวละครไปข้างหน้าเล็กน้อยเพื่อไม่ให้โดนแบน AFK
+                        -- [Anti-AFK] ใช้ VirtualUser เพื่อจำลองการกดปุ่ม (วิธีที่ได้ผลที่สุด)
                         local timeSinceLastMove = os.clock() - lastAntiAFKTime
                         if timeSinceLastMove > 1.5 then
-                            myRoot.CFrame = CFrame.new(myRoot.Position + (moveDir * 0.1))
+                            VirtualUser:CaptureController()
+                            VirtualUser:ClickButton2(Vector2.new(0, 0), game:GetService("Workspace"))
                             lastAntiAFKTime = os.clock()
                         end
                         
@@ -1056,10 +1068,11 @@ task.spawn(function()
                             if probeDir then
                                 updateDebug("ProbeTrace", currentPos, currentPos + (probeDir * 5), Color3.fromRGB(255, 165, 0))
                                 
-                                -- [Anti-AFK] วาร์ปตัวละครไปข้างหน้าเล็กน้อยเพื่อไม่ให้โดนแบน AFK
+                                -- [Anti-AFK] ใช้ VirtualUser เพื่อจำลองการกดปุ่ม (วิธีที่ได้ผลที่สุด)
                                 local timeSinceLastMove = os.clock() - lastAntiAFKTime
                                 if timeSinceLastMove > 1.5 then
-                                    myRoot.CFrame = CFrame.new(myRoot.Position + (probeDir * 0.1))
+                                    VirtualUser:CaptureController()
+                                    VirtualUser:ClickButton2(Vector2.new(0, 0), game:GetService("Workspace"))
                                     lastAntiAFKTime = os.clock()
                                 end
                                 
@@ -1094,15 +1107,11 @@ task.spawn(function()
                                 local isClimbing = myHuman:GetState() == Enum.HumanoidStateType.Climbing
                                 local isGoingUp = (wp.Position.Y > currentPos.Y + 2.5) 
                                 
-                                -- [Anti-AFK] วาร์ปตัวละครไปข้างหน้าเล็กน้อยเพื่อไม่ให้โดนแบน AFK
+                                -- [Anti-AFK] ใช้ VirtualUser เพื่อจำลองการกดปุ่ม (วิธีที่ได้ผลที่สุด)
                                 local timeSinceLastMove = os.clock() - lastAntiAFKTime
                                 if timeSinceLastMove > 1.5 then
-                                    local flatDir = (Vector3.new(wp.Position.X, 0, wp.Position.Z) - Vector3.new(currentPos.X, 0, currentPos.Z))
-                                    if flatDir.Magnitude > 0.1 then
-                                        myRoot.CFrame = CFrame.new(myRoot.Position + (flatDir.Unit * 0.1))
-                                    else
-                                        myRoot.CFrame = CFrame.new(myRoot.Position + Vector3.new(0, 0.1, 0))
-                                    end
+                                    VirtualUser:CaptureController()
+                                    VirtualUser:ClickButton2(Vector2.new(0, 0), game:GetService("Workspace"))
                                     lastAntiAFKTime = os.clock()
                                 end
                                 
@@ -1126,10 +1135,11 @@ task.spawn(function()
                         updateDebug("DirectTrace", currentPos, directRay and directRay.Position or targetPos, Color3.fromRGB(255, 0, 0))
                     end
                 else
-                    -- [Anti-AFK] แม้จะยืนนิ่งๆ ก็ต้องขยับเล็กน้อยเพื่อไม่ให้โดนแบน
+                    -- [Anti-AFK] ใช้ VirtualUser เพื่อจำลองการกดปุ่ม (วิธีที่ได้ผลที่สุด)
                     local timeSinceLastMove = os.clock() - lastAntiAFKTime
                     if timeSinceLastMove > 1.5 then
-                        myRoot.CFrame = CFrame.new(myRoot.Position + Vector3.new(0, 0.05, 0))
+                        VirtualUser:CaptureController()
+                        VirtualUser:ClickButton2(Vector2.new(0, 0), game:GetService("Workspace"))
                         lastAntiAFKTime = os.clock()
                     end
                     currentWaypoints = {}; myHuman:MoveTo(currentPos)
