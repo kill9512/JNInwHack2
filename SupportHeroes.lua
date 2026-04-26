@@ -653,12 +653,16 @@ local function executeSmartDodgeV5(hazard)
         for _, p in pairs(parts) do
             local partCenter = p.Position
             local partSize = p.Size
-            -- คำนวณระยะจากจุดศูนย์กลางของ Part ไปยังผู้เล่น (เทียบเป็นครึ่งหนึ่งของขนาด Part)
-            local distToPart = (myPos - partCenter).Magnitude
-            local maxPartRadius = math.max(partSize.X, partSize.Y, partSize.Z) / 2
+            -- คำนวณ half-extents ของ Part (ครึ่งหนึ่งของขนาดในแต่ละแกน)
+            local halfExtents = partSize / 2
             
-            -- ถ้าผู้เล่นอยู่ในระยะของ Part (ใกล้กว่ารัศมีสูงสุดของ Part)
-            if distToPart < maxPartRadius then
+            -- แปลงตำแหน่งผู้เล่นเป็นพิกัดท้องถิ่นของ Part
+            local localPos = p.CFrame:PointToObjectSpace(myPos)
+            
+            -- ตรวจสอบว่าผู้เล่นอยู่ใน bounding box ของ Part หรือไม่
+            if math.abs(localPos.X) <= halfExtents.X and 
+               math.abs(localPos.Y) <= halfExtents.Y and 
+               math.abs(localPos.Z) <= halfExtents.Z then
                 isInDangerZone = true
                 break
             end
@@ -739,7 +743,7 @@ local function executeSmartDodgeV5(hazard)
                 local forwardDir = -flatProjDir -- พุ่งสวนทิศทางกระสุน
                 
                 -- คำนวณจุดพุ่งเข้าใส่ (ห่างจากตำแหน่งปัจจุบันไปทางด้านหน้าของกระสุน)
-                local dodgeDist = 8 -- ระยะพุ่งเข้าใส่
+                local dodgeDist = 15 -- ระยะพุ่งเข้าใส่ (เพิ่มเป็น 15 สตัด)
                 local chargeTarget = myPos + (forwardDir * dodgeDist)
                 
                 local safeTarget = nil
