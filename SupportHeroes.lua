@@ -148,8 +148,15 @@ local function findRandomDoor()
     local layout = dungeon:FindFirstChild("Layout")
     if not layout then return nil end
     
-    -- หา Layout ที่ชื่อ "8480940a08ad"
-    local targetLayout = layout:FindFirstChild("8480940a08ad")
+    -- ค้นหา Layout ใดๆ ที่มีอยู่ (ไม่ระบุชื่อเฉพาะ เพื่อรองรับทุกด่าน)
+    local targetLayout = nil
+    for _, child in pairs(layout:GetChildren()) do
+        if child:IsA("Model") or child.ClassName == "Folder" then
+            targetLayout = child
+            break
+        end
+    end
+    
     if not targetLayout then return nil end
     
     local doors = targetLayout:FindFirstChild("Doors")
@@ -625,7 +632,7 @@ end)
 -- --- DOOR WARP & AUTO HUNT LOOP ---
 task.spawn(function()
     while true do
-        task.wait(1)
+        task.wait(0.5) -- ลดเวลา wait เพื่อให้ตอบสนองเร็วขึ้น
         if not doorWarpEnabled then
             currentTargetDoor = nil
             autoHuntEnemies = false
@@ -642,25 +649,29 @@ task.spawn(function()
             
             -- ถ้าไม่ได้กำลังล่ามอนสเตอร์ ให้ค้นหาประตู
             if not autoHuntEnemies then
-                if currentTime - lastDoorSearchTime >= doorSearchInterval then
+                -- ค้นหาประตูใหม่ทันทีถ้ายังไม่มี หรือประตูเดิมหายไป (ไม่ต้องรอ interval)
+                if not currentTargetDoor or not currentTargetDoor.Parent then
+                    currentTargetDoor = findRandomDoor()
                     lastDoorSearchTime = currentTime
-                    
-                    -- ค้นหาประตูใหม่ถ้ายังไม่มี หรือประตูเดิมหายไป
-                    if not currentTargetDoor or not currentTargetDoor.Parent then
-                        currentTargetDoor = findRandomDoor()
+                end
+                
+                -- ถ้าเจอประตู ให้วาร์ปไป
+                if currentTargetDoor and currentTargetDoor.Parent then
+                    local targetPos = getDoorCenterPosition(currentTargetDoor)
+                    if targetPos then
+                        -- วาร์ปทันที
+                        myRoot.CFrame = CFrame.new(targetPos)
+                        
+                        -- หลังวาร์ปเสร็จ ให้สลับโหมดไปล่ามอนสเตอร์
+                        autoHuntEnemies = true
+                        currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ครั้งหน้า
+                        print("[DoorWarp] Warped to door, now hunting enemies...")
                     end
-                    
-                    -- ถ้าเจอประตู ให้วาร์ปไป
-                    if currentTargetDoor and currentTargetDoor.Parent then
-                        local targetPos = getDoorCenterPosition(currentTargetDoor)
-                        if targetPos then
-                            -- วาร์ปทันที
-                            myRoot.CFrame = CFrame.new(targetPos)
-                            
-                            -- หลังวาร์ปเสร็จ ให้สลับโหมดไปล่ามอนสเตอร์
-                            autoHuntEnemies = true
-                            currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ครั้งหน้า
-                        end
+                else
+                    -- ถ้าหาประตูไม่เจอเลย ให้ลองค้นหาใหม่ทุก 1 วินาที
+                    if currentTime - lastDoorSearchTime >= 1 then
+                        print("[DoorWarp] No door found, retrying...")
+                        lastDoorSearchTime = currentTime
                     end
                 end
             else
@@ -688,9 +699,10 @@ task.spawn(function()
                         -- อยู่ในระยะประชิดแล้ว ไม่ต้องทำอะไร (รอโจมตีเอง)
                     end
                 else
-                    -- ไม่มีมอนสเตอร์แล้ว ให้สลับกลับไปโหมดค้นหาประตู
+                    -- ไม่มีมอนสเตอร์แล้ว ให้สลับกลับไปโหมดค้นหาประตูทันที
                     autoHuntEnemies = false
                     currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ทันที
+                    print("[DoorWarp] No enemies left, searching for next door...")
                 end
             end
         end)
