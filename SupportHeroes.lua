@@ -280,18 +280,14 @@ local function findClosestEnemy()
     return closestEnemy
 end
 
--- ฟังก์ชันหาจุดที่ยืนได้จริงรอบๆ มอนสเตอร์ (ไม่ติดกำแพง) - ปรับปรุงใหม่
+-- ฟังก์ชันหาจุดที่ยืนได้จริงรอบๆ มอนสเตอร์ (ไม่ติดกำแพง)
 local function findReachableSpotAroundEnemy(myRoot, enemyPos, searchRadius)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
     local myPos = myRoot.Position
     
-    -- ใช้ PathfindingService หาเส้นทางโดยตรงไปยังจุดต่างๆ รอบมอนสเตอร์
-    local bestSpot = nil
-    local bestPathDist = math.huge
-    
-    -- สุ่มมุมต่างๆ รอบมอนสเตอร์ (ทุก 15 องศา เพื่อความเร็ว)
+    -- สุ่มมุมต่างๆ รอบมอนสเตอร์ (ละเอียดขึ้น ทุก 5 องศา)
     local angles = {}
-    for i = 0, 359, 15 do
+    for i = 0, 359, 5 do -- ทุก 5 องศา (ละเอียดมาก)
         table.insert(angles, i)
     end
     
@@ -301,108 +297,184 @@ local function findReachableSpotAroundEnemy(myRoot, enemyPos, searchRadius)
         angles[i], angles[j] = angles[j], angles[i]
     end
     
-    -- ลองระยะต่างๆ หลายระดับ
-    local searchDistances = {searchRadius, searchRadius + 3, searchRadius + 6}
+    local bestSpot = nil
+    local bestDist = math.huge
+    local bestPathDist = math.huge
     
-    for _, radius in ipairs(searchDistances) do
-        for _, angle in ipairs(angles) do
-            local rad = math.rad(angle)
-            local offset = Vector3.new(math.cos(rad), 0, math.sin(rad)) * radius
-            local candidatePos = enemyPos + offset
-            
-            -- ใช้ PathfindingService หาเส้นทางจริง
-            local path = PathfindingService:CreatePath({
-                AgentRadius = 2,
-                AgentHeight = 5,
-                AgentCanJump = true,
-                MaxSlopeAngle = 50
-            })
-            
-            local success, result = pcall(function()
-                path:ComputeAsync(myPos, candidatePos)
-            end)
-            
-            if not success or result ~= Enum.PathStatus.Success then
-                continue
-            end
-            
-            local waypoints = path:GetWaypoints()
-            if #waypoints < 2 then
-                continue
-            end
-            
-            -- ตรวจสอบว่าเส้นทางไม่มีปัญหา (เช่น waypoint ซ้ำที่เดิม หรือระยะห่างมากเกินไป)
-            local hasProblem = false
-            for i = 1, #waypoints - 1 do
-                local dist = (waypoints[i].Position - waypoints[i+1].Position).Magnitude
-                if dist < 0.3 then
-                    -- จุดซ้ำกัน อาจติดค้าง
-                    hasProblem = true
+    for _, angle in ipairs(angles) do
+        local rad = math.rad(angle)
+        local offset = Vector3.new(math.cos(rad), 0, math.sin(rad)) * searchRadius
+        local candidatePos = enemyPos + offset
+        
+        -- ตรวจสอบว่าไม่มีกำแพงขวางระหว่างเรากับจุดนี้ (ใช้หลายจุดตรวจสอบ)
+        local dirToCandidate = (candidatePos - myPos).Unit
+        local distToCandidate = (candidatePos - myPos).Magnitude
+        
+        -- ตรวจสอบเส้นทางแบบหลายจุด (ทุก 3 สตัด) เพื่อตรวจจับกำแพงกลางทาง
+        local pathClear = true
+        local checkSteps = math.ceil(distToCandidate / 3)
+        for step = 1, checkSteps do
+            local checkPos = myPos + (dirToCandidate * (step * 3))
+            local wallCheck = workspace:Raycast(checkPos + Vector3.new(0, 2, 0), dirToCandidate * 3, rayParams)
+            if wallCheck then
+                local normal = wallCheck.Normal
+                if math.abs(normal.Y) < 0.7 then -- เป็นกำแพงด้านข้าง
+                    pathClear = false
                     break
                 end
-                if dist > 20 then
-                    -- ระยะห่างเกินไป อาจข้ามช่องว่างที่เดินไม่ได้
-                    hasProblem = true
-                    break
-                end
-            end
-            
-            if hasProblem then
-                continue
-            end
-            
-            -- จุดสุดท้ายของเส้นทาง
-            local finalPos = waypoints[#waypoints].Position
-            
-            -- ตรวจสอบว่ามีพื้นรองรับที่จุดปลายทาง
-            local groundCheck = workspace:Raycast(finalPos + Vector3.new(0, 3, 0), Vector3.new(0, -8, 0), rayParams)
-            if not groundCheck then
-                continue
-            end
-            
-            -- คำนวณระยะทางจริงที่ต้องเดิน
-            local actualDist = 0
-            for i = 1, #waypoints - 1 do
-                actualDist = actualDist + (waypoints[i].Position - waypoints[i+1].Position).Magnitude
-            end
-            
-            -- เลือกจุดที่ระยะทางสั้นที่สุด
-            if actualDist < bestPathDist then
-                bestPathDist = actualDist
-                bestSpot = finalPos
             end
         end
         
-        -- ถ้าเจอจุดที่ดีแล้ว ไม่ต้องลองระยะไกลกว่า
-        if bestSpot and bestPathDist < (radius * 2.5) then
-            break
+        if not pathClear then
+            -- ถ้าเส้นทางตรงไม่โล่ง ให้ลองใช้ PathfindingService หาเส้นทางอ้อม
+            local success, path = pcall(function()
+                return PathfindingService:CreatePath({AgentRadius = 3, AgentHeight = 6, AgentCanJump = true})
+            end)
+            
+            if success then
+                local computeSuccess = pcall(function()
+                    path:ComputeAsync(myPos, candidatePos)
+                end)
+                
+                if computeSuccess then
+                    local waypoints = path:GetWaypoints()
+                    if #waypoints > 0 then
+                        -- ใช้จุดสุดท้ายของเส้นทางที่คำนวณได้
+                        candidatePos = waypoints[#waypoints].Position
+                        pathClear = true
+                    end
+                end
+            end
+        end
+        
+        if pathClear then
+            -- ตรวจสอบว่ามีพื้นรองรับ
+            local groundCheck = workspace:Raycast(candidatePos + Vector3.new(0, 5, 0), Vector3.new(0, -10, 0), rayParams)
+            if groundCheck then
+                -- ตรวจสอบว่าไม่ติดมุมกำแพง (ใช้ Raycast 8 ทิศทางรอบจุด เพื่อตรวจจับมุมหักศอก)
+                local isCorner = false
+                for _, checkAngle in ipairs({0, 45, 90, 135, 180, 225, 270, 315}) do
+                    local sideDir = CFrame.Angles(0, math.rad(checkAngle), 0) * Vector3.new(1, 0, 0)
+                    local sideHit = workspace:Raycast(candidatePos + Vector3.new(0, 2, 0), sideDir * 2.5, rayParams)
+                    if sideHit and sideHit.Distance < 1.8 then
+                        isCorner = true
+                        break
+                    end
+                end
+                
+                if not isCorner then
+                    -- คำนวณระยะทางจริงที่ต้องเดิน (ถ้าใช้ Pathfinding)
+                    local actualDist = distToCandidate
+                    local success, path = pcall(function()
+                        return PathfindingService:CreatePath({AgentRadius = 3, AgentHeight = 6, AgentCanJump = true})
+                    end)
+                    
+                    if success then
+                        local computeSuccess = pcall(function()
+                            path:ComputeAsync(myPos, candidatePos)
+                        end)
+                        
+                        if computeSuccess then
+                            local waypoints = path:GetWaypoints()
+                            if #waypoints > 1 then
+                                actualDist = 0
+                                for i = 1, #waypoints - 1 do
+                                    actualDist = actualDist + (waypoints[i].Position - waypoints[i+1].Position).Magnitude
+                                end
+                            end
+                        end
+                    end
+                    
+                    if actualDist < bestPathDist then
+                        bestPathDist = actualDist
+                        bestDist = (candidatePos - enemyPos).Magnitude
+                        bestSpot = candidatePos
+                    end
+                end
+            end
+        end
+    end
+    
+    -- ถ้าไม่เจอจุดที่ดีเลย ให้ลองใช้ระยะที่ไกลขึ้น
+    if not bestSpot then
+        for _, angle in ipairs(angles) do
+            local rad = math.rad(angle)
+            local offset = Vector3.new(math.cos(rad), 0, math.sin(rad)) * (searchRadius + 5)
+            local candidatePos = enemyPos + offset
+            
+            local dirToCandidate = (candidatePos - myPos).Unit
+            local distToCandidate = (candidatePos - myPos).Magnitude
+            
+            -- ตรวจสอบเส้นทางแบบหลายจุด
+            local pathClear = true
+            local checkSteps = math.ceil(distToCandidate / 3)
+            for step = 1, checkSteps do
+                local checkPos = myPos + (dirToCandidate * (step * 3))
+                local wallCheck = workspace:Raycast(checkPos + Vector3.new(0, 2, 0), dirToCandidate * 3, rayParams)
+                if wallCheck then
+                    local normal = wallCheck.Normal
+                    if math.abs(normal.Y) < 0.7 then
+                        pathClear = false
+                        break
+                    end
+                end
+            end
+            
+            if not pathClear then
+                -- ลองใช้ Pathfinding
+                local success, path = pcall(function()
+                    return PathfindingService:CreatePath({AgentRadius = 3, AgentHeight = 6, AgentCanJump = true})
+                end)
+                
+                if success then
+                    local computeSuccess = pcall(function()
+                        path:ComputeAsync(myPos, candidatePos)
+                    end)
+                    
+                    if computeSuccess then
+                        local waypoints = path:GetWaypoints()
+                        if #waypoints > 0 then
+                            candidatePos = waypoints[#waypoints].Position
+                            pathClear = true
+                        end
+                    end
+                end
+            end
+            
+            if pathClear then
+                local groundCheck = workspace:Raycast(candidatePos + Vector3.new(0, 5, 0), Vector3.new(0, -10, 0), rayParams)
+                if groundCheck then
+                    bestSpot = candidatePos
+                    break
+                end
+            end
         end
     end
     
     return bestSpot
 end
 
--- ฟังก์ชันตรวจสอบว่ามีกำแพงขวางทางหรือไม่ และหาทิศทางหลบ (สำหรับเดิน) - ปรับปรุงใหม่
+-- ฟังก์ชันตรวจสอบว่ามีกำแพงขวางทางหรือไม่ และหาทิศทางหลบ (สำหรับเดิน)
 local function checkWallAndFindDirection(myRoot, targetPos)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
     
     local currentPos = myRoot.Position
     local baseDir = (targetPos - currentPos).Unit
-    local scanDistance = 15 -- เพิ่มระยะสแกนกำแพง
+    local scanDistance = 12 -- เพิ่มระยะสแกนกำแพง
     
     -- ยกจุดเริ่มต้น Raycast สูงขึ้นเพื่อหลีกเลี่ยงการตรวจจับพื้น
-    local rayStartHeight = 3
+    local rayStartHeight = 2.5
     local rayStartPos = currentPos + Vector3.new(0, rayStartHeight, 0)
     
     -- ยิง Raycast หลายระดับความสูงเพื่อตรวจสอบกำแพงอย่างละเอียด
     local wallHit = nil
-    for _, heightOffset in ipairs({0, 2, -2}) do
+    for _, heightOffset in ipairs({0, 1.5, -1.5}) do
         local testStart = rayStartPos + Vector3.new(0, heightOffset, 0)
         local testHit = workspace:Raycast(testStart, baseDir * scanDistance, rayParams)
         if testHit then
             -- ตรวจสอบว่าเป็นกำแพงจริงๆ (ไม่ใช่พื้นหรือเพดาน)
             local normal = testHit.Normal
-            if math.abs(normal.Y) < 0.6 then -- ถ้า Normal ไม่ชี้ขึ้น/ลง แสดงว่าเป็นกำแพงด้านข้าง
+            if math.abs(normal.Y) < 0.7 then -- ถ้า Normal ไม่ชี้ขึ้น/ลง แสดงว่าเป็นกำแพงด้านข้าง
                 if not wallHit or testHit.Distance < wallHit.Distance then
                     wallHit = testHit
                 end
@@ -411,8 +483,8 @@ local function checkWallAndFindDirection(myRoot, targetPos)
     end
     
     if wallHit then
-        -- ถ้าเจอกำแพง ให้ลองหาทิศทางอื่นแบบกว้างขึ้น
-        local escapeAngles = {30, -30, 45, -45, 60, -60, 90, -90, 120, -120, 150, -150, 180}
+        -- ถ้าเจอกำแพง ให้ลองหาทิศทางอื่น
+        local escapeAngles = {60, -60, 45, -45, 90, -90, 120, -120, 135, -135}
         local bestDir = nil
         local bestDist = 0
         
@@ -424,13 +496,13 @@ local function checkWallAndFindDirection(myRoot, targetPos)
             local isClear = true
             local maxTestDist = 0
             
-            for _, heightOffset in ipairs({0, 2, -2}) do
+            for _, heightOffset in ipairs({0, 1.5, -1.5}) do
                 local testStart = rayStartPos + Vector3.new(0, heightOffset, 0)
                 local testHit = workspace:Raycast(testStart, rotatedDir * scanDistance, rayParams)
                 
                 if testHit then
                     local normal = testHit.Normal
-                    if math.abs(normal.Y) < 0.6 then -- เป็นกำแพงด้านข้าง
+                    if math.abs(normal.Y) < 0.7 then -- เป็นกำแพงด้านข้าง
                         isClear = false
                         break
                     else
@@ -931,88 +1003,82 @@ task.spawn(function()
             
             local currentTime = os.clock()
             
-            -- ตรวจมอนสเตอร์ก่อนเป็นลำดับแรก (สำคัญ!)
-            local closestEnemy = findClosestEnemy()
-            
-            -- ถ้ามีมอนสเตอร์ในระยะมองเห็น ให้ล่าทันที (ไม่สนใจประตู)
-            if closestEnemy and closestEnemy.Parent then
-                local enemyPos = closestEnemy.Position
-                local dist = (myRoot.Position - enemyPos).Magnitude
+            -- ถ้าไม่ได้กำลังล่ามอนสเตอร์ ให้ค้นหาประตู
+            if not autoHuntEnemies then
+                -- ค้นหาประตูใหม่ทันทีถ้ายังไม่มี หรือประตูเดิมหายไป (ไม่ต้องรอ interval)
+                if not currentTargetDoor or not currentTargetDoor.Parent then
+                    currentTargetDoor = findRandomDoor()
+                    lastDoorSearchTime = currentTime
+                end
                 
-                -- อัปเดตเวลาเคลื่อนไหวเพื่อป้องกัน AFK
-                lastAntiAFKTime = os.clock()
-                
-                -- รีเซ็ตสถานะให้ล่ามอนสเตอร์
-                autoHuntEnemies = true
-                currentTargetDoor = nil
-                
-                -- ถ้ายังไกลอยู่ ให้เดินไปหา
-                if dist > 5 then
-                    -- ใช้ฟังก์ชันใหม่หาจุดที่ยืนได้จริงรอบๆ มอนสเตอร์ (ไม่ติดกำแพง)
-                    local reachableSpot = findReachableSpotAroundEnemy(myRoot, enemyPos, 7)
-                    
-                    if reachableSpot then
-                        -- เจอจุดที่ยืนได้แล้ว เดินไปจุดนั้นแทนการเดินไปหามอนสเตอร์โดยตรง
-                        -- บังคับหันหน้าไปทางจุดที่จะเดินก่อน เพื่อไม่ให้หลังชนกำแพง
-                        myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, reachableSpot)
-                        wait(0.05) -- รอให้ตัวละครหันเสร็จ
-                        myHuman:MoveTo(reachableSpot)
-                    else
-                        -- ถ้าหาจุดยืนไม่ได้จริงๆ ให้ใช้วิธีเดิม (ตรวจสอบกำแพงและหลบ)
-                        local moveDir, needToDodge = checkWallAndFindDirection(myRoot, enemyPos)
+                -- ถ้าเจอประตู ให้วาร์ปไป
+                if currentTargetDoor and currentTargetDoor.Parent then
+                    local targetPos = getDoorCenterPosition(currentTargetDoor)
+                    if targetPos then
+                        -- วาร์ปทันที
+                        myRoot.CFrame = CFrame.new(targetPos)
                         
-                        if needToDodge then
-                            local dodgeTarget = myRoot.Position + (moveDir * 12)
-                            myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, dodgeTarget)
-                            wait(0.05)
-                            myHuman:MoveTo(dodgeTarget)
-                        else
-                            myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, enemyPos)
-                            wait(0.05)
-                            myHuman:MoveTo(enemyPos)
-                        end
+                        -- หลังวาร์ปเสร็จ ให้สลับโหมดไปล่ามอนสเตอร์
+                        autoHuntEnemies = true
+                        currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ครั้งหน้า
                     end
                 else
-                    -- อยู่ในระยะโจมตีแล้ว วนรอบมอนสเตอร์
-                    local angle = os.clock() % 6.28 -- 2π
-                    local circleRadius = 4
-                    local circlePos = enemyPos + Vector3.new(math.cos(angle) * circleRadius, 0, math.sin(angle) * circleRadius)
-                    -- บังคับหันหน้าไปทางจุดที่จะวนรอบก่อนเดิน
-                    myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, circlePos)
-                    wait(0.1) -- รอให้ตัวละครหันเสร็จ
-                    myHuman:MoveTo(circlePos)
-                end
-            else
-                -- ไม่มีมอนสเตอร์ในระยะมองเห็น จึงจะค้นหาประตู
-                if not autoHuntEnemies then
-                    -- ค้นหาประตูใหม่ทันทีถ้ายังไม่มี หรือประตูเดิมหายไป (ไม่ต้องรอ interval)
-                    if not currentTargetDoor or not currentTargetDoor.Parent then
-                        currentTargetDoor = findRandomDoor()
+                    -- ถ้าหาประตูไม่เจอเลย ให้รีเซ็ตสถานะและค้นหาใหม่ทันที (แก้ปัญหาหยุดนิ่ง)
+                    if currentTime - lastDoorSearchTime >= 1 then
+                        autoHuntEnemies = false
+                        currentTargetDoor = nil
                         lastDoorSearchTime = currentTime
                     end
+                end
+            else
+                -- โหมดล่ามอนสเตอร์: หาตัวที่ใกล้ที่สุดแล้วเดินไปหา
+                local closestEnemy = findClosestEnemy()
+                
+                if closestEnemy and closestEnemy.Parent then
+                    local enemyPos = closestEnemy.Position
+                    local dist = (myRoot.Position - enemyPos).Magnitude
                     
-                    -- ถ้าเจอประตู ให้วาร์ปไป
-                    if currentTargetDoor and currentTargetDoor.Parent then
-                        local targetPos = getDoorCenterPosition(currentTargetDoor)
-                        if targetPos then
-                            -- วาร์ปทันที
-                            myRoot.CFrame = CFrame.new(targetPos)
+                    -- อัปเดตเวลาเคลื่อนไหวเพื่อป้องกัน AFK
+                    lastAntiAFKTime = os.clock()
+                    
+                    -- ถ้ายังไกลอยู่ ให้เดินไปหา
+                    if dist > 5 then
+                        -- ใช้ฟังก์ชันใหม่หาจุดที่ยืนได้จริงรอบๆ มอนสเตอร์ (ไม่ติดกำแพง)
+                        local reachableSpot = findReachableSpotAroundEnemy(myRoot, enemyPos, 6)
+                        
+                        if reachableSpot then
+                            -- เจอจุดที่ยืนได้แล้ว เดินไปจุดนั้นแทนการเดินไปหามอนสเตอร์โดยตรง
+                            -- บังคับหันหน้าไปทางจุดที่จะเดินก่อน เพื่อไม่ให้หลังชนกำแพง
+                            myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, reachableSpot)
+                            wait(0.1) -- รอให้ตัวละครหันเสร็จ
+                            myHuman:MoveTo(reachableSpot)
+                        else
+                            -- ถ้าหาจุดยืนไม่ได้จริงๆ ให้ใช้วิธีเดิม (ตรวจสอบกำแพงและหลบ)
+                            local moveDir, needToDodge = checkWallAndFindDirection(myRoot, enemyPos)
                             
-                            -- หลังวาร์ปเสร็จ ให้สลับโหมดไปล่ามอนสเตอร์
-                            autoHuntEnemies = true
-                            currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ครั้งหน้า
+                            if needToDodge then
+                                local dodgeTarget = myRoot.Position + (moveDir * 10)
+                                myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, dodgeTarget)
+                                wait(0.1)
+                                myHuman:MoveTo(dodgeTarget)
+                            else
+                                myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, enemyPos)
+                                wait(0.1)
+                                myHuman:MoveTo(enemyPos)
+                            end
                         end
                     else
-                        -- ถ้าหาประตูไม่เจอเลย ให้รีเซ็ตสถานะและค้นหาใหม่ทันที (แก้ปัญหาหยุดนิ่ง)
-                        if currentTime - lastDoorSearchTime >= 1 then
-                            autoHuntEnemies = false
-                            currentTargetDoor = nil
-                            lastDoorSearchTime = currentTime
-                        end
+                        -- อยู่ในระยะโจมตีแล้ว วนรอบมอนสเตอร์
+                        local angle = os.clock() % 6.28 -- 2π
+                        local circleRadius = 4
+                        local circlePos = enemyPos + Vector3.new(math.cos(angle) * circleRadius, 0, math.sin(angle) * circleRadius)
+                        -- บังคับหันหน้าไปทางจุดที่จะวนรอบก่อนเดิน
+                        myHuman.RootPart.CFrame = CFrame.lookAt(myRoot.Position, circlePos)
+                        wait(0.1) -- รอให้ตัวละครหันเสร็จ
+                        myHuman:MoveTo(circlePos)
                     end
                 else
-                    -- โหมดล่ามอนสเตอร์แต่หามอนไม่เจอ (อาจตายหมดแล้ว)
-                    -- รีเซ็ตเป้าหมายและบังคับเริ่มกระบวนการค้นหาประตูใหม่ทันที
+                    -- ไม่มีมอนสเตอร์แล้ว (หรือทั้งหมดตายแล้ว) ให้รีเซ็ตเป้าหมายและบังคับเริ่มกระบวนการค้นหาประตูใหม่ทันที
                     autoHuntEnemies = false
                     currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ทันที
                     lastDoorSearchTime = 0 -- บังคับให้ค้นหาใหม่ในรอบถัดไป
