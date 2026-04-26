@@ -1,71 +1,32 @@
 ```
-# Compiled and build artifacts
-*.pyc
-__pycache__/
-*.o
-*.obj
-dist/
+# Lua build artifacts and cache
+.luac
+.luau
+
+# General build artifacts
 build/
-*.exe
-*.dll
-*.so
-*.a
-*.out
+dist/
 
 # Dependencies
-.venv/
-venv/
-node_modules/
-.mypy_cache/
-.pytest_cache/
-target/
-.gradle/
+libs/
+lib/
 
 # Logs and temp files
 *.log
 *.tmp
-*.swp
-*.swo
 
-# Environment
-.env
-.env.local
-.env.*
-
-# Editors
+# Editor/IDE files
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # System files
 .DS_Store
 Thumbs.db
 
-# Coverage
-coverage/
-htmlcov/
-.coverage
-
-# Compressed files
-*.zip
-*.gz
-*.tar
-*.tgz
-*.bz2
-*.xz
-*.7z
-*.rar
-*.zst
-*.lz4
-*.lzh
-*.cab
-*.arj
-*.rpm
-*.deb
-*.Z
-*.lz
-*.lzo
-*.tar.gz
-*.tar.bz2
-*.tar.xz
-*.tar.zst
+# Environment
+.env
+.env.local
+*.env.*
 ```

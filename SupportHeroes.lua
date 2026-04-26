@@ -791,32 +791,20 @@ task.spawn(function()
                     lastDoorSearchTime = currentTime
                 end
                 
-                -- ถ้าเจอประตู ให้เดินไปหา (ไม่วาร์ป)
+                -- ถ้าเจอประตู ให้วาร์ปไปทันที (ไม่เดิน)
                 if currentTargetDoor and currentTargetDoor.Parent then
                     local targetPos = getDoorCenterPosition(currentTargetDoor)
                     if targetPos then
-                        local dist = (myRoot.Position - targetPos).Magnitude
+                        -- วาร์ปไปประตูทันที
+                        myRoot.CFrame = CFrame.new(targetPos)
+                        -- อัปเดตเวลาเคลื่อนไหวเพื่อป้องกัน AFK
+                        lastAntiAFKTime = os.clock()
+                        task.wait(0.3)
                         
-                        -- ถ้ายังไม่ถึงประตู ให้เดินไปหา
-                        if dist > 3 then
-                            myHuman:MoveTo(targetPos)
-                            -- อัปเดตเวลาเคลื่อนไหวเพื่อป้องกัน AFK
-                            lastAntiAFKTime = os.clock()
-                        else
-                            -- ถึงประตูแล้ว ให้แตะประตูเพื่อเปิด
-                            local doorPart = currentTargetDoor
-                            if doorPart and doorPart.Parent then
-                                -- ยืนใกล้ประตูเล็กน้อยเพื่อให้ TouchInterest ทำงาน
-                                local touchPos = targetPos + Vector3.new(0, 0, 2)
-                                myHuman:MoveTo(touchPos)
-                                task.wait(0.5)
-                                
-                                -- หลังเปิดประตูเสร็จ ให้สลับโหมดไปล่ามอนสเตอร์
-                                autoHuntEnemies = true
-                                currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ครั้งหน้า
-                                lastAntiAFKTime = os.clock()
-                            end
-                        end
+                        -- หลังวาร์ปถึงประตู ให้สลับโหมดไปล่ามอนสเตอร์
+                        autoHuntEnemies = true
+                        currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ครั้งหน้า
+                        lastAntiAFKTime = os.clock()
                     end
                 else
                     -- ถ้าหาประตูไม่เจอเลย ให้รีเซ็ตสถานะและค้นหาใหม่ทันที (แก้ปัญหาหยุดนิ่ง)
@@ -827,27 +815,58 @@ task.spawn(function()
                     end
                 end
             else
-                -- โหมดล่ามอนสเตอร์: หาตัวที่ใกล้ที่สุดแล้วเดินไปหา
+                -- โหมดล่ามอนสเตอร์: ใช้ระบบ Pathfinding เหมือนเดินหาผู้เล่น
                 local closestEnemy = findClosestEnemy()
                 
                 if closestEnemy and closestEnemy.Parent then
                     local enemyPos = closestEnemy.Position
                     local dist = (myRoot.Position - enemyPos).Magnitude
                     
-                    -- อัปเดตเวลาเคลื่อนไหวเพื่อป้องกัน AFK
-                    lastAntiAFKTime = os.clock()
+                    -- [Anti-AFK] ใช้ VirtualUser เพื่อจำลองการกดปุ่ม (วิธีที่ได้ผลที่สุด)
+                    local timeSinceLastMove = os.clock() - lastAntiAFKTime
+                    if timeSinceLastMove > 1.5 then
+                        VirtualUser:CaptureController()
+                        VirtualUser:ClickButton2(Vector2.new(0, 0), game:GetService("Workspace"))
+                        lastAntiAFKTime = os.clock()
+                    end
                     
-                    -- ถ้ายังไกลอยู่ ให้เดินไปหา
+                    -- ถ้ายังไกลอยู่ ให้ใช้ Pathfinding เดินไปหา
                     if dist > 5 then
-                        -- ใช้ Raycast ตรวจสอบกำแพงและหาทิศทางหลบ
-                        local moveDir, needToDodge = checkWallAndFindDirection(myRoot, enemyPos)
+                        -- คำนวณเส้นทางด้วย PathfindingService
+                        local currentTime = os.clock()
+                        if not currentWaypoints or #currentWaypoints == 0 or (enemyPos - lastTargetPos).Magnitude > 3 or currentTime - lastComputeTime > 0.5 then
+                            local path = PathfindingService:CreatePath({AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 3})
+                            local success, errorMessage = pcall(function()
+                                path:ComputeAsync(myRoot.Position, enemyPos)
+                            end)
+                            
+                            if success and path.Status == Enum.PathStatus.Success then
+                                currentWaypoints = path:GetWaypoints()
+                                currentWaypointIndex = 2
+                                lastTargetPos = enemyPos
+                                lastComputeTime = currentTime
+                            else
+                                -- ถ้าคำนวณเส้นทางไม่ได้ ให้ลองเดินตรงไปก่อน
+                                currentWaypoints = {}
+                            end
+                        end
                         
-                        if needToDodge then
-                            -- ถ้ามีกำแพงขวาง ให้เดินในทิศทางที่หลบแทน
-                            local dodgeTarget = myRoot.Position + (moveDir * 10)
-                            myHuman:MoveTo(dodgeTarget)
+                        -- เดินตาม waypoints
+                        if #currentWaypoints > 0 and currentWaypointIndex <= #currentWaypoints then
+                            local wp = currentWaypoints[currentWaypointIndex]
+                            local wpPos = wp.Position
+                            local distToWp = (myRoot.Position - wpPos).Magnitude
+                            
+                            if distToWp < 4 then
+                                currentWaypointIndex = currentWaypointIndex + 1
+                            else
+                                myHuman:MoveTo(wpPos)
+                                if wp.Action == Enum.PathWaypointAction.Jump then
+                                    forceJump(myHuman)
+                                end
+                            end
                         else
-                            -- ไม่มีกำแพง เดินตรงไปหามอนสเตอร์
+                            -- ไม่มี waypoints ให้เดินตรงไป
                             myHuman:MoveTo(enemyPos)
                         end
                     else
@@ -863,6 +882,7 @@ task.spawn(function()
                     autoHuntEnemies = false
                     currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ทันที
                     lastDoorSearchTime = 0 -- บังคับให้ค้นหาใหม่ในรอบถัดไป
+                    currentWaypoints = {} -- รีเซ็ต waypoints
                 end
             end
         end)
