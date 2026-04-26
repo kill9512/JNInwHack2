@@ -251,7 +251,7 @@ local function emergencyPlatformEscape(char, hazardPos, hazardRadius)
     
     -- สร้างแผ่นเหยียบชั่วคราว
     temporaryPlatform = Instance.new("Part")
-    temporaryPlatform.Size = Vector3.new(6, 1, 6)
+    temporaryPlatform.Size = Vector3.new(6, 10, 6)
     temporaryPlatform.Position = platformPos
     temporaryPlatform.Anchored = true
     temporaryPlatform.CanCollide = true
@@ -299,8 +299,10 @@ local function executeSmartDodgeV5(hazard)
         for _, v in pairs(hazard:GetDescendants()) do
             if v:IsA("BasePart") then 
                 table.insert(parts, v) 
-                v.CanCollide = true
-                v.CollisionGroup = "Default"
+                -- เพิ่มความสูงของ Part ให้เป็น 10 สตั๊ด (แก้แกน Y) สำหรับทุก Part ใน Model
+                local originalSizeX = v.Size.X
+                local originalSizeZ = v.Size.Z
+                v.Size = Vector3.new(originalSizeX, 10, originalSizeZ)
             end
         end
         
@@ -337,31 +339,28 @@ local function executeSmartDodgeV5(hazard)
             if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
             escapeDir = escapeDir.Unit
             
-            local distanceToMove = (hazardRadius + 1.5) - distXZ
-            local safeTarget = findSafeDodge(myPos, escapeDir, distanceToMove)
+            -- คำนวณจุดปลอดภัยที่ห่างจากขอบ AoE
+            local safeDistance = hazardRadius + 5
+            local safeTarget = myPos + (escapeDir * safeDistance)
             
-            if safeTarget then
-                -- ใช้ฟังก์ชันตรวจสอบตำแหน่งปลายทางเพื่อป้องกันการติด Model
-                local validatedTarget = validateTargetPosition(myChar, safeTarget)
-                
-                -- [แก้ไข] ตรวจสอบว่าหลังจาก validate แล้ว ยังติดอยู่ใน AoE หรือไม่
-                -- ถ้ายังติดอยู่ แสดงว่าพื้นรอบๆ เต็มหมด ให้ใช้แผ่นเหยียบชั่วคราว
-                local newDistXZ = (Vector3.new(validatedTarget.X, 0, validatedTarget.Z) - hazPosXZ).Magnitude
-                if newDistXZ < hazardRadius + 1 then
-                    -- ยังติดอยู่ใน AoE! ใช้แผ่นเหยียบฉุกเฉิน
-                    emergencyPlatformEscape(myChar, hazardPos, hazardRadius)
-                else
-                    -- ใช้ Humanoid:MoveTo แทนการตั้ง CFrame โดยตรง เพื่อป้องกันการติด model
-                    local hum = myChar:FindFirstChildOfClass("Humanoid")
-                    if hum then
-                        hum:MoveTo(validatedTarget)
-                    else
-                        myRoot.CFrame = CFrame.new(validatedTarget)
-                    end
-                end
-            else
-                -- หาทางหนีแบบปกติไม่ได้ ใช้แผ่นเหยียบฉุกเฉินทันที
+            -- ตรวจสอบและปรับตำแหน่งปลายทางไม่ให้ติด Model
+            local validatedTarget = validateTargetPosition(myChar, safeTarget)
+            
+            -- [แก้ไข] ตรวจสอบว่าหลังจาก validate แล้ว ยังติดอยู่ใน AoE หรือไม่
+            local newDistXZ = (Vector3.new(validatedTarget.X, 0, validatedTarget.Z) - hazPosXZ).Magnitude
+            if newDistXZ < hazardRadius + 1 then
+                -- ยังติดอยู่ใน AoE! ใช้แผ่นเหยียบฉุกเฉิน
                 emergencyPlatformEscape(myChar, hazardPos, hazardRadius)
+            else
+                -- วาร์ปทันทีแทนการเดิน เพื่อความเร็วในการหลบ
+                local hum = myChar:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    hum:MoveTo(validatedTarget)
+                    -- บังคับวาร์ปทันทีโดยเปลี่ยน CFrame ด้วย
+                    myRoot.CFrame = CFrame.new(validatedTarget)
+                else
+                    myRoot.CFrame = CFrame.new(validatedTarget)
+                end
             end
         end
 
@@ -407,7 +406,7 @@ local function executeSmartDodgeV5(hazard)
             if timeToImpact < 0.6 or distXZ < 12 then
                 local dodgeRight = flatProjDir:Cross(Vector3.new(0, 1, 0)).Unit
                 local dodgeLeft = -dodgeRight
-                local dodgeDist = 8 
+                local dodgeDist = 10 
 
                 local safeTarget = nil
 
@@ -420,13 +419,13 @@ local function executeSmartDodgeV5(hazard)
                 else
                     -- [แก้ไขตามสั่ง] ถ้าติดกำแพงทั้งซ้ายและขวา ให้วาร์ปสวนวิถีกระสุน (180 องศา) ไปด้านหลังกระสุนเลย
                     local forwardDir = -flatProjDir 
-                    local warpBehindTarget = myPos + (forwardDir * 15) -- วาร์ปสวนทะลุไป 12 บล็อค
+                    local warpBehindTarget = myPos + (forwardDir * 15) -- วาร์ปสวนทะลุไป 15 บล็อค
                     
                     if isSafePosition(myPos, warpBehindTarget) then
                         safeTarget = warpBehindTarget
                     else
                         -- ถ้าหลังกระสุนก็ยังติดกำแพงอีก ค่อยดิ้นรน 360 องศา
-                        safeTarget = findSafeDodge(myPos, forwardDir, 8)
+                        safeTarget = findSafeDodge(myPos, forwardDir, 10)
                     end
                 end
 
@@ -434,13 +433,8 @@ local function executeSmartDodgeV5(hazard)
                     -- ใช้ฟังก์ชันตรวจสอบตำแหน่งปลายทางเพื่อป้องกันการติด Model
                     local validatedTarget = validateTargetPosition(myChar, safeTarget)
                     
-                    -- ใช้ Humanoid:MoveTo แทนการตั้ง CFrame โดยตรง เพื่อป้องกันการติด model
-                    local hum = myChar:FindFirstChildOfClass("Humanoid")
-                    if hum then
-                        hum:MoveTo(validatedTarget)
-                    else
-                        myRoot.CFrame = CFrame.new(validatedTarget)
-                    end
+                    -- วาร์ปทันทีโดยเปลี่ยน CFrame โดยตรง เพื่อความเร็วสูงสุดในการหลบกระสุน
+                    myRoot.CFrame = CFrame.new(validatedTarget)
                 end
             end
         end

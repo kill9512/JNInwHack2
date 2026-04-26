@@ -1,1 +1,24 @@
-Nothing needs to be added to .gitignore since only a Lua source file (SupportHeroes.lua) was modified and no build artifacts, dependencies, or temporary files were included in the changes.
+```
+# Lua build artifacts (if any)
+*.luac
+
+# Dependencies
+?.lua.d/
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Editors
+.vscode/
+.idea/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+*.env.*
+```
