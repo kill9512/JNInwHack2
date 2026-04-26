@@ -887,16 +887,28 @@ task.spawn(function()
                                 -- ตั้งค่าให้เดินตรงไปยังมอนสเตอร์เลย
                                 myHuman:MoveTo(enemyPos)
                                 -- รอเล็กน้อยเพื่อให้ Humanoid เริ่มเคลื่อนไหว
-                                task.wait(0.1)
+                                task.wait(0.2)
                                 -- บังคับทิศทางอีกครั้งหากยังไม่เคลื่อนที่
                                 if myHuman.MoveDirection.Magnitude == 0 then
-                                    print("[AutoHunt] ⚠️ MoveDirection เป็น 0! กำลังใช้วิธีบังคับทิศทาง\")
-                                    -- ใช้ Vector3Force เป็นทางเลือกสำรอง
-                                    local rootPart = myChar:FindFirstChild(\"HumanoidRootPart\")
-                                    if rootPart and rootPart:FindFirstChild(\"VectorForce\") then
-                                        local force = rootPart.VectorForce
-                                        local direction = (enemyPos - rootPart.Position).Unit
-                                        force.Force = direction * 50000
+                                    print("[AutoHunt] ⚠️ MoveDirection เป็น 0! กำลังใช้ BodyVelocity บังคับทิศทาง")
+                                    -- ใช้ BodyVelocity บังคับการเคลื่อนที่โดยตรง
+                                    local rootPart = myChar:FindFirstChild("HumanoidRootPart")
+                                    if rootPart then
+                                        -- ลบ BodyVelocity เก่าถ้ามี
+                                        local oldBV = rootPart:FindFirstChild("AutoHuntBV")
+                                        if oldBV then oldBV:Destroy() end
+                                        
+                                        -- สร้าง BodyVelocity ใหม่
+                                        local bv = Instance.new("BodyVelocity")
+                                        bv.Name = "AutoHuntBV"
+                                        bv.MaxForce = Vector3.new(50000, 0, 50000)
+                                        bv.Velocity = (enemyPos - rootPart.Position).Unit * 50
+                                        bv.Parent = rootPart
+                                        
+                                        -- ลบ BodyVelocity หลังจาก 2 วินาที
+                                        task.delay(2, function()
+                                            if bv and bv.Parent then bv:Destroy() end
+                                        end)
                                     else
                                         -- ลอง MoveTo อีกครั้ง
                                         myHuman:MoveTo(enemyPos)
@@ -916,16 +928,24 @@ task.spawn(function()
                             else
                                 myHuman:MoveTo(wpPos)
                                 -- ตรวจสอบว่าเริ่มเคลื่อนไหวหรือยัง
-                                task.wait(0.1)
+                                task.wait(0.2)
                                 if myHuman.MoveDirection.Magnitude == 0 then
-                                    -- พยายามบังคับทิศทางอีกครั้ง
-                                    myHuman:MoveTo(wpPos)
-                                    -- ลองใช้ VectorForce หากมี
-                                    local rootPart = myChar:FindFirstChild(\"HumanoidRootPart\")
-                                    if rootPart and rootPart:FindFirstChild(\"VectorForce\") then
-                                        local force = rootPart.VectorForce
-                                        local direction = (wpPos - rootPart.Position).Unit
-                                        force.Force = direction * 50000
+                                    print("[AutoHunt] ⚠️ Waypoint MoveDirection เป็น 0! ใช้ BodyVelocity")
+                                    -- พยายามบังคับทิศทางด้วย BodyVelocity
+                                    local rootPart = myChar:FindFirstChild("HumanoidRootPart")
+                                    if rootPart then
+                                        local oldBV = rootPart:FindFirstChild("AutoHuntBV")
+                                        if oldBV then oldBV:Destroy() end
+                                        
+                                        local bv = Instance.new("BodyVelocity")
+                                        bv.Name = "AutoHuntBV"
+                                        bv.MaxForce = Vector3.new(50000, 0, 50000)
+                                        bv.Velocity = (wpPos - rootPart.Position).Unit * 50
+                                        bv.Parent = rootPart
+                                        
+                                        task.delay(2, function()
+                                            if bv and bv.Parent then bv:Destroy() end
+                                        end)
                                     end
                                 end
                                 if wp.Action == Enum.PathWaypointAction.Jump then
@@ -935,14 +955,23 @@ task.spawn(function()
                         else
                             -- ไม่มี waypoints หรือเดินครบแล้ว ให้เดินตรงไปหามอนสเตอร์ (fallback)
                             myHuman:MoveTo(enemyPos)
-                            task.wait(0.1)
+                            task.wait(0.2)
                             if myHuman.MoveDirection.Magnitude == 0 then
-                                myHuman:MoveTo(enemyPos)
-                                local rootPart = myChar:FindFirstChild(\"HumanoidRootPart\")
-                                if rootPart and rootPart:FindFirstChild(\"VectorForce\") then
-                                    local force = rootPart.VectorForce
-                                    local direction = (enemyPos - rootPart.Position).Unit
-                                    force.Force = direction * 50000
+                                print("[AutoHunt] ⚠️ Fallback MoveDirection เป็น 0! ใช้ BodyVelocity")
+                                local rootPart = myChar:FindFirstChild("HumanoidRootPart")
+                                if rootPart then
+                                    local oldBV = rootPart:FindFirstChild("AutoHuntBV")
+                                    if oldBV then oldBV:Destroy() end
+                                    
+                                    local bv = Instance.new("BodyVelocity")
+                                    bv.Name = "AutoHuntBV"
+                                    bv.MaxForce = Vector3.new(50000, 0, 50000)
+                                    bv.Velocity = (enemyPos - rootPart.Position).Unit * 50
+                                    bv.Parent = rootPart
+                                    
+                                    task.delay(2, function()
+                                        if bv and bv.Parent then bv:Destroy() end
+                                    end)
                                 end
                             end
                         end
@@ -953,9 +982,24 @@ task.spawn(function()
                         local circleRadius = 4
                         local circlePos = enemyPos + Vector3.new(math.cos(angle) * circleRadius, 0, math.sin(angle) * circleRadius)
                         myHuman:MoveTo(circlePos)
-                        task.wait(0.1)
+                        task.wait(0.2)
                         if myHuman.MoveDirection.Magnitude == 0 then
-                            myHuman:MoveTo(circlePos)
+                            print("[AutoHunt] ⚠️ Circle MoveDirection เป็น 0! ใช้ BodyVelocity")
+                            local rootPart = myChar:FindFirstChild("HumanoidRootPart")
+                            if rootPart then
+                                local oldBV = rootPart:FindFirstChild("AutoHuntBV")
+                                if oldBV then oldBV:Destroy() end
+                                
+                                local bv = Instance.new("BodyVelocity")
+                                bv.Name = "AutoHuntBV"
+                                bv.MaxForce = Vector3.new(50000, 0, 50000)
+                                bv.Velocity = (circlePos - rootPart.Position).Unit * 30
+                                bv.Parent = rootPart
+                                
+                                task.delay(2, function()
+                                    if bv and bv.Parent then bv:Destroy() end
+                                end)
+                            end
                         end
                     end
                 else
