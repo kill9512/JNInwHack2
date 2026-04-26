@@ -284,6 +284,12 @@ local function findClosestEnemy()
         if enemy:IsA("Model") or enemy:IsA("BasePart") then
             local enemyRoot = enemy:IsA("Model") and enemy:FindFirstChild("HumanoidRootPart") or enemy
             if enemyRoot and enemyRoot:IsA("BasePart") then
+                -- ตรวจสอบเลือดของมอนสเตอร์ด้วย (ถ้าเป็น Model ให้หา Humanoid)
+                local enemyHumanoid = enemy:IsA("Model") and enemy:FindFirstChildOfClass("Humanoid") or nil
+                if enemyHumanoid and enemyHumanoid.Health <= 0 then
+                    continue -- ข้ามมอนสเตอร์ที่ตายแล้ว
+                end
+                
                 local dist = (myRoot.Position - enemyRoot.Position).Magnitude
                 if dist < closestDist then
                     closestDist = dist
@@ -296,7 +302,7 @@ local function findClosestEnemy()
     return closestEnemy
 end
 
--- ฟังก์ชันตรวจสอบว่ามีกำแพงขวางทางหรือไม่ และหาทิศทางหลบ
+-- ฟังก์ชันตรวจสอบว่ามีกำแพงขวางทางหรือไม่ และหาทิศทางหลบ (สำหรับเดิน)
 local function checkWallAndFindDirection(myRoot, targetPos)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
     
@@ -326,6 +332,85 @@ local function checkWallAndFindDirection(myRoot, targetPos)
     end
     
     return baseDir, false -- ไม่มีกำแพง ใช้ทิศทางปกติ
+end
+
+-- ฟังก์ชันหาจุดวาร์ปหลบ AOE ที่ปลอดภัย (ไม่ตกแมพ ไม่ทะลุกำแพง)
+local function findSafeAOEDodgePosition(myRoot, hazardPos, hazardRadius, minSafeDist)
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    local myPos = myRoot.Position
+    local myPosXZ = Vector3.new(myPos.X, 0, myPos.Z)
+    local hazPosXZ = Vector3.new(hazardPos.X, 0, hazardPos.Z)
+    
+    -- ทิศทางหนีจากศูนย์กลาง AOE
+    local escapeDir = (myPosXZ - hazPosXZ)
+    if escapeDir.Magnitude < 0.1 then escapeDir = Vector3.new(1, 0, 0) end
+    escapeDir = escapeDir.Unit
+    
+    -- พยายามหาจุดที่ปลอดภัยในระยะต่างๆ
+    local distances = {minSafeDist, minSafeDist + 2, minSafeDist + 4, minSafeDist - 2}
+    
+    for _, dist in ipairs(distances) do
+        if dist < 2 then continue end -- ระยะใกล้เกินไปข้าม
+        
+        local candidatePos = myPos + (escapeDir * dist)
+        
+        -- 1. ตรวจสอบว่าไม่มีกำแพงขวางระหว่างจุดปัจจุบันกับจุดที่จะไป
+        local dirToCandidate = (candidatePos - myPos).Unit
+        local wallCheck = workspace:Raycast(myPos, dirToCandidate * (candidatePos - myPos).Magnitude, rayParams)
+        if wallCheck then continue end -- มีกำแพงขวาง ข้ามจุดนี้
+        
+        -- 2. ตรวจสอบว่ามีพื้นรองรับ (ไม่ตกเหว)
+        local groundCheckPos = candidatePos + Vector3.new(0, 3, 0)
+        local groundHit = workspace:Raycast(groundCheckPos, Vector3.new(0, -15, 0), rayParams)
+        if not groundHit then continue end -- ไม่มีพื้น ข้ามจุดนี้
+        
+        -- 3. ตรวจสอบว่าระยะห่างจากศูนย์กลาง AOE จริงๆ แล้วปลอดภัย
+        local candidateXZ = Vector3.new(candidatePos.X, 0, candidatePos.Z)
+        local distFromHazard = (candidateXZ - hazPosXZ).Magnitude
+        if distFromHazard < hazardRadius + 2 then continue end -- ยังอยู่ในรัศมีอันตราย
+        
+        -- 4. ตรวจสอบว่าไม่ติดกำแพงรอบๆ จุดปลายทาง
+        local sideClear = true
+        local checkHeight = 4
+        for _, angle in ipairs({0, 90, 180, 270}) do
+            local sideDir = CFrame.Angles(0, math.rad(angle), 0) * Vector3.new(1, 0, 0)
+            local sideHit = workspace:Raycast(candidatePos + Vector3.new(0, 2, 0), sideDir * 2, rayParams)
+            if sideHit and sideHit.Distance < 1.5 then
+                sideClear = false
+                break
+            end
+        end
+        if not sideClear then continue end
+        
+        -- ผ่านทุกเงื่อนไข! คืนตำแหน่งนี้
+        local finalPos = groundHit.Position + Vector3.new(0, 2.5, 0)
+        return finalPos
+    end
+    
+    -- ถ้าหาจุดปลอดภัยไม่ได้เลย ให้ลองสุ่มมุมอื่นๆ
+    for _, angle in ipairs({45, -45, 90, -90, 135, -135, 180}) do
+        local rotatedDir = CFrame.Angles(0, math.rad(angle), 0) * escapeDir
+        local candidatePos = myPos + (rotatedDir * minSafeDist)
+        
+        -- ตรวจสอบพื้นฐาน (กำแพงขวาง + พื้นรองรับ)
+        local dirToCandidate = (candidatePos - myPos).Unit
+        local wallCheck = workspace:Raycast(myPos, dirToCandidate * (candidatePos - myPos).Magnitude, rayParams)
+        if wallCheck then continue end
+        
+        local groundCheckPos = candidatePos + Vector3.new(0, 3, 0)
+        local groundHit = workspace:Raycast(groundCheckPos, Vector3.new(0, -15, 0), rayParams)
+        if not groundHit then continue end
+        
+        local candidateXZ = Vector3.new(candidatePos.X, 0, candidatePos.Z)
+        local distFromHazard = (candidateXZ - hazPosXZ).Magnitude
+        if distFromHazard < hazardRadius + 2 then continue end
+        
+        local finalPos = groundHit.Position + Vector3.new(0, 2.5, 0)
+        return finalPos
+    end
+    
+    -- ทางสุดท้าย: ยืนที่เดิม (ดีกว่าตกแมพ)
+    return myPos
 end
 
 local function getProbingDirection(myRoot, targetPos)
@@ -539,32 +624,24 @@ local function executeSmartDodgeV5(hazard)
 
     if isAoE then
         if distXZ < hazardRadius + 1.5 then 
-            local escapeDir = (myPosXZ - hazPosXZ)
-            if escapeDir.Magnitude == 0 then escapeDir = Vector3.new(1, 0, 0) end
-            escapeDir = escapeDir.Unit
+            -- ใช้ฟังก์ชันใหม่หาจุดหลบที่ปลอดภัย (ไม่ตกแมพ ไม่ทะลุกำแพง)
+            local minSafeDist = hazardRadius + 3
+            local safeTarget = findSafeAOEDodgePosition(myRoot, hazardPos, hazardRadius, minSafeDist)
             
-            -- คำนวณจุดปลอดภัยที่ห่างจากขอบ AoE
-            local safeDistance = hazardRadius + 3
-            local safeTarget = myPos + (escapeDir * safeDistance)
-            
-            -- ตรวจสอบและปรับตำแหน่งปลายทางไม่ให้ติด Model
-            local validatedTarget = validateTargetPosition(myChar, safeTarget)
-            
-            -- [แก้ไข] ตรวจสอบว่าหลังจาก validate แล้ว ยังติดอยู่ใน AoE หรือไม่
-            local newDistXZ = (Vector3.new(validatedTarget.X, 0, validatedTarget.Z) - hazPosXZ).Magnitude
-            if newDistXZ < hazardRadius + 1 then
-                -- ยังติดอยู่ใน AoE! ใช้แผ่นเหยียบฉุกเฉิน
-                emergencyPlatformEscape(myChar, hazardPos, hazardRadius)
-            else
-                -- วาร์ปทันทีแทนการเดิน เพื่อความเร็วในการหลบ
+            -- ตรวจสอบว่าจุดที่หาได้แตกต่างจากจุดเดิมหรือไม่ (ไม่วาร์ปถ้าอยู่ที่เดิม)
+            local distMoved = (safeTarget - myPos).Magnitude
+            if distMoved > 0.5 then
+                -- วาร์ปทันทีไปยังจุดที่ปลอดภัย
                 local hum = myChar:FindFirstChildOfClass("Humanoid")
                 if hum then
-                    hum:MoveTo(validatedTarget)
-                    -- บังคับวาร์ปทันทีโดยเปลี่ยน CFrame ด้วย
-                    myRoot.CFrame = CFrame.new(validatedTarget)
+                    hum:MoveTo(safeTarget)
+                    myRoot.CFrame = CFrame.new(safeTarget)
                 else
-                    myRoot.CFrame = CFrame.new(validatedTarget)
+                    myRoot.CFrame = CFrame.new(safeTarget)
                 end
+                print("[SmartDodge] Warped to safe position:", safeTarget)
+            else
+                print("[SmartDodge] No safe position found, staying put to avoid falling")
             end
         end
 
@@ -778,9 +855,13 @@ task.spawn(function()
                             -- ถ้ามีกำแพงขวาง ให้เดินในทิศทางที่หลบแทน
                             local dodgeTarget = myRoot.Position + (moveDir * 10)
                             myHuman:MoveTo(dodgeTarget)
+                            -- บังคับขยับ CFrame เพื่อป้องกัน AFK ทันที
+                            myRoot.CFrame = CFrame.new(dodgeTarget)
                         else
                             -- ไม่มีกำแพง เดินตรงไปหามอนสเตอร์
                             myHuman:MoveTo(enemyPos)
+                            -- บังคับขยับ CFrame เพื่อป้องกัน AFK ทันที
+                            myRoot.CFrame = CFrame.new(enemyPos)
                         end
                     else
                         -- อยู่ในระยะประชิดแล้ว แต่ต้องขยับเล็กน้อยเพื่อไม่ให้โดน AFK
@@ -789,13 +870,15 @@ task.spawn(function()
                         local circleRadius = 4
                         local circlePos = enemyPos + Vector3.new(math.cos(angle) * circleRadius, 0, math.sin(angle) * circleRadius)
                         myHuman:MoveTo(circlePos)
+                        -- บังคับวาร์ปตามเพื่อป้องกัน AFK
+                        myRoot.CFrame = CFrame.new(circlePos)
                     end
                 else
-                    -- ไม่มีมอนสเตอร์แล้ว ให้รีเซ็ตเป้าหมายและบังคับเริ่มกระบวนการค้นหาประตูใหม่ทันที
+                    -- ไม่มีมอนสเตอร์แล้ว (หรือทั้งหมดตายแล้ว) ให้รีเซ็ตเป้าหมายและบังคับเริ่มกระบวนการค้นหาประตูใหม่ทันที
                     autoHuntEnemies = false
                     currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ทันที
                     lastDoorSearchTime = 0 -- บังคับให้ค้นหาใหม่ในรอบถัดไป
-                    print("[DoorWarp] No enemies left, reset target and searching for next door...")
+                    print("[DoorWarp] No enemies left (or all dead), reset target and searching for next door...")
                 end
             end
         end)
