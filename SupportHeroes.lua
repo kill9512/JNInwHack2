@@ -848,6 +848,15 @@ task.spawn(function()
                     
                     -- ถ้ายังไกลอยู่ ให้ใช้ Pathfinding เดินไปหา
                     if dist > 5 then
+                        -- ตรวจสอบว่า Humanoid พร้อมหรือไม่
+                        if not myHuman or myHuman.Health <= 0 or not myRoot then
+                            print("[AutoHunt] ✗ Humanoid ไม่พร้อม! ข้ามรอบนี้\")
+                            return
+                        end
+                        
+                        -- ตั้งค่า WalkSpeed ให้สูงสุดเพื่อเดินเร็วขึ้น
+                        myHuman.WalkSpeed = math.max(myHuman.WalkSpeed, 50)
+                        
                         -- คำนวณเส้นทางด้วย PathfindingService
                         local currentTime = os.clock()
                         if not currentWaypoints or #currentWaypoints == 0 or (enemyPos - lastTargetPos).Magnitude > 3 or currentTime - lastComputeTime > 0.5 then
@@ -863,11 +872,6 @@ task.spawn(function()
                                 path:ComputeAsync(myRoot.Position, enemyPos)
                             end)
                             
-                            print("[AutoHunt] Pathfinding Status:", path.Status, "| Success:", success)
-                            if not success then
-                                print("[AutoHunt] Error:", errorMessage)
-                            end
-                            
                             -- ตรวจสอบผลลัพธ์ของการคำนวณเส้นทาง
                             if success and path.Status == Enum.PathStatus.Success then
                                 currentWaypoints = path:GetWaypoints()
@@ -881,9 +885,23 @@ task.spawn(function()
                                 currentWaypoints = {}
                                 
                                 -- ตั้งค่าให้เดินตรงไปยังมอนสเตอร์เลย
-                                print("[AutoHunt] → สั่ง MoveTo ไปที่:", enemyPos)
                                 myHuman:MoveTo(enemyPos)
-                                print("[AutoHunt] → Humanoid.MoveDirection:", myHuman.MoveDirection)
+                                -- รอเล็กน้อยเพื่อให้ Humanoid เริ่มเคลื่อนไหว
+                                task.wait(0.1)
+                                -- บังคับทิศทางอีกครั้งหากยังไม่เคลื่อนที่
+                                if myHuman.MoveDirection.Magnitude == 0 then
+                                    print("[AutoHunt] ⚠️ MoveDirection เป็น 0! กำลังใช้วิธีบังคับทิศทาง\")
+                                    -- ใช้ Vector3Force เป็นทางเลือกสำรอง
+                                    local rootPart = myChar:FindFirstChild(\"HumanoidRootPart\")
+                                    if rootPart and rootPart:FindFirstChild(\"VectorForce\") then
+                                        local force = rootPart.VectorForce
+                                        local direction = (enemyPos - rootPart.Position).Unit
+                                        force.Force = direction * 50000
+                                    else
+                                        -- ลอง MoveTo อีกครั้ง
+                                        myHuman:MoveTo(enemyPos)
+                                    end
+                                end
                             end
                         end
                         
@@ -893,35 +911,52 @@ task.spawn(function()
                             local wpPos = wp.Position
                             local distToWp = (myRoot.Position - wpPos).Magnitude
                             
-                            print("[AutoHunt] กำลังเดินไป waypoint", currentWaypointIndex, "/", #currentWaypoints, "| ระยะถึง WP:", math.floor(distToWp))
-                            
                             if distToWp < 4 then
                                 currentWaypointIndex = currentWaypointIndex + 1
-                                print("[AutoHunt] ถึง waypoint แล้ว! ไปจุดถัดไป")
                             else
-                                print("[AutoHunt] → สั่ง MoveTo ไปที่ waypoint:", wpPos)
                                 myHuman:MoveTo(wpPos)
-                                print("[AutoHunt] → Humanoid.MoveDirection:", myHuman.MoveDirection)
+                                -- ตรวจสอบว่าเริ่มเคลื่อนไหวหรือยัง
+                                task.wait(0.1)
+                                if myHuman.MoveDirection.Magnitude == 0 then
+                                    -- พยายามบังคับทิศทางอีกครั้ง
+                                    myHuman:MoveTo(wpPos)
+                                    -- ลองใช้ VectorForce หากมี
+                                    local rootPart = myChar:FindFirstChild(\"HumanoidRootPart\")
+                                    if rootPart and rootPart:FindFirstChild(\"VectorForce\") then
+                                        local force = rootPart.VectorForce
+                                        local direction = (wpPos - rootPart.Position).Unit
+                                        force.Force = direction * 50000
+                                    end
+                                end
                                 if wp.Action == Enum.PathWaypointAction.Jump then
-                                    print("[AutoHunt] ↑ กระโดด!")
                                     forceJump(myHuman)
                                 end
                             end
                         else
                             -- ไม่มี waypoints หรือเดินครบแล้ว ให้เดินตรงไปหามอนสเตอร์ (fallback)
-                            print("[AutoHunt] → เดินตรงไปหามอนสเตอร์ (ไม่มี waypoints)")
                             myHuman:MoveTo(enemyPos)
-                            print("[AutoHunt] → Humanoid.MoveDirection:", myHuman.MoveDirection)
+                            task.wait(0.1)
+                            if myHuman.MoveDirection.Magnitude == 0 then
+                                myHuman:MoveTo(enemyPos)
+                                local rootPart = myChar:FindFirstChild(\"HumanoidRootPart\")
+                                if rootPart and rootPart:FindFirstChild(\"VectorForce\") then
+                                    local force = rootPart.VectorForce
+                                    local direction = (enemyPos - rootPart.Position).Unit
+                                    force.Force = direction * 50000
+                                end
+                            end
                         end
                     else
                         -- อยู่ในระยะประชิดแล้ว แต่ต้องขยับเล็กน้อยเพื่อไม่ให้โดน AFK
                         -- สุ่มขยับเป็นวงกลมรอบมอนสเตอร์
-                        print("[AutoHunt] ★ อยู่ในประชิด! กำลังวนรอบมอนสเตอร์")
                         local angle = os.clock() % 6.28 -- 2π
                         local circleRadius = 4
                         local circlePos = enemyPos + Vector3.new(math.cos(angle) * circleRadius, 0, math.sin(angle) * circleRadius)
                         myHuman:MoveTo(circlePos)
-                        print("[AutoHunt] → Humanoid.MoveDirection:", myHuman.MoveDirection)
+                        task.wait(0.1)
+                        if myHuman.MoveDirection.Magnitude == 0 then
+                            myHuman:MoveTo(circlePos)
+                        end
                     end
                 else
                     -- ไม่มีมอนสเตอร์แล้ว (หรือทั้งหมดตายแล้ว) ให้รีเซ็ตเป้าหมายและบังคับเริ่มกระบวนการค้นหาประตูใหม่ทันที
