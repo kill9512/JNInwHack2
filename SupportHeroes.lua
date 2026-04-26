@@ -646,7 +646,19 @@ local function executeSmartDodgeV5(hazard)
     if distXZ > shieldRange then return end
 
     if isAoE then
-        if distXZ < hazardRadius + 1.5 then 
+        -- [กรณีที่ 1] หลบ AOE: เฉพาะเมื่อตัวเราอยู่ตรงตำแหน่ง part เท่านั้น
+        -- เช็คระยะแบบละเอียด โดยต้องอยู่ภายในรัศมีของ Part จริงๆ ไม่ใช่แค่ใกล้ศูนย์กลาง Model
+        local isInDanger = false
+        for _, p in pairs(parts) do
+            local partRadius = math.max(p.Size.X, p.Size.Z) / 2
+            local distToPart = (myPosXZ - Vector3.new(p.Position.X, 0, p.Position.Z)).Magnitude
+            if distToPart < partRadius + 1 then
+                isInDanger = true
+                break
+            end
+        end
+        
+        if isInDanger then 
             -- ใช้ฟังก์ชันใหม่หาจุดหลบที่ปลอดภัย (ไม่ตกแมพ ไม่ทะลุกำแพง)
             local minSafeDist = hazardRadius + 3
             local safeTarget = findSafeAOEDodgePosition(myRoot, hazardPos, hazardRadius, minSafeDist)
@@ -706,38 +718,15 @@ local function executeSmartDodgeV5(hazard)
             local timeToImpact = distXZ / speed
 
             if timeToImpact < 0.6 or distXZ < 12 then
-                local dodgeRight = flatProjDir:Cross(Vector3.new(0, 1, 0)).Unit
-                local dodgeLeft = -dodgeRight
-                local dodgeDist = 10 
-
-                local safeTarget = nil
-
-                -- ลองสไลด์ขวา 90 องศา
-                if isSafePosition(myPos, myPos + (dodgeRight * dodgeDist)) then
-                    safeTarget = myPos + (dodgeRight * dodgeDist)
-                -- ลองสไลด์ซ้าย 90 องศา
-                elseif isSafePosition(myPos, myPos + (dodgeLeft * dodgeDist)) then
-                    safeTarget = myPos + (dodgeLeft * dodgeDist)
-                else
-                    -- [แก้ไขตามสั่ง] ถ้าติดกำแพงทั้งซ้ายและขวา ให้วาร์ปสวนวิถีกระสุน (180 องศา) ไปด้านหลังกระสุนเลย
-                    local forwardDir = -flatProjDir 
-                    local warpBehindTarget = myPos + (forwardDir * 15) -- วาร์ปสวนทะลุไป 15 บล็อค
-                    
-                    if isSafePosition(myPos, warpBehindTarget) then
-                        safeTarget = warpBehindTarget
-                    else
-                        -- ถ้าหลังกระสุนก็ยังติดกำแพงอีก ค่อยดิ้นรน 360 องศา
-                        safeTarget = findSafeDodge(myPos, forwardDir, 10)
-                    end
-                end
-
-                if safeTarget then
-                    -- ใช้ฟังก์ชันตรวจสอบตำแหน่งปลายทางเพื่อป้องกันการติด Model
-                    local validatedTarget = validateTargetPosition(myChar, safeTarget)
-                    
-                    -- วาร์ปทันทีโดยเปลี่ยน CFrame โดยตรง เพื่อความเร็วสูงสุดในการหลบกระสุน
-                    myRoot.CFrame = CFrame.new(validatedTarget)
-                end
+                -- [กรณีที่ 2] พุ่งเข้าใส่กระสุน 15 สตั๊ด (ไม่หลบข้างแล้ว)
+                local forwardDir = -flatProjDir -- ทิศทางสวนกับกระสุน
+                local chargeTarget = myPos + (forwardDir * 15) -- พุ่งไปข้างหน้า 15 สตั๊ด
+                
+                -- ใช้ฟังก์ชันตรวจสอบตำแหน่งปลายทางเพื่อป้องกันการติด Model
+                local validatedTarget = validateTargetPosition(myChar, chargeTarget)
+                
+                -- วาร์ปทันทีโดยเปลี่ยน CFrame โดยตรง เพื่อความเร็วสูงสุดในการพุ่งชน
+                myRoot.CFrame = CFrame.new(validatedTarget)
             end
         end
     end
