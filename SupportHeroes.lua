@@ -832,6 +832,12 @@ task.spawn(function()
                     
                     print("[AutoHunt] เจอมอนสเตอร์! ระยะ:", math.floor(dist), "| ตำแหน่ง:", enemyPos)
                     
+                    -- ตรวจสอบว่าตัวละครยังมีชีวิตและ Humanoid พร้อมใช้งาน
+                    if not myHuman or myHuman.Health <= 0 then
+                        print("[AutoHunt] ✗ ตัวละครตายหรือ Humanoid ไม่พร้อม!")
+                        return
+                    end
+                    
                     -- [Anti-AFK] ใช้ VirtualUser เพื่อจำลองการกดปุ่ม (วิธีที่ได้ผลที่สุด)
                     local timeSinceLastMove = os.clock() - lastAntiAFKTime
                     if timeSinceLastMove > 1.5 then
@@ -858,6 +864,9 @@ task.spawn(function()
                             end)
                             
                             print("[AutoHunt] Pathfinding Status:", path.Status, "| Success:", success)
+                            if not success then
+                                print("[AutoHunt] Error:", errorMessage)
+                            end
                             
                             -- ตรวจสอบผลลัพธ์ของการคำนวณเส้นทาง
                             if success and path.Status == Enum.PathStatus.Success then
@@ -872,7 +881,9 @@ task.spawn(function()
                                 currentWaypoints = {}
                                 
                                 -- ตั้งค่าให้เดินตรงไปยังมอนสเตอร์เลย
+                                print("[AutoHunt] → สั่ง MoveTo ไปที่:", enemyPos)
                                 myHuman:MoveTo(enemyPos)
+                                print("[AutoHunt] → Humanoid.MoveDirection:", myHuman.MoveDirection)
                             end
                         end
                         
@@ -886,9 +897,13 @@ task.spawn(function()
                             
                             if distToWp < 4 then
                                 currentWaypointIndex = currentWaypointIndex + 1
+                                print("[AutoHunt] ถึง waypoint แล้ว! ไปจุดถัดไป")
                             else
+                                print("[AutoHunt] → สั่ง MoveTo ไปที่ waypoint:", wpPos)
                                 myHuman:MoveTo(wpPos)
+                                print("[AutoHunt] → Humanoid.MoveDirection:", myHuman.MoveDirection)
                                 if wp.Action == Enum.PathWaypointAction.Jump then
+                                    print("[AutoHunt] ↑ กระโดด!")
                                     forceJump(myHuman)
                                 end
                             end
@@ -896,6 +911,7 @@ task.spawn(function()
                             -- ไม่มี waypoints หรือเดินครบแล้ว ให้เดินตรงไปหามอนสเตอร์ (fallback)
                             print("[AutoHunt] → เดินตรงไปหามอนสเตอร์ (ไม่มี waypoints)")
                             myHuman:MoveTo(enemyPos)
+                            print("[AutoHunt] → Humanoid.MoveDirection:", myHuman.MoveDirection)
                         end
                     else
                         -- อยู่ในระยะประชิดแล้ว แต่ต้องขยับเล็กน้อยเพื่อไม่ให้โดน AFK
@@ -905,6 +921,7 @@ task.spawn(function()
                         local circleRadius = 4
                         local circlePos = enemyPos + Vector3.new(math.cos(angle) * circleRadius, 0, math.sin(angle) * circleRadius)
                         myHuman:MoveTo(circlePos)
+                        print("[AutoHunt] → Humanoid.MoveDirection:", myHuman.MoveDirection)
                     end
                 else
                     -- ไม่มีมอนสเตอร์แล้ว (หรือทั้งหมดตายแล้ว) ให้รีเซ็ตเป้าหมายและบังคับเริ่มกระบวนการค้นหาประตูใหม่ทันที
