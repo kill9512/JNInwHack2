@@ -285,9 +285,9 @@ local function findReachableSpotAroundEnemy(myRoot, enemyPos, searchRadius)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
     local myPos = myRoot.Position
     
-    -- สุ่มมุมต่างๆ รอบมอนสเตอร์ (ละเอียดขึ้น ทุก 10 องศา)
+    -- สุ่มมุมต่างๆ รอบมอนสเตอร์ (ละเอียดขึ้น ทุก 5 องศา)
     local angles = {}
-    for i = 0, 359, 10 do -- ทุก 10 องศา (ละเอียดกว่าเดิม)
+    for i = 0, 359, 5 do -- ทุก 5 องศา (ละเอียดมาก)
         table.insert(angles, i)
     end
     
@@ -299,18 +299,55 @@ local function findReachableSpotAroundEnemy(myRoot, enemyPos, searchRadius)
     
     local bestSpot = nil
     local bestDist = math.huge
+    local bestPathDist = math.huge
     
     for _, angle in ipairs(angles) do
         local rad = math.rad(angle)
         local offset = Vector3.new(math.cos(rad), 0, math.sin(rad)) * searchRadius
         local candidatePos = enemyPos + offset
         
-        -- ตรวจสอบว่าไม่มีกำแพงขวางระหว่างเรากับจุดนี้
+        -- ตรวจสอบว่าไม่มีกำแพงขวางระหว่างเรากับจุดนี้ (ใช้หลายจุดตรวจสอบ)
         local dirToCandidate = (candidatePos - myPos).Unit
         local distToCandidate = (candidatePos - myPos).Magnitude
-        local wallCheck = workspace:Raycast(myPos + Vector3.new(0, 2, 0), dirToCandidate * distToCandidate, rayParams)
         
-        if not wallCheck then
+        -- ตรวจสอบเส้นทางแบบหลายจุด (ทุก 3 สตัด) เพื่อตรวจจับกำแพงกลางทาง
+        local pathClear = true
+        local checkSteps = math.ceil(distToCandidate / 3)
+        for step = 1, checkSteps do
+            local checkPos = myPos + (dirToCandidate * (step * 3))
+            local wallCheck = workspace:Raycast(checkPos + Vector3.new(0, 2, 0), dirToCandidate * 3, rayParams)
+            if wallCheck then
+                local normal = wallCheck.Normal
+                if math.abs(normal.Y) < 0.7 then -- เป็นกำแพงด้านข้าง
+                    pathClear = false
+                    break
+                end
+            end
+        end
+        
+        if not pathClear then
+            -- ถ้าเส้นทางตรงไม่โล่ง ให้ลองใช้ PathfindingService หาเส้นทางอ้อม
+            local success, path = pcall(function()
+                return PathfindingService:CreatePath({AgentRadius = 3, AgentHeight = 6, AgentCanJump = true})
+            end)
+            
+            if success then
+                local computeSuccess = pcall(function()
+                    path:ComputeAsync(myPos, candidatePos)
+                end)
+                
+                if computeSuccess then
+                    local waypoints = path:GetWaypoints()
+                    if #waypoints > 0 then
+                        -- ใช้จุดสุดท้ายของเส้นทางที่คำนวณได้
+                        candidatePos = waypoints[#waypoints].Position
+                        pathClear = true
+                    end
+                end
+            end
+        end
+        
+        if pathClear then
             -- ตรวจสอบว่ามีพื้นรองรับ
             local groundCheck = workspace:Raycast(candidatePos + Vector3.new(0, 5, 0), Vector3.new(0, -10, 0), rayParams)
             if groundCheck then
@@ -318,17 +355,39 @@ local function findReachableSpotAroundEnemy(myRoot, enemyPos, searchRadius)
                 local isCorner = false
                 for _, checkAngle in ipairs({0, 45, 90, 135, 180, 225, 270, 315}) do
                     local sideDir = CFrame.Angles(0, math.rad(checkAngle), 0) * Vector3.new(1, 0, 0)
-                    local sideHit = workspace:Raycast(candidatePos + Vector3.new(0, 2, 0), sideDir * 2, rayParams)
-                    if sideHit and sideHit.Distance < 1.5 then
+                    local sideHit = workspace:Raycast(candidatePos + Vector3.new(0, 2, 0), sideDir * 2.5, rayParams)
+                    if sideHit and sideHit.Distance < 1.8 then
                         isCorner = true
                         break
                     end
                 end
                 
                 if not isCorner then
-                    local distFromEnemy = (candidatePos - enemyPos).Magnitude
-                    if distFromEnemy < bestDist then
-                        bestDist = distFromEnemy
+                    -- คำนวณระยะทางจริงที่ต้องเดิน (ถ้าใช้ Pathfinding)
+                    local actualDist = distToCandidate
+                    local success, path = pcall(function()
+                        return PathfindingService:CreatePath({AgentRadius = 3, AgentHeight = 6, AgentCanJump = true})
+                    end)
+                    
+                    if success then
+                        local computeSuccess = pcall(function()
+                            path:ComputeAsync(myPos, candidatePos)
+                        end)
+                        
+                        if computeSuccess then
+                            local waypoints = path:GetWaypoints()
+                            if #waypoints > 1 then
+                                actualDist = 0
+                                for i = 1, #waypoints - 1 do
+                                    actualDist = actualDist + (waypoints[i].Position - waypoints[i+1].Position).Magnitude
+                                end
+                            end
+                        end
+                    end
+                    
+                    if actualDist < bestPathDist then
+                        bestPathDist = actualDist
+                        bestDist = (candidatePos - enemyPos).Magnitude
                         bestSpot = candidatePos
                     end
                 end
@@ -340,14 +399,49 @@ local function findReachableSpotAroundEnemy(myRoot, enemyPos, searchRadius)
     if not bestSpot then
         for _, angle in ipairs(angles) do
             local rad = math.rad(angle)
-            local offset = Vector3.new(math.cos(rad), 0, math.sin(rad)) * (searchRadius + 3)
+            local offset = Vector3.new(math.cos(rad), 0, math.sin(rad)) * (searchRadius + 5)
             local candidatePos = enemyPos + offset
             
             local dirToCandidate = (candidatePos - myPos).Unit
             local distToCandidate = (candidatePos - myPos).Magnitude
-            local wallCheck = workspace:Raycast(myPos + Vector3.new(0, 2, 0), dirToCandidate * distToCandidate, rayParams)
             
-            if not wallCheck then
+            -- ตรวจสอบเส้นทางแบบหลายจุด
+            local pathClear = true
+            local checkSteps = math.ceil(distToCandidate / 3)
+            for step = 1, checkSteps do
+                local checkPos = myPos + (dirToCandidate * (step * 3))
+                local wallCheck = workspace:Raycast(checkPos + Vector3.new(0, 2, 0), dirToCandidate * 3, rayParams)
+                if wallCheck then
+                    local normal = wallCheck.Normal
+                    if math.abs(normal.Y) < 0.7 then
+                        pathClear = false
+                        break
+                    end
+                end
+            end
+            
+            if not pathClear then
+                -- ลองใช้ Pathfinding
+                local success, path = pcall(function()
+                    return PathfindingService:CreatePath({AgentRadius = 3, AgentHeight = 6, AgentCanJump = true})
+                end)
+                
+                if success then
+                    local computeSuccess = pcall(function()
+                        path:ComputeAsync(myPos, candidatePos)
+                    end)
+                    
+                    if computeSuccess then
+                        local waypoints = path:GetWaypoints()
+                        if #waypoints > 0 then
+                            candidatePos = waypoints[#waypoints].Position
+                            pathClear = true
+                        end
+                    end
+                end
+            end
+            
+            if pathClear then
                 local groundCheck = workspace:Raycast(candidatePos + Vector3.new(0, 5, 0), Vector3.new(0, -10, 0), rayParams)
                 if groundCheck then
                     bestSpot = candidatePos
