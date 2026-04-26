@@ -207,6 +207,38 @@ local function findClosestEnemy()
     return closestEnemy
 end
 
+-- ฟังก์ชันตรวจสอบว่ามีกำแพงขวางทางหรือไม่ และหาทิศทางหลบ
+local function checkWallAndFindDirection(myRoot, targetPos)
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    
+    local currentPos = myRoot.Position
+    local baseDir = (targetPos - currentPos).Unit
+    local scanDistance = 8 -- ระยะสแกนกำแพง
+    
+    -- ยิง Raycast ไปข้างหน้าเพื่อดูว่ามีกำแพงขวางหรือไม่
+    local wallHit = workspace:Raycast(currentPos, baseDir * scanDistance, rayParams)
+    
+    if wallHit then
+        -- ถ้าเจอกำแพง ให้ลองหาทิศทางอื่น
+        local escapeAngles = {45, -45, 90, -90, 135, -135}
+        for _, angle in ipairs(escapeAngles) do
+            local rotatedDir = (CFrame.Angles(0, math.rad(angle), 0) * baseDir).Unit
+            local testHit = workspace:Raycast(currentPos, rotatedDir * scanDistance, rayParams)
+            
+            -- ถ้าทิศทางนี้ไม่มีกำแพง หรือมีแต่ไกลกว่า ให้ใช้ทิศทางนี้
+            if not testHit or testHit.Distance > (wallHit.Distance * 0.8) then
+                return rotatedDir, true -- ส่งกลับทิศทางและ flag ว่าต้องหลบ
+            end
+        end
+        -- ถ้าทุกทิศทางมีกำแพงหมด ให้สุ่มทิศทาง
+        local randomAngle = math.random(0, 359)
+        local randomDir = (CFrame.Angles(0, math.rad(randomAngle), 0) * Vector3.new(1, 0, 0)).Unit
+        return randomDir, true
+    end
+    
+    return baseDir, false -- ไม่มีกำแพง ใช้ทิศทางปกติ
+end
+
 local function getProbingDirection(myRoot, targetPos)
     local currentPos = myRoot.Position
     local baseDir = (targetPos - currentPos).Unit
@@ -641,13 +673,24 @@ task.spawn(function()
                     
                     -- ถ้ายังไกลอยู่ ให้เดินไปหา
                     if dist > 5 then
-                        myHuman:MoveTo(enemyPos)
+                        -- ใช้ Raycast ตรวจสอบกำแพงและหาทิศทางหลบ
+                        local moveDir, needToDodge = checkWallAndFindDirection(myRoot, enemyPos)
+                        
+                        if needToDodge then
+                            -- ถ้ามีกำแพงขวาง ให้เดินในทิศทางที่หลบแทน
+                            local dodgeTarget = myRoot.Position + (moveDir * 10)
+                            myHuman:MoveTo(dodgeTarget)
+                        else
+                            -- ไม่มีกำแพง เดินตรงไปหามอนสเตอร์
+                            myHuman:MoveTo(enemyPos)
+                        end
                     else
                         -- อยู่ในระยะประชิดแล้ว ไม่ต้องทำอะไร (รอโจมตีเอง)
                     end
                 else
                     -- ไม่มีมอนสเตอร์แล้ว ให้สลับกลับไปโหมดค้นหาประตู
                     autoHuntEnemies = false
+                    currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ทันที
                 end
             end
         end)
