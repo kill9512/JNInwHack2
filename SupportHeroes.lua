@@ -646,7 +646,36 @@ local function executeSmartDodgeV5(hazard)
     if distXZ > shieldRange then return end
 
     if isAoE then
-        if distXZ < hazardRadius + 1.5 then 
+        -- [แก้ไข] ตรวจสอบว่าเราอยู่ในระยะของ Part จริงๆ หรือไม่ (ใช้ขอบเขตของ Part เป็นเกณฑ์)
+        local isInDangerZone = false
+        
+        -- ตรวจสอบว่า HumanoidRootPart อยู่ภายใน bounding box ของ hazard หรือไม่
+        for _, p in pairs(parts) do
+            local partCenter = p.Position
+            local partSize = p.Size
+            -- คำนวณระยะจากจุดศูนย์กลางของ Part ไปยังผู้เล่น (เทียบเป็นครึ่งหนึ่งของขนาด Part)
+            local distToPart = (myPos - partCenter).Magnitude
+            local maxPartRadius = math.max(partSize.X, partSize.Y, partSize.Z) / 2
+            
+            -- ถ้าผู้เล่นอยู่ในระยะของ Part (ใกล้กว่ารัศมีสูงสุดของ Part)
+            if distToPart < maxPartRadius then
+                isInDangerZone = true
+                break
+            end
+        end
+        
+        -- ถ้าไม่เจอจาก parts ให้ใช้วิธีเดิม (bounding box)
+        if not isInDangerZone and #parts == 0 then
+            local cframe, size = hazard:GetBoundingBox()
+            local distToBox = (myPos - cframe.Position).Magnitude
+            local maxBoxRadius = math.max(size.X, size.Y, size.Z) / 2
+            if distToBox < maxBoxRadius then
+                isInDangerZone = true
+            end
+        end
+        
+        -- หลบเฉพาะเมื่ออยู่ในระยะอันตรายจริงๆ
+        if isInDangerZone then 
             -- ใช้ฟังก์ชันใหม่หาจุดหลบที่ปลอดภัย (ไม่ตกแมพ ไม่ทะลุกำแพง)
             local minSafeDist = hazardRadius + 3
             local safeTarget = findSafeAOEDodgePosition(myRoot, hazardPos, hazardRadius, minSafeDist)
@@ -666,7 +695,7 @@ local function executeSmartDodgeV5(hazard)
             end
         end
 
-    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) - อัปเกรด V7 (เสริมลอจิกวาร์ปสวน 180 องศาเมื่อติดกำแพง)
+    -- [กรณีที่ 2] หลบกระสุนพุ่งชน (Arrow, Magic) - อัปเกรด V7 (พุ่งเข้าใส่แทนการหลบข้าง)
     elseif isProjectile then
         local projVelocity = Vector3.new(0, 0, 0)
         
@@ -706,29 +735,21 @@ local function executeSmartDodgeV5(hazard)
             local timeToImpact = distXZ / speed
 
             if timeToImpact < 0.6 or distXZ < 12 then
-                local dodgeRight = flatProjDir:Cross(Vector3.new(0, 1, 0)).Unit
-                local dodgeLeft = -dodgeRight
-                local dodgeDist = 10 
-
+                -- [แก้ไขตามสั่ง] เปลี่ยนจากหลบข้าง เป็นพุ่งเข้าใส่กระสุนแทน
+                local forwardDir = -flatProjDir -- พุ่งสวนทิศทางกระสุน
+                
+                -- คำนวณจุดพุ่งเข้าใส่ (ห่างจากตำแหน่งปัจจุบันไปทางด้านหน้าของกระสุน)
+                local dodgeDist = 8 -- ระยะพุ่งเข้าใส่
+                local chargeTarget = myPos + (forwardDir * dodgeDist)
+                
                 local safeTarget = nil
-
-                -- ลองสไลด์ขวา 90 องศา
-                if isSafePosition(myPos, myPos + (dodgeRight * dodgeDist)) then
-                    safeTarget = myPos + (dodgeRight * dodgeDist)
-                -- ลองสไลด์ซ้าย 90 องศา
-                elseif isSafePosition(myPos, myPos + (dodgeLeft * dodgeDist)) then
-                    safeTarget = myPos + (dodgeLeft * dodgeDist)
+                
+                -- ตรวจสอบว่าจุดที่พุ่งไปปลอดภัยหรือไม่
+                if isSafePosition(myPos, chargeTarget) then
+                    safeTarget = chargeTarget
                 else
-                    -- [แก้ไขตามสั่ง] ถ้าติดกำแพงทั้งซ้ายและขวา ให้วาร์ปสวนวิถีกระสุน (180 องศา) ไปด้านหลังกระสุนเลย
-                    local forwardDir = -flatProjDir 
-                    local warpBehindTarget = myPos + (forwardDir * 15) -- วาร์ปสวนทะลุไป 15 บล็อค
-                    
-                    if isSafePosition(myPos, warpBehindTarget) then
-                        safeTarget = warpBehindTarget
-                    else
-                        -- ถ้าหลังกระสุนก็ยังติดกำแพงอีก ค่อยดิ้นรน 360 องศา
-                        safeTarget = findSafeDodge(myPos, forwardDir, 10)
-                    end
+                    -- ถ้าพุ่งตรงไปแล้วไม่ปลอดภัย ให้ลองหาจุดอื่นแบบ 360 องศา
+                    safeTarget = findSafeDodge(myPos, forwardDir, 10)
                 end
 
                 if safeTarget then
