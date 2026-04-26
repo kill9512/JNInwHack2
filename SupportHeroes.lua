@@ -143,40 +143,73 @@ end
 -- --- Door Warp & Auto Hunt Functions ---
 local function findRandomDoor()
     local dungeon = workspace:FindFirstChild("Dungeon")
-    if not dungeon then return nil end
+    if not dungeon then 
+        print("[DoorWarp] Dungeon not found in workspace")
+        return nil 
+    end
     
     local layout = dungeon:FindFirstChild("Layout")
-    if not layout then return nil end
+    if not layout then 
+        print("[DoorWarp] Layout folder not found in Dungeon")
+        return nil 
+    end
     
     -- ค้นหา Layout ใดๆ ที่มีอยู่ (ไม่ระบุชื่อเฉพาะ เพื่อรองรับทุกด่าน)
     local targetLayout = nil
     for _, child in pairs(layout:GetChildren()) do
         if child:IsA("Model") or child.ClassName == "Folder" then
             targetLayout = child
+            print("[DoorWarp] Found Layout:", child.Name)
             break
         end
     end
     
-    if not targetLayout then return nil end
+    if not targetLayout then 
+        print("[DoorWarp] No valid Layout model/folder found")
+        return nil 
+    end
     
     local doors = targetLayout:FindFirstChild("Doors")
-    if not doors then return nil end
+    if not doors then 
+        print("[DoorWarp] Doors folder not found in Layout:", targetLayout.Name)
+        -- ลองหา Doors ในรูปแบบอื่น (บางด่านอาจไม่มีโฟลเดอร์ Doors)
+        for _, child in pairs(targetLayout:GetChildren()) do
+            if child.Name:lower():find("door") then
+                doors = child
+                print("[DoorWarp] Found alternative doors folder:", child.Name)
+                break
+            end
+        end
+        if not doors then return nil end
+    end
     
-    -- รวบรวมประตูทั้งหมดที่มี TouchInterest (ชิ้นส่วนตรวจสอบการชน)
+    -- รวบรวมประตูทั้งหมด (มองหา Part หรือ Model ที่เป็นประตู)
     local doorList = {}
     for _, doorPart in pairs(doors:GetChildren()) do
-        -- ค้นหา TouchInterest ซึ่งเป็นส่วนตรวจสอบการชนของประตู
-        local touchInterest = doorPart:FindFirstChild("TouchInterest")
-        if touchInterest and touchInterest:IsA("TouchInterest") then
+        -- วิธีที่ 1: ตรวจสอบว่าเป็น BasePart โดยตรง
+        if doorPart:IsA("BasePart") then
             table.insert(doorList, doorPart)
+            print("[DoorWarp] Found door part:", doorPart.Name)
+        -- วิธีที่ 2: ถ้าเป็น Model ให้หา PrimaryPart หรือ Part หลักภายใน
+        elseif doorPart:IsA("Model") then
+            local mainPart = doorPart.PrimaryPart or doorPart:FindFirstChildWhichIsA("BasePart")
+            if mainPart then
+                table.insert(doorList, mainPart)
+                print("[DoorWarp] Found door model with part:", doorPart.Name, "->", mainPart.Name)
+            end
         end
     end
     
-    if #doorList == 0 then return nil end
+    if #doorList == 0 then 
+        print("[DoorWarp] No valid door parts found in Doors folder")
+        return nil 
+    end
     
     -- สุ่มเลือก 1 ประตู
     local randomIndex = math.random(1, #doorList)
-    return doorList[randomIndex]
+    local selectedDoor = doorList[randomIndex]
+    print("[DoorWarp] Selected door:", selectedDoor.Name, "Position:", selectedDoor.Position)
+    return selectedDoor
 end
 
 local function getDoorCenterPosition(doorPart)
