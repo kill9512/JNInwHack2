@@ -249,12 +249,8 @@ local function findClosestEnemy()
     local dungeon = workspace:FindFirstChild("Dungeon")
     if not dungeon then return nil end
     
-    -- พยายามหา folder มอนสเตอร์ได้หลายชื่อ
-    local enemies = dungeon:FindFirstChild("Enemies") or dungeon:FindFirstChild("Monsters") or dungeon:FindFirstChild("Mobs")
-    if not enemies then 
-        -- ถ้าไม่เจอ folder ให้ลองหาทุก Model ใน Dungeon ที่ไม่ใช่ Player
-        enemies = dungeon
-    end
+    local enemies = dungeon:FindFirstChild("Enemies")
+    if not enemies then return nil end
     
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -264,38 +260,20 @@ local function findClosestEnemy()
     local closestDist = math.huge
     
     for _, enemy in pairs(enemies:GetChildren()) do
-        -- ข้ามผู้เล่นและสิ่งที่ใช่ศัตรู
-        if enemy:IsA("Model") and enemy:FindFirstChild("HumanoidRootPart") then
-            -- ตรวจสอบว่าเป็นผู้เล่นหรือไม่ (ถ้ามี PlayerGui หรืออยู่ใน Players service ให้ข้าม)
-            local isPlayer = false
-            for _, player in ipairs(game.Players:GetPlayers()) do
-                if player.Character == enemy then
-                    isPlayer = true
-                    break
-                end
-            end
-            if isPlayer then continue end
-            
-            local enemyRoot = enemy:FindFirstChild("HumanoidRootPart")
+        if enemy:IsA("Model") or enemy:IsA("BasePart") then
+            local enemyRoot = enemy:IsA("Model") and enemy:FindFirstChild("HumanoidRootPart") or enemy
             if enemyRoot and enemyRoot:IsA("BasePart") then
-                -- ตรวจสอบเลือด (ถ้ามี Humanoid)
-                local enemyHumanoid = enemy:FindFirstChildOfClass("Humanoid")
+                -- ตรวจสอบเลือดของมอนสเตอร์ด้วย (ถ้าเป็น Model ให้หา Humanoid)
+                local enemyHumanoid = enemy:IsA("Model") and enemy:FindFirstChildOfClass("Humanoid") or nil
                 if enemyHumanoid and enemyHumanoid.Health <= 0 then
                     continue -- ข้ามมอนสเตอร์ที่ตายแล้ว
                 end
                 
                 local dist = (myRoot.Position - enemyRoot.Position).Magnitude
-                if dist < closestDist and dist < 150 then -- เพิ่มระยะจำกัดการค้นหา
+                if dist < closestDist then
                     closestDist = dist
                     closestEnemy = enemyRoot
                 end
-            end
-        elseif enemy:IsA("BasePart") and not enemy:IsDescendantOf(myChar) then
-            -- กรณีที่เป็น BasePart โดยตรง (บางเกมมอนสเตอร์เป็นแค่ Part)
-            local dist = (myRoot.Position - enemy.Position).Magnitude
-            if dist < closestDist and dist < 150 then
-                closestDist = dist
-                closestEnemy = enemy
             end
         end
     end
@@ -853,12 +831,11 @@ task.spawn(function()
                     end
                     
                     -- ถ้ายังไกลอยู่ ให้ใช้ Pathfinding เดินไปหา
-                    if dist > 8 then
+                    if dist > 5 then
                         -- คำนวณเส้นทางด้วย PathfindingService
                         local currentTime = os.clock()
-                        -- รีเซ็ต waypoints ถ้ามอนสเตอร์ขยับมากหรือคำนวณนานเกินไป
-                        if not currentWaypoints or #currentWaypoints == 0 or (enemyPos - lastTargetPos).Magnitude > 5 or currentTime - lastComputeTime > 0.3 then
-                            local path = PathfindingService:CreatePath({AgentRadius = 3, AgentHeight = 6, AgentCanJump = true, WaypointSpacing = 4})
+                        if not currentWaypoints or #currentWaypoints == 0 or (enemyPos - lastTargetPos).Magnitude > 3 or currentTime - lastComputeTime > 0.5 then
+                            local path = PathfindingService:CreatePath({AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 3})
                             local success, errorMessage = pcall(function()
                                 path:ComputeAsync(myRoot.Position, enemyPos)
                             end)
@@ -868,11 +845,9 @@ task.spawn(function()
                                 currentWaypointIndex = 2
                                 lastTargetPos = enemyPos
                                 lastComputeTime = currentTime
-                                print("[Hunt] Path computed:", #currentWaypoints, "waypoints to enemy at", math.floor(dist), "stud")
                             else
                                 -- ถ้าคำนวณเส้นทางไม่ได้ ให้ลองเดินตรงไปก่อน
                                 currentWaypoints = {}
-                                print("[Hunt] Path failed, walking direct to enemy")
                             end
                         end
                         
@@ -882,7 +857,7 @@ task.spawn(function()
                             local wpPos = wp.Position
                             local distToWp = (myRoot.Position - wpPos).Magnitude
                             
-                            if distToWp < 5 then
+                            if distToWp < 4 then
                                 currentWaypointIndex = currentWaypointIndex + 1
                             else
                                 myHuman:MoveTo(wpPos)
@@ -898,13 +873,12 @@ task.spawn(function()
                         -- อยู่ในระยะประชิดแล้ว แต่ต้องขยับเล็กน้อยเพื่อไม่ให้โดน AFK
                         -- สุ่มขยับเป็นวงกลมรอบมอนสเตอร์
                         local angle = os.clock() % 6.28 -- 2π
-                        local circleRadius = 6
+                        local circleRadius = 4
                         local circlePos = enemyPos + Vector3.new(math.cos(angle) * circleRadius, 0, math.sin(angle) * circleRadius)
                         myHuman:MoveTo(circlePos)
                     end
                 else
                     -- ไม่มีมอนสเตอร์แล้ว (หรือทั้งหมดตายแล้ว) ให้รีเซ็ตเป้าหมายและบังคับเริ่มกระบวนการค้นหาประตูใหม่ทันที
-                    print("[Hunt] No enemies found, switching to door search")
                     autoHuntEnemies = false
                     currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ทันที
                     lastDoorSearchTime = 0 -- บังคับให้ค้นหาใหม่ในรอบถัดไป
