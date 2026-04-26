@@ -829,23 +829,15 @@ task.spawn(function()
                             -- ถ้ามีกำแพงขวาง ให้เดินในทิศทางที่หลบแทน
                             local dodgeTarget = myRoot.Position + (moveDir * 10)
                             myHuman:MoveTo(dodgeTarget)
-                            -- บังคับขยับ CFrame เพื่อป้องกัน AFK ทันที
-                            myRoot.CFrame = CFrame.new(dodgeTarget)
                         else
                             -- ไม่มีกำแพง เดินตรงไปหามอนสเตอร์
                             myHuman:MoveTo(enemyPos)
-                            -- บังคับขยับ CFrame เพื่อป้องกัน AFK ทันที
-                            myRoot.CFrame = CFrame.new(enemyPos)
                         end
                     else
-                        -- อยู่ในระยะประชิดแล้ว แต่ต้องขยับเล็กน้อยเพื่อไม่ให้โดน AFK
-                        -- สุ่มขยับเป็นวงกลมรอบมอนสเตอร์
                         local angle = os.clock() % 6.28 -- 2π
                         local circleRadius = 4
                         local circlePos = enemyPos + Vector3.new(math.cos(angle) * circleRadius, 0, math.sin(angle) * circleRadius)
                         myHuman:MoveTo(circlePos)
-                        -- บังคับวาร์ปตามเพื่อป้องกัน AFK
-                        myRoot.CFrame = CFrame.new(circlePos)
                     end
                 else
                     -- ไม่มีมอนสเตอร์แล้ว (หรือทั้งหมดตายแล้ว) ให้รีเซ็ตเป้าหมายและบังคับเริ่มกระบวนการค้นหาประตูใหม่ทันที
