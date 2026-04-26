@@ -830,6 +830,8 @@ task.spawn(function()
                     local enemyPos = closestEnemy.Position
                     local dist = (myRoot.Position - enemyPos).Magnitude
                     
+                    print("[AutoHunt] เจอมอนสเตอร์! ระยะ:", math.floor(dist), "| ตำแหน่ง:", enemyPos)
+                    
                     -- [Anti-AFK] ใช้ VirtualUser เพื่อจำลองการกดปุ่ม (วิธีที่ได้ผลที่สุด)
                     local timeSinceLastMove = os.clock() - lastAntiAFKTime
                     if timeSinceLastMove > 1.5 then
@@ -843,17 +845,19 @@ task.spawn(function()
                         -- คำนวณเส้นทางด้วย PathfindingService
                         local currentTime = os.clock()
                         if not currentWaypoints or #currentWaypoints == 0 or (enemyPos - lastTargetPos).Magnitude > 3 or currentTime - lastComputeTime > 0.5 then
-                            -- สร้าง Path ด้วย AgentRadius ที่ใหญ่ขึ้นเพื่อหลบสิ่งกีดขวางได้ดีกว่า
+                            -- สร้าง Path ด้วย AgentRadius ที่เล็กลงเพื่อเพิ่มความยืดหยุ่น
                             local path = PathfindingService:CreatePath({
-                                AgentRadius = 3,
-                                AgentHeight = 6,
+                                AgentRadius = 2,
+                                AgentHeight = 5,
                                 AgentCanJump = true,
-                                WaypointSpacing = 5
+                                WaypointSpacing = 3
                             })
                             
                             local success, errorMessage = pcall(function()
                                 path:ComputeAsync(myRoot.Position, enemyPos)
                             end)
+                            
+                            print("[AutoHunt] Pathfinding Status:", path.Status, "| Success:", success)
                             
                             -- ตรวจสอบผลลัพธ์ของการคำนวณเส้นทาง
                             if success and path.Status == Enum.PathStatus.Success then
@@ -861,51 +865,24 @@ task.spawn(function()
                                 currentWaypointIndex = 2
                                 lastTargetPos = enemyPos
                                 lastComputeTime = currentTime
+                                print("[AutoHunt] ✓ พบเส้นทาง! จำนวน waypoints:", #currentWaypoints)
                             else
-                                -- Pathfinding ล้มเหลว - ลองใช้วิธีเดินตรงแทน
+                                -- Pathfinding ล้มเหลว - ใช้วิธีเดินตรงแทน (Fallback)
+                                print("[AutoHunt] ✗ Pathfinding ล้มเหลว! จะเดินตรงไปหามอนสเตอร์แทน")
                                 currentWaypoints = {}
                                 
-                                -- ถ้าล้มเหลวเพราะเป้าหมาย unreachable ให้ลองเดินอ้อมแบบ manual
-                                if path.Status == Enum.PathStatus.FailNoValidPath or path.Status == Enum.PathStatus.FailStartOrEndUnreachable then
-                                    -- หาจุดใกล้เคียงที่อาจเดินไปถึงได้
-                                    local testPositions = {
-                                        enemyPos + Vector3.new(3, 0, 0),
-                                        enemyPos + Vector3.new(-3, 0, 0),
-                                        enemyPos + Vector3.new(0, 0, 3),
-                                        enemyPos + Vector3.new(0, 0, -3),
-                                        enemyPos + Vector3.new(5, 0, 5),
-                                        enemyPos + Vector3.new(-5, 0, -5),
-                                    }
-                                    
-                                    for _, testPos in ipairs(testPositions) do
-                                        local testPath = PathfindingService:CreatePath({
-                                            AgentRadius = 3,
-                                            AgentHeight = 6,
-                                            AgentCanJump = true,
-                                            WaypointSpacing = 5
-                                        })
-                                        
-                                        local testSuccess = pcall(function()
-                                            testPath:ComputeAsync(myRoot.Position, testPos)
-                                        end)
-                                        
-                                        if testSuccess and testPath.Status == Enum.PathStatus.Success then
-                                            currentWaypoints = testPath:GetWaypoints()
-                                            currentWaypointIndex = 2
-                                            lastTargetPos = testPos
-                                            lastComputeTime = currentTime
-                                            break
-                                        end
-                                    end
-                                end
+                                -- ตั้งค่าให้เดินตรงไปยังมอนสเตอร์เลย
+                                myHuman:MoveTo(enemyPos)
                             end
                         end
                         
-                        -- เดินตาม waypoints
+                        -- เดินตาม waypoints (ถ้ามี)
                         if #currentWaypoints > 0 and currentWaypointIndex <= #currentWaypoints then
                             local wp = currentWaypoints[currentWaypointIndex]
                             local wpPos = wp.Position
                             local distToWp = (myRoot.Position - wpPos).Magnitude
+                            
+                            print("[AutoHunt] กำลังเดินไป waypoint", currentWaypointIndex, "/", #currentWaypoints, "| ระยะถึง WP:", math.floor(distToWp))
                             
                             if distToWp < 4 then
                                 currentWaypointIndex = currentWaypointIndex + 1
@@ -916,12 +893,14 @@ task.spawn(function()
                                 end
                             end
                         else
-                            -- ไม่มี waypoints ให้เดินตรงไป (fallback)
+                            -- ไม่มี waypoints หรือเดินครบแล้ว ให้เดินตรงไปหามอนสเตอร์ (fallback)
+                            print("[AutoHunt] → เดินตรงไปหามอนสเตอร์ (ไม่มี waypoints)")
                             myHuman:MoveTo(enemyPos)
                         end
                     else
                         -- อยู่ในระยะประชิดแล้ว แต่ต้องขยับเล็กน้อยเพื่อไม่ให้โดน AFK
                         -- สุ่มขยับเป็นวงกลมรอบมอนสเตอร์
+                        print("[AutoHunt] ★ อยู่ในประชิด! กำลังวนรอบมอนสเตอร์")
                         local angle = os.clock() % 6.28 -- 2π
                         local circleRadius = 4
                         local circlePos = enemyPos + Vector3.new(math.cos(angle) * circleRadius, 0, math.sin(angle) * circleRadius)
@@ -929,6 +908,7 @@ task.spawn(function()
                     end
                 else
                     -- ไม่มีมอนสเตอร์แล้ว (หรือทั้งหมดตายแล้ว) ให้รีเซ็ตเป้าหมายและบังคับเริ่มกระบวนการค้นหาประตูใหม่ทันที
+                    print("[AutoHunt] ✗ ไม่พบมอนสเตอร์ที่มีชีวิต! จะค้นหาประตูใหม่")
                     autoHuntEnemies = false
                     currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ทันที
                     lastDoorSearchTime = 0 -- บังคับให้ค้นหาใหม่ในรอบถัดไป
