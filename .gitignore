@@ -1,1 +1,27 @@
-Nothing should be ignored based on the provided file changes. The only modified file is 'SupportHeroes.lua', which is a source code file and should not be added to .gitignore.
+```
+# Lua build artifacts and temporary files
+*.luac
+.luac
+tmp/
+temp/
+
+# General temp files
+*.tmp
+*.temp
+*.log
+
+# Editor/IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.local
+*.env.*
+```
