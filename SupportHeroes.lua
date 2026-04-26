@@ -224,19 +224,23 @@ local function findRandomDoor()
         -- กรณีที่ 1: doorObj เป็น BasePart โดยตรง (เช่น Part[be98506b16ab])
         if doorObj:IsA("BasePart") then
             doorPart = doorObj
-            -- ค้นหา TouchInterest แบบ recursive (เพราะอาจอยู่ใน Model ย่อย)
-            touchInterest = doorObj:FindFirstChildWhichIsA("TouchInterest", true)
+            -- ตรวจสอบเฉพาะลูกโดยตรงเท่านั้น (ตามโครงสร้าง: Part -> TouchInterest)
+            touchInterest = doorObj:FindFirstChild("TouchInterest")
+            print("[DoorWarp] Checking BasePart:", doorObj.Name, "- TouchInterest found:", touchInterest ~= nil)
         -- กรณีที่ 2: doorObj เป็น Model ที่มี PrimaryPart หรือ Part ข้างใน
         elseif doorObj:IsA("Model") then
             doorPart = doorObj.PrimaryPart or doorObj:FindFirstChildWhichIsA("BasePart")
-            -- ค้นหา TouchInterest ในทั้ง Model และในส่วนประกอบข้างใน
-            touchInterest = doorObj:FindFirstChildWhichIsA("TouchInterest", true)
+            -- ถ้าเจอ Part ใน Model ก็เช็ค ลูกโดยตรง ของ Part นั้นเช่นกัน
+            if doorPart then
+                touchInterest = doorPart:FindFirstChild("TouchInterest")
+                print("[DoorWarp] Checking Model:", doorObj.Name, "- Part:", doorPart.Name, "- TouchInterest found:", touchInterest ~= nil)
+            end
         end
         
         -- ตรวจสอบว่าเจอ TouchInterest หรือไม่
         if touchInterest and doorPart then
             table.insert(doorList, doorPart)
-            print("[DoorWarp] Found valid door with TouchInterest:", doorPart.Name, "in Layout:", targetLayout.Name)
+            print("[DoorWarp] *** FOUND VALID DOOR ***:", doorPart.Name, "in Layout:", targetLayout.Name)
         else
             if doorPart then
                 print("[DoorWarp] Skipping door (no TouchInterest):", doorPart.Name, "in Layout:", targetLayout.Name)
