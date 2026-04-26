@@ -18,7 +18,7 @@ local followByPercentHP = false
 
 local autoCoinEnabled = false
 local autoDodgeEnabled = false
-local shieldRange = 100
+local shieldRange = 40
 
 -- Variables for Door Warp & Auto Enemy Hunt
 local doorWarpEnabled = false
@@ -262,6 +262,11 @@ local function findClosestEnemy()
         if enemy:IsA("Model") or enemy:IsA("BasePart") then
             local enemyRoot = enemy:IsA("Model") and enemy:FindFirstChild("HumanoidRootPart") or enemy
             if enemyRoot and enemyRoot:IsA("BasePart") then
+                -- [แก้ไข] ข้ามมอนสเตอร์ที่ถูก summon (มี SummonedEnemy ใน HumanoidRootPart)
+                if enemyRoot:FindFirstChild("SummonedEnemy") then
+                    continue -- ข้ามมอนสเตอร์ตัวนี้
+                end
+                
                 -- ตรวจสอบเลือดของมอนสเตอร์ด้วย (ถ้าเป็น Model ให้หา Humanoid)
                 local enemyHumanoid = enemy:IsA("Model") and enemy:FindFirstChildOfClass("Humanoid") or nil
                 if enemyHumanoid and enemyHumanoid.Health <= 0 then
@@ -280,36 +285,76 @@ local function findClosestEnemy()
     return closestEnemy
 end
 
--- ฟังก์ชันตรวจสอบว่ามีกำแพงขวางทางหรือไม่ และหาทิศทางหลบ (สำหรับเดิน)
+-- ฟังก์ชันตรวจสอบว่ามีกำแพงขวางทางหรือไม่ และหาทิศทางหลบ (สำหรับเดิน) - Wall Hugging Mode
 local function checkWallAndFindDirection(myRoot, targetPos)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
     
     local currentPos = myRoot.Position
     local baseDir = (targetPos - currentPos).Unit
-    local scanDistance = 8 -- ระยะสแกนกำแพง
+    local scanDistance = 12 -- เพิ่มระยะสแกนกำแพง
     
-    -- ยิง Raycast ไปข้างหน้าเพื่อดูว่ามีกำแพงขวางหรือไม่
-    local wallHit = workspace:Raycast(currentPos, baseDir * scanDistance, rayParams)
+    -- ยิง Raycast ไปข้างหน้าเพื่อดูว่ามีกำแพงขวางหรือไม่ (ยิงหลายจุดเพื่อครอบคลุมความกว้างของตัวละคร)
+    local wallHit = workspace:Raycast(currentPos + Vector3.new(0, 2, 0), baseDir * scanDistance, rayParams)
     
-    if wallHit then
-        -- ถ้าเจอกำแพง ให้ลองหาทิศทางอื่น
-        local escapeAngles = {45, -45, 90, -90, 135, -135}
-        for _, angle in ipairs(escapeAngles) do
-            local rotatedDir = (CFrame.Angles(0, math.rad(angle), 0) * baseDir).Unit
-            local testHit = workspace:Raycast(currentPos, rotatedDir * scanDistance, rayParams)
-            
-            -- ถ้าทิศทางนี้ไม่มีกำแพง หรือมีแต่ไกลกว่า ให้ใช้ทิศทางนี้
-            if not testHit or testHit.Distance > (wallHit.Distance * 0.8) then
-                return rotatedDir, true -- ส่งกลับทิศทางและ flag ว่าต้องหลบ
-            end
+    -- ถ้าไม่เจอจากจุดแรก ลองยิงเพิ่มในมุมอื่นๆ เพื่อตรวจสอบกำแพงรอบๆ
+    if not wallHit then
+        for _, angle in ipairs({-0.3, 0.3}) do -- มุมซ้าย/ขวาเล็กน้อย
+            local angledDir = (CFrame.Angles(0, angle, 0) * Vector3.new(baseDir.X, 0, baseDir.Z)).Unit
+            wallHit = workspace:Raycast(currentPos + Vector3.new(0, 2, 0), angledDir * scanDistance, rayParams)
+            if wallHit then break end
         end
-        -- ถ้าทุกทิศทางมีกำแพงหมด ให้สุ่มทิศทาง
-        local randomAngle = math.random(0, 359)
-        local randomDir = (CFrame.Angles(0, math.rad(randomAngle), 0) * Vector3.new(1, 0, 0)).Unit
-        return randomDir, true
     end
     
-    return baseDir, false -- ไม่มีกำแพง ใช้ทิศทางปกติ
+    if wallHit then
+        -- ถ้าเจอกำแพง ให้ใช้เทคนิค Wall Hugging (เดินเลียบกำแพง)
+        -- หาเวกเตอร์ตั้งฉากกับกำแพงเพื่อเดินเลียบ
+        local hitNormal = wallHit.Normal.Unit
+        local rightDir = baseDir:Cross(hitNormal).Unit
+        local leftDir = hitNormal:Cross(baseDir).Unit
+        
+        -- ลองตรวจสอบว่าทิศทางไหนปลอดภัยกว่า (ซ้ายหรือขวา) โดยยิง Raycast ในทิศทางนั้น
+        local rightCheck = workspace:Raycast(currentPos + Vector3.new(0, 2, 0), rightDir * 6, rayParams)
+        local leftCheck = workspace:Raycast(currentPos + Vector3.new(0, 2, 0), leftDir * 6, rayParams)
+        
+        -- เลือกทิศทางที่ไม่มีกำแพงขวาง หรือไกลกว่า
+        local hugDir = nil
+        if not rightCheck and not leftCheck then
+            -- ทั้งสองด้านปลอดภัย เลือกทิศทางที่ใกล้เป้าหมายมากกว่า
+            local rightDot = (targetPos - currentPos):Dot(rightDir)
+            local leftDot = (targetPos - currentPos):Dot(leftDir)
+            hugDir = (rightDot > leftDot) and rightDir or leftDir
+        elseif not rightCheck then
+            hugDir = rightDir
+        elseif not leftCheck then
+            hugDir = leftDir
+        else
+            -- ทั้งสองด้านมีกำแพง เลือกด้านที่ไกลกว่า
+            hugDir = (rightCheck.Distance > leftCheck.Distance) and rightDir or leftDir
+        end
+        
+        -- [แก้ไขสำคัญ] ผสมทิศทางเลียบกำแพงกับทิศทางไปยังเป้าหมาย
+        -- ใช้สัดส่วน 60% เลียบกำแพง + 40% มุ่งสู่เป้าหมาย เพื่อให้ไม่ติดกำแพงแต่ยังเข้าใกล้เป้าหมาย
+        local finalDir = (hugDir * 0.6 + baseDir * 0.4)
+        if finalDir.Magnitude > 0.1 then
+            finalDir = finalDir.Unit
+        else
+            finalDir = hugDir
+        end
+        
+        -- คำนวณจุดปลายทางใหม่สำหรับ MoveTo (ห่างจาก当前位置ประมาณ 10-15 สตัด)
+        local moveDistance = 12
+        local newTargetPos = currentPos + (finalDir * moveDistance)
+        
+        -- ตรวจสอบว่าจุดใหม่ไม่สูงหรือต่ำเกินไป
+        local groundCheck = workspace:Raycast(newTargetPos + Vector3.new(0, 5, 0), Vector3.new(0, -15, 0), rayParams)
+        if groundCheck then
+            newTargetPos = groundCheck.Position + Vector3.new(0, 2, 0)
+        end
+        
+        return newTargetPos, true
+    end
+    
+    return targetPos, false -- ไม่มีกำแพง ใช้จุดหมายปกติ
 end
 
 -- ฟังก์ชันหาจุดวาร์ปหลบ AOE ที่ปลอดภัย (ไม่ตกแมพ ไม่ทะลุกำแพง)
@@ -782,9 +827,41 @@ task.spawn(function()
             
             local currentTime = os.clock()
             
-            -- ถ้าไม่ได้กำลังล่ามอนสเตอร์ ให้ค้นหาประตู
-            if not autoHuntEnemies then
-                -- ค้นหาประตูใหม่ทันทีถ้ายังไม่มี หรือประตูเดิมหายไป (ไม่ต้องรอ interval)
+            -- [แก้ไข] โหมดล่ามอนสเตอร์: ค้นหามอนสเตอร์ก่อนเป็นลำดับแรก
+            local closestEnemy = findClosestEnemy()
+            
+            if closestEnemy and closestEnemy.Parent then
+                -- เจอมอนสเตอร์! ให้ล่ามอนสเตอร์ก่อน
+                autoHuntEnemies = true
+                local enemyPos = closestEnemy.Position
+                local dist = (myRoot.Position - enemyPos).Magnitude
+                
+                -- อัปเดตเวลาเคลื่อนไหวเพื่อป้องกัน AFK
+                lastAntiAFKTime = os.clock()
+                
+                -- ถ้ายังไกลอยู่ ให้เดินไปหา
+                if dist > 5 then
+                    -- ใช้ Raycast ตรวจสอบกำแพงและหาทิศทางหลบ
+                    local moveTarget, needToDodge = checkWallAndFindDirection(myRoot, enemyPos)
+                    
+                    if needToDodge then
+                        -- ถ้ามีกำแพงขวาง ให้เดินไปยังจุดที่คำนวณจาก Wall Hugging
+                        myHuman:MoveTo(moveTarget)
+                    else
+                        -- ไม่มีกำแพง เดินตรงไปหามอนสเตอร์
+                        myHuman:MoveTo(enemyPos)
+                    end
+                else
+                    local angle = os.clock() % 6.28 -- 2π
+                    local circleRadius = 4
+                    local circlePos = enemyPos + Vector3.new(math.cos(angle) * circleRadius, 0, math.sin(angle) * circleRadius)
+                    myHuman:MoveTo(circlePos)
+                end
+            else
+                -- [แก้ไข] หามอนสเตอร์ไม่เจอ ให้ค้นหาประตูแทน
+                autoHuntEnemies = false
+                
+                -- ค้นหาประตูใหม่ทันทีถ้ายังไม่มี หรือประตูเดิมหายไป
                 if not currentTargetDoor or not currentTargetDoor.Parent then
                     currentTargetDoor = findRandomDoor()
                     lastDoorSearchTime = currentTime
@@ -797,9 +874,8 @@ task.spawn(function()
                         -- วาร์ปทันที
                         myRoot.CFrame = CFrame.new(targetPos)
                         
-                        -- หลังวาร์ปเสร็จ ให้สลับโหมดไปล่ามอนสเตอร์
-                        autoHuntEnemies = true
-                        currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ครั้งหน้า
+                        -- หลังวาร์ปเสร็จ รีเซ็ตประตูเพื่อค้นหาใหม่ครั้งหน้า
+                        currentTargetDoor = nil
                     end
                 else
                     -- ถ้าหาประตูไม่เจอเลย ให้รีเซ็ตสถานะและค้นหาใหม่ทันที (แก้ปัญหาหยุดนิ่ง)
@@ -808,42 +884,6 @@ task.spawn(function()
                         currentTargetDoor = nil
                         lastDoorSearchTime = currentTime
                     end
-                end
-            else
-                -- โหมดล่ามอนสเตอร์: หาตัวที่ใกล้ที่สุดแล้วเดินไปหา
-                local closestEnemy = findClosestEnemy()
-                
-                if closestEnemy and closestEnemy.Parent then
-                    local enemyPos = closestEnemy.Position
-                    local dist = (myRoot.Position - enemyPos).Magnitude
-                    
-                    -- อัปเดตเวลาเคลื่อนไหวเพื่อป้องกัน AFK
-                    lastAntiAFKTime = os.clock()
-                    
-                    -- ถ้ายังไกลอยู่ ให้เดินไปหา
-                    if dist > 5 then
-                        -- ใช้ Raycast ตรวจสอบกำแพงและหาทิศทางหลบ
-                        local moveDir, needToDodge = checkWallAndFindDirection(myRoot, enemyPos)
-                        
-                        if needToDodge then
-                            -- ถ้ามีกำแพงขวาง ให้เดินในทิศทางที่หลบแทน
-                            local dodgeTarget = myRoot.Position + (moveDir * 10)
-                            myHuman:MoveTo(dodgeTarget)
-                        else
-                            -- ไม่มีกำแพง เดินตรงไปหามอนสเตอร์
-                            myHuman:MoveTo(enemyPos)
-                        end
-                    else
-                        local angle = os.clock() % 6.28 -- 2π
-                        local circleRadius = 4
-                        local circlePos = enemyPos + Vector3.new(math.cos(angle) * circleRadius, 0, math.sin(angle) * circleRadius)
-                        myHuman:MoveTo(circlePos)
-                    end
-                else
-                    -- ไม่มีมอนสเตอร์แล้ว (หรือทั้งหมดตายแล้ว) ให้รีเซ็ตเป้าหมายและบังคับเริ่มกระบวนการค้นหาประตูใหม่ทันที
-                    autoHuntEnemies = false
-                    currentTargetDoor = nil -- รีเซ็ตประตูเพื่อค้นหาใหม่ทันที
-                    lastDoorSearchTime = 0 -- บังคับให้ค้นหาใหม่ในรอบถัดไป
                 end
             end
         end)
@@ -1022,7 +1062,16 @@ task.spawn(function()
                             lastAntiAFKTime = os.clock()
                         end
                         
-                        myHuman:MoveTo(targetPos)
+                        -- [แก้ไข] ใช้ Wall Hugging ช่วยเมื่อมีกำแพงขวางระหว่างทาง
+                        local moveTarget, needToDodge = checkWallAndFindDirection(myRoot, targetPos)
+                        
+                        if needToDodge then
+                            -- มีกำแพงขวาง ให้เดินไปยังจุดที่คำนวณจาก Wall Hugging แทน
+                            myHuman:MoveTo(moveTarget)
+                        else
+                            -- ไม่มีกำแพงขวาง เดินปกติ
+                            myHuman:MoveTo(targetPos)
+                        end
                         if isParkour then
                             if directRay then
                                 local distToWall = (directRay.Position - currentPos).Magnitude
@@ -1057,7 +1106,14 @@ task.spawn(function()
                                 
                                 myHuman:MoveTo(currentPos + (probeDir * 8))
                                 local wallCheck = workspace:Raycast(currentPos, probeDir * 4, rayParams)
-                                if wallCheck then forceJump(myHuman) end
+                                if wallCheck then 
+                                    forceJump(myHuman) 
+                                    -- ถ้าเจอกำแพงขณะ probing ให้ใช้ Wall Hugging ช่วย
+                                    local hugTarget, needHug = checkWallAndFindDirection(myRoot, targetPos)
+                                    if needHug then
+                                        myHuman:MoveTo(hugTarget)
+                                    end
+                                end
                             end
                         elseif #currentWaypoints > 0 then
                             local lookAheadIndex = currentWaypointIndex
@@ -1100,10 +1156,23 @@ task.spawn(function()
                                 
                                 if isGoingUp and not isClimbing then
                                     local flatDir = (Vector3.new(wp.Position.X, 0, wp.Position.Z) - Vector3.new(currentPos.X, 0, currentPos.Z))
-                                    if flatDir.Magnitude > 0.1 then myHuman:MoveTo(wp.Position + (flatDir.Unit * 1.5)) 
-                                    else myHuman:MoveTo(wp.Position) end
+                                    -- ใช้ Wall Hugging ช่วยเมื่อปีนขึ้นที่สูง
+                                    local climbTarget, needHug = checkWallAndFindDirection(myRoot, wp.Position)
+                                    if needHug then
+                                        myHuman:MoveTo(climbTarget)
+                                    elseif flatDir.Magnitude > 0.1 then 
+                                        myHuman:MoveTo(wp.Position + (flatDir.Unit * 1.5))
+                                    else 
+                                        myHuman:MoveTo(wp.Position) 
+                                    end
                                 else
-                                    myHuman:MoveTo(wp.Position)
+                                    -- ใช้ Wall Hugging ช่วยเมื่อเดินปกติ
+                                    local walkTarget, needHug = checkWallAndFindDirection(myRoot, wp.Position)
+                                    if needHug then
+                                        myHuman:MoveTo(walkTarget)
+                                    else
+                                        myHuman:MoveTo(wp.Position)
+                                    end
                                 end
                                 local dist2D = (Vector2.new(currentPos.X, currentPos.Z) - Vector2.new(wp.Position.X, wp.Position.Z)).Magnitude
                                 local distY = math.abs(currentPos.Y - wp.Position.Y)
