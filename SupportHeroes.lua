@@ -183,29 +183,35 @@ local function findRandomDoor()
         if not doors then return nil end
     end
     
-    -- รวบรวมประตูทั้งหมด (มองหา Part หรือ Model ที่เป็นประตู)
+    -- รวบรวมประตูทั้งหมดที่ "เปิดได้จริง" (ต้องมี TouchInterest)
     local doorList = {}
     for _, doorPart in pairs(doors:GetChildren()) do
-        -- วิธีที่ 1: ตรวจสอบว่าเป็น BasePart โดยตรง
+        -- วิธีที่ 1: ตรวจสอบว่าเป็น BasePart โดยตรงและมี TouchInterest
         if doorPart:IsA("BasePart") then
-            table.insert(doorList, doorPart)
-            print("[DoorWarp] Found door part:", doorPart.Name)
-        -- วิธีที่ 2: ถ้าเป็น Model ให้หา PrimaryPart หรือ Part หลักภายใน
+            if doorPart:FindFirstChild("TouchInterest") then
+                table.insert(doorList, doorPart)
+                print("[DoorWarp] Found valid door part with TouchInterest:", doorPart.Name)
+            else
+                print("[DoorWarp] Skipping door (no TouchInterest):", doorPart.Name)
+            end
+        -- วิธีที่ 2: ถ้าเป็น Model ให้หา PrimaryPart หรือ Part หลักภายใน และตรวจสอบ TouchInterest
         elseif doorPart:IsA("Model") then
             local mainPart = doorPart.PrimaryPart or doorPart:FindFirstChildWhichIsA("BasePart")
-            if mainPart then
+            if mainPart and mainPart:FindFirstChild("TouchInterest") then
                 table.insert(doorList, mainPart)
-                print("[DoorWarp] Found door model with part:", doorPart.Name, "->", mainPart.Name)
+                print("[DoorWarp] Found valid door model with TouchInterest:", doorPart.Name, "->", mainPart.Name)
+            elseif mainPart then
+                print("[DoorWarp] Skipping door model (no TouchInterest):", doorPart.Name)
             end
         end
     end
     
     if #doorList == 0 then 
-        print("[DoorWarp] No valid door parts found in Doors folder")
+        print("[DoorWarp] No valid door parts with TouchInterest found in Doors folder")
         return nil 
     end
     
-    -- สุ่มเลือก 1 ประตู
+    -- สุ่มเลือก 1 ประตูจากประตูที่เปิดได้จริงเท่านั้น
     local randomIndex = math.random(1, #doorList)
     local selectedDoor = doorList[randomIndex]
     print("[DoorWarp] Selected door:", selectedDoor.Name, "Position:", selectedDoor.Position)
@@ -718,6 +724,9 @@ task.spawn(function()
                     local enemyPos = closestEnemy.Position
                     local dist = (myRoot.Position - enemyPos).Magnitude
                     
+                    -- อัปเดตเวลาเคลื่อนไหวเพื่อป้องกัน AFK
+                    lastAntiAFKTime = os.clock()
+                    
                     -- ถ้ายังไกลอยู่ ให้เดินไปหา
                     if dist > 5 then
                         -- ใช้ Raycast ตรวจสอบกำแพงและหาทิศทางหลบ
@@ -732,7 +741,12 @@ task.spawn(function()
                             myHuman:MoveTo(enemyPos)
                         end
                     else
-                        -- อยู่ในระยะประชิดแล้ว ไม่ต้องทำอะไร (รอโจมตีเอง)
+                        -- อยู่ในระยะประชิดแล้ว แต่ต้องขยับเล็กน้อยเพื่อไม่ให้โดน AFK
+                        -- สุ่มขยับเป็นวงกลมรอบมอนสเตอร์
+                        local angle = os.clock() % 6.28 -- 2π
+                        local circleRadius = 4
+                        local circlePos = enemyPos + Vector3.new(math.cos(angle) * circleRadius, 0, math.sin(angle) * circleRadius)
+                        myHuman:MoveTo(circlePos)
                     end
                 else
                     -- ไม่มีมอนสเตอร์แล้ว ให้รีเซ็ตเป้าหมายและบังคับเริ่มกระบวนการค้นหาประตูใหม่ทันที
