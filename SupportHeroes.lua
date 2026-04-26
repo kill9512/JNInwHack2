@@ -33,6 +33,7 @@ local lastPosition = Vector3.new()
 local lastMoveTick = os.clock()
 local randomTarget = nil
 local temporaryPlatform = nil -- เก็บ reference แผ่นเหยียบชั่วคราว
+local lastAntiAFKTime = os.clock() -- ตัวจับเวลา Anti-AFK
 
 -- --- UI Sections ---
 local SupportSection = Tab:NewSection("Support Functions")
@@ -671,6 +672,14 @@ task.spawn(function()
                     if (not directRay and vDist < 5) or isParkour then
                         isProbing = false; currentWaypoints = {}
                         updateDebug("DirectTrace", currentPos, targetPos, isParkour and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 255, 0))
+                        
+                        -- [Anti-AFK] วาร์ปตัวละครไปข้างหน้าเล็กน้อยเพื่อไม่ให้โดนแบน AFK
+                        local timeSinceLastMove = os.clock() - lastAntiAFKTime
+                        if timeSinceLastMove > 1.5 then
+                            myRoot.CFrame = CFrame.new(myRoot.Position + (moveDir * 0.1))
+                            lastAntiAFKTime = os.clock()
+                        end
+                        
                         myHuman:MoveTo(targetPos)
                         if isParkour then
                             if directRay then
@@ -696,6 +705,14 @@ task.spawn(function()
                             local probeDir = getProbingDirection(myRoot, targetPos)
                             if probeDir then
                                 updateDebug("ProbeTrace", currentPos, currentPos + (probeDir * 5), Color3.fromRGB(255, 165, 0))
+                                
+                                -- [Anti-AFK] วาร์ปตัวละครไปข้างหน้าเล็กน้อยเพื่อไม่ให้โดนแบน AFK
+                                local timeSinceLastMove = os.clock() - lastAntiAFKTime
+                                if timeSinceLastMove > 1.5 then
+                                    myRoot.CFrame = CFrame.new(myRoot.Position + (probeDir * 0.1))
+                                    lastAntiAFKTime = os.clock()
+                                end
+                                
                                 myHuman:MoveTo(currentPos + (probeDir * 8))
                                 local wallCheck = workspace:Raycast(currentPos, probeDir * 4, rayParams)
                                 if wallCheck then forceJump(myHuman) end
@@ -726,6 +743,19 @@ task.spawn(function()
                                 if math.abs(currentPos.Y - wp.Position.Y) > 6 then currentWaypoints = {}; return end
                                 local isClimbing = myHuman:GetState() == Enum.HumanoidStateType.Climbing
                                 local isGoingUp = (wp.Position.Y > currentPos.Y + 2.5) 
+                                
+                                -- [Anti-AFK] วาร์ปตัวละครไปข้างหน้าเล็กน้อยเพื่อไม่ให้โดนแบน AFK
+                                local timeSinceLastMove = os.clock() - lastAntiAFKTime
+                                if timeSinceLastMove > 1.5 then
+                                    local flatDir = (Vector3.new(wp.Position.X, 0, wp.Position.Z) - Vector3.new(currentPos.X, 0, currentPos.Z))
+                                    if flatDir.Magnitude > 0.1 then
+                                        myRoot.CFrame = CFrame.new(myRoot.Position + (flatDir.Unit * 0.1))
+                                    else
+                                        myRoot.CFrame = CFrame.new(myRoot.Position + Vector3.new(0, 0.1, 0))
+                                    end
+                                    lastAntiAFKTime = os.clock()
+                                end
+                                
                                 if isGoingUp and not isClimbing then
                                     local flatDir = (Vector3.new(wp.Position.X, 0, wp.Position.Z) - Vector3.new(currentPos.X, 0, currentPos.Z))
                                     if flatDir.Magnitude > 0.1 then myHuman:MoveTo(wp.Position + (flatDir.Unit * 1.5)) 
@@ -746,6 +776,12 @@ task.spawn(function()
                         updateDebug("DirectTrace", currentPos, directRay and directRay.Position or targetPos, Color3.fromRGB(255, 0, 0))
                     end
                 else
+                    -- [Anti-AFK] แม้จะยืนนิ่งๆ ก็ต้องขยับเล็กน้อยเพื่อไม่ให้โดนแบน
+                    local timeSinceLastMove = os.clock() - lastAntiAFKTime
+                    if timeSinceLastMove > 1.5 then
+                        myRoot.CFrame = CFrame.new(myRoot.Position + Vector3.new(0, 0.05, 0))
+                        lastAntiAFKTime = os.clock()
+                    end
                     currentWaypoints = {}; myHuman:MoveTo(currentPos)
                 end
             end
