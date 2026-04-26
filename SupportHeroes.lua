@@ -156,16 +156,48 @@ local function findRandomDoor()
     
     -- ค้นหา Layout ใดๆ ที่มีอยู่ (ไม่ระบุชื่อเฉพาะ เพื่อรองรับทุกด่าน)
     local targetLayout = nil
-    for _, child in pairs(layout:GetChildren()) do
+    local layoutChildren = layout:GetChildren()
+    
+    -- วนลูปหา Layout ทุกอันจนกว่าจะเจอประตูที่ใช้งานได้
+    for _, child in ipairs(layoutChildren) do
         if child:IsA("Model") or child.ClassName == "Folder" then
             targetLayout = child
-            print("[DoorWarp] Found Layout:", child.Name)
-            break
+            print("[DoorWarp] Checking Layout:", child.Name)
+            
+            local doors = targetLayout:FindFirstChild("Doors")
+            if not doors then 
+                print("[DoorWarp] No Doors folder in Layout:", targetLayout.Name)
+                continue -- ข้ามไป Layout ถัดไปทันที
+            end
+            
+            -- ตรวจสอบว่ามีประตูที่ใช้ได้จริงใน Layout นี้หรือไม่
+            local hasValidDoor = false
+            for _, doorObj in pairs(doors:GetChildren()) do
+                local doorPart = nil
+                if doorObj:IsA("BasePart") then
+                    doorPart = doorObj
+                elseif doorObj:IsA("Model") then
+                    doorPart = doorObj.PrimaryPart or doorObj:FindFirstChildWhichIsA("BasePart")
+                end
+                
+                if doorPart and doorPart:FindFirstChild("TouchInterest") then
+                    hasValidDoor = true
+                    break
+                end
+            end
+            
+            if hasValidDoor then
+                print("[DoorWarp] Found Layout with valid door:", targetLayout.Name)
+                break -- เจอแล้ว หยุดค้นหา
+            else
+                print("[DoorWarp] Layout", targetLayout.Name, "has no valid doors, skipping...")
+                targetLayout = nil -- รีเซ็ตเพื่อไป Layout ถัดไป
+            end
         end
     end
     
     if not targetLayout then 
-        print("[DoorWarp] No valid Layout model/folder found")
+        print("[DoorWarp] No valid Layout with usable doors found")
         return nil 
     end
     
@@ -185,23 +217,25 @@ local function findRandomDoor()
     
     -- รวบรวมประตูทั้งหมดที่ "เปิดได้จริง" (ต้องมี TouchInterest)
     local doorList = {}
-    for _, doorPart in pairs(doors:GetChildren()) do
-        -- วิธีที่ 1: ตรวจสอบว่าเป็น BasePart โดยตรงและมี TouchInterest
-        if doorPart:IsA("BasePart") then
-            if doorPart:FindFirstChild("TouchInterest") then
+    for _, doorObj in pairs(doors:GetChildren()) do
+        local doorPart = nil
+        
+        -- กรณีที่ 1: doorObj เป็น BasePart โดยตรง (เช่น Part[be98506b16ab])
+        if doorObj:IsA("BasePart") then
+            doorPart = doorObj
+        -- กรณีที่ 2: doorObj เป็น Model ที่มี PrimaryPart หรือ Part ข้างใน
+        elseif doorObj:IsA("Model") then
+            doorPart = doorObj.PrimaryPart or doorObj:FindFirstChildWhichIsA("BasePart")
+        end
+        
+        -- ตรวจสอบว่า doorPart มี TouchInterest หรือไม่
+        if doorPart then
+            local touchInterest = doorPart:FindFirstChild("TouchInterest")
+            if touchInterest and touchInterest:IsA("TouchInterest") then
                 table.insert(doorList, doorPart)
-                print("[DoorWarp] Found valid door part with TouchInterest:", doorPart.Name)
+                print("[DoorWarp] Found valid door with TouchInterest:", doorPart.Name, "in Layout:", targetLayout.Name)
             else
-                print("[DoorWarp] Skipping door (no TouchInterest):", doorPart.Name)
-            end
-        -- วิธีที่ 2: ถ้าเป็น Model ให้หา PrimaryPart หรือ Part หลักภายใน และตรวจสอบ TouchInterest
-        elseif doorPart:IsA("Model") then
-            local mainPart = doorPart.PrimaryPart or doorPart:FindFirstChildWhichIsA("BasePart")
-            if mainPart and mainPart:FindFirstChild("TouchInterest") then
-                table.insert(doorList, mainPart)
-                print("[DoorWarp] Found valid door model with TouchInterest:", doorPart.Name, "->", mainPart.Name)
-            elseif mainPart then
-                print("[DoorWarp] Skipping door model (no TouchInterest):", doorPart.Name)
+                print("[DoorWarp] Skipping door (no TouchInterest):", doorPart.Name, "in Layout:", targetLayout.Name)
             end
         end
     end
