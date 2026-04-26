@@ -1,1 +1,1 @@
-Nothing needs to be added to the .gitignore file based on the provided changes. The only modified file is 'SupportHeroes.lua', which is a source code file and should not be ignored. There are no build artifacts, dependencies, or temporary files in the change list that would warrant adding new ignore rules.
+Nothing needs to be added to the .gitignore file based on the provided changes. The modification of 'SupportHeroes.lua' is a source code file that should not be ignored.
