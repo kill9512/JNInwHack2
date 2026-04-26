@@ -285,9 +285,9 @@ local function findReachableSpotAroundEnemy(myRoot, enemyPos, searchRadius)
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
     local myPos = myRoot.Position
     
-    -- สุ่มมุมต่างๆ รอบมอนสเตอร์ (ละเอียดขึ้น ทุก 10 องศา)
+    -- สุ่มมุมต่างๆ รอบมอนสเตอร์
     local angles = {}
-    for i = 0, 359, 10 do -- ทุก 10 องศา (ละเอียดกว่าเดิม)
+    for i = 0, 359, 15 do -- ทุก 15 องศา
         table.insert(angles, i)
     end
     
@@ -314,12 +314,12 @@ local function findReachableSpotAroundEnemy(myRoot, enemyPos, searchRadius)
             -- ตรวจสอบว่ามีพื้นรองรับ
             local groundCheck = workspace:Raycast(candidatePos + Vector3.new(0, 5, 0), Vector3.new(0, -10, 0), rayParams)
             if groundCheck then
-                -- ตรวจสอบว่าไม่ติดมุมกำแพง (ใช้ Raycast 8 ทิศทางรอบจุด เพื่อตรวจจับมุมหักศอก)
+                -- ตรวจสอบว่าไม่ติดกำแพงรอบๆ จุดนี้
                 local isCorner = false
-                for _, checkAngle in ipairs({0, 45, 90, 135, 180, 225, 270, 315}) do
+                for _, checkAngle in ipairs({0, 90, 180, 270}) do
                     local sideDir = CFrame.Angles(0, math.rad(checkAngle), 0) * Vector3.new(1, 0, 0)
-                    local sideHit = workspace:Raycast(candidatePos + Vector3.new(0, 2, 0), sideDir * 2, rayParams)
-                    if sideHit and sideHit.Distance < 1.5 then
+                    local sideHit = workspace:Raycast(candidatePos + Vector3.new(0, 2, 0), sideDir * 1.5, rayParams)
+                    if sideHit and sideHit.Distance < 1.2 then
                         isCorner = true
                         break
                     end
