@@ -249,78 +249,39 @@ local function findClosestEnemy()
     local dungeon = workspace:FindFirstChild("Dungeon")
     if not dungeon then return nil end
     
-    -- พยายามหาโฟลเดอร์มอนสเตอร์ด้วยชื่อที่หลากหลาย
-    local enemies = dungeon:FindFirstChild("Enemies") 
-        or dungeon:FindFirstChild("Enemy") 
-        or dungeon:FindFirstChild("Monsters") 
-        or dungeon:FindFirstChild("Monster")
-    
-    if not enemies then 
-        -- ถ้าไม่เจอโฟลเดอร์ ให้ลองค้นหา Model ทั้งหมดที่อาจเป็นมอนสเตอร์
-        for _, child in pairs(dungeon:GetChildren()) do
-            if child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") then
-                local hum = child:FindFirstChildOfClass("Humanoid")
-                if hum.Health > 0 then
-                    enemies = dungeon -- ใช้ dungeon เป็นฐานในการค้นหาต่อ
-                    break
-                end
-            end
-        end
-        if not enemies then return nil end
-    end
+    -- หาโฟลเดอร์ Enemies เท่านั้น (ตามที่ผู้ใช้ยืนยัน)
+    local enemies = dungeon:FindFirstChild("Enemies")
+    if not enemies then return nil end
     
     local myChar = LocalPlayer.Character
-    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if not myChar then return nil end
+    
+    local myRoot = myChar:FindFirstChild("HumanoidRootPart")
     if not myRoot then return nil end
     
     local closestEnemy = nil
     local closestDist = math.huge
     
-    -- ค้นหาทั้งในโฟลเดอร์และ Model โดยตรง
-    local function checkEnemy(enemy)
+    -- วนลูปหามอนสเตอร์ทุกตัวในโฟลเดอร์ Enemies
+    for _, enemy in pairs(enemies:GetChildren()) do
         if enemy:IsA("Model") then
-            local enemyRoot = enemy:FindFirstChild("HumanoidRootPart") 
-                or enemy:FindFirstChild("RootPart") 
-                or enemy:FindFirstChildWhichIsA("BasePart")
-            
-            if enemyRoot and enemyRoot:IsA("BasePart") then
-                -- ตรวจสอบเลือดของมอนสเตอร์
-                local enemyHumanoid = enemy:FindFirstChildOfClass("Humanoid")
-                    or enemy:FindFirstChildWhichIsA("Humanoid")
-                
-                if enemyHumanoid and enemyHumanoid.Health <= 0 then
-                    return nil -- ข้ามมอนสเตอร์ที่ตายแล้ว
-                end
-                
-                local dist = (myRoot.Position - enemyRoot.Position).Magnitude
-                if dist < closestDist then
-                    closestDist = dist
-                    closestEnemy = enemyRoot
-                    return enemyRoot
-                end
+            -- หา HumanoidRootPart - มอนสเตอร์ทุกตัวต้องมี
+            local enemyRoot = enemy:FindFirstChild("HumanoidRootPart")
+            if not enemyRoot or not enemyRoot:IsA("BasePart") then
+                continue
             end
-        elseif enemy:IsA("BasePart") then
-            -- กรณีที่เป็น Part โดยตรง (อาจเป็นมอนสเตอร์บางประเภท)
-            local dist = (myRoot.Position - enemy.Position).Magnitude
+            
+            -- ตรวจสอบว่ามอนสเตอร์ยังมีชีวิตอยู่
+            local enemyHumanoid = enemy:FindFirstChildOfClass("Humanoid")
+            if not enemyHumanoid or enemyHumanoid.Health <= 0 then
+                continue
+            end
+            
+            -- คำนวณระยะห่าง
+            local dist = (myRoot.Position - enemyRoot.Position).Magnitude
             if dist < closestDist then
                 closestDist = dist
-                closestEnemy = enemy
-                return enemy
-            end
-        end
-        return nil
-    end
-    
-    -- วนลูปตรวจสอบทุกตัวในโฟลเดอร์ Enemies
-    for _, enemy in pairs(enemies:GetChildren()) do
-        checkEnemy(enemy)
-    end
-    
-    -- ถ้าไม่เจอในโฟลเดอร์ ให้ลองค้นหา Model ทั้งหมดใน Dungeon ที่อาจเป็นมอนสเตอร์
-    if not closestEnemy then
-        for _, child in pairs(dungeon:GetChildren()) do
-            if child ~= enemies and (child:IsA("Model") or child:IsA("BasePart")) then
-                checkEnemy(child)
+                closestEnemy = enemyRoot
             end
         end
     end
@@ -882,19 +843,61 @@ task.spawn(function()
                         -- คำนวณเส้นทางด้วย PathfindingService
                         local currentTime = os.clock()
                         if not currentWaypoints or #currentWaypoints == 0 or (enemyPos - lastTargetPos).Magnitude > 3 or currentTime - lastComputeTime > 0.5 then
-                            local path = PathfindingService:CreatePath({AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 3})
+                            -- สร้าง Path ด้วย AgentRadius ที่ใหญ่ขึ้นเพื่อหลบสิ่งกีดขวางได้ดีกว่า
+                            local path = PathfindingService:CreatePath({
+                                AgentRadius = 3,
+                                AgentHeight = 6,
+                                AgentCanJump = true,
+                                WaypointSpacing = 5
+                            })
+                            
                             local success, errorMessage = pcall(function()
                                 path:ComputeAsync(myRoot.Position, enemyPos)
                             end)
                             
+                            -- ตรวจสอบผลลัพธ์ของการคำนวณเส้นทาง
                             if success and path.Status == Enum.PathStatus.Success then
                                 currentWaypoints = path:GetWaypoints()
                                 currentWaypointIndex = 2
                                 lastTargetPos = enemyPos
                                 lastComputeTime = currentTime
                             else
-                                -- ถ้าคำนวณเส้นทางไม่ได้ ให้ลองเดินตรงไปก่อน
+                                -- Pathfinding ล้มเหลว - ลองใช้วิธีเดินตรงแทน
                                 currentWaypoints = {}
+                                
+                                -- ถ้าล้มเหลวเพราะเป้าหมาย unreachable ให้ลองเดินอ้อมแบบ manual
+                                if path.Status == Enum.PathStatus.FailNoValidPath or path.Status == Enum.PathStatus.FailStartOrEndUnreachable then
+                                    -- หาจุดใกล้เคียงที่อาจเดินไปถึงได้
+                                    local testPositions = {
+                                        enemyPos + Vector3.new(3, 0, 0),
+                                        enemyPos + Vector3.new(-3, 0, 0),
+                                        enemyPos + Vector3.new(0, 0, 3),
+                                        enemyPos + Vector3.new(0, 0, -3),
+                                        enemyPos + Vector3.new(5, 0, 5),
+                                        enemyPos + Vector3.new(-5, 0, -5),
+                                    }
+                                    
+                                    for _, testPos in ipairs(testPositions) do
+                                        local testPath = PathfindingService:CreatePath({
+                                            AgentRadius = 3,
+                                            AgentHeight = 6,
+                                            AgentCanJump = true,
+                                            WaypointSpacing = 5
+                                        })
+                                        
+                                        local testSuccess = pcall(function()
+                                            testPath:ComputeAsync(myRoot.Position, testPos)
+                                        end)
+                                        
+                                        if testSuccess and testPath.Status == Enum.PathStatus.Success then
+                                            currentWaypoints = testPath:GetWaypoints()
+                                            currentWaypointIndex = 2
+                                            lastTargetPos = testPos
+                                            lastComputeTime = currentTime
+                                            break
+                                        end
+                                    end
+                                end
                             end
                         end
                         
@@ -913,7 +916,7 @@ task.spawn(function()
                                 end
                             end
                         else
-                            -- ไม่มี waypoints ให้เดินตรงไป
+                            -- ไม่มี waypoints ให้เดินตรงไป (fallback)
                             myHuman:MoveTo(enemyPos)
                         end
                     else
